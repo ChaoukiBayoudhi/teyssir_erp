@@ -146,6 +146,10 @@ OCR_PROVIDER = os.environ.get("TEYSSIR_OCR_PROVIDER", "tesseract")          # te
 METADATA_PROVIDERS = [
     p for p in os.environ.get("TEYSSIR_METADATA_PROVIDERS", "openlibrary").split(",") if p
 ]
+# Vision-LLM OCR (OCR_PROVIDER=vision): free, offline, local — Ollama + a vision model.
+OLLAMA_URL = os.environ.get("TEYSSIR_OLLAMA_URL", "http://localhost:11434")
+VISION_MODEL = os.environ.get("TEYSSIR_VISION_MODEL", "qwen2.5vl:3b")
+VISION_TIMEOUT = int(os.environ.get("TEYSSIR_VISION_TIMEOUT", "120"))
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [

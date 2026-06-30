@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -114,3 +115,45 @@ class TesseractOcrTests(TestCase):
         self.assertIn("Petit", text)
         self.assertEqual(detected.isbn13, "9782070612758")   # ISBN drives enrichment
         self.assertEqual(detected.title, "Le Petit Prince")
+
+
+@override_settings(OCR_PROVIDER="vision")
+class VisionLlmOcrTests(TestCase):
+    """The Vision-LLM provider with an injected transport — no live model needed."""
+
+    def _png_path(self):
+        path = os.path.join(tempfile.mkdtemp(), "c.png")
+        Image.new("RGB", (8, 8), "white").save(path)
+        return path
+
+    def test_parses_structured_multilingual_json(self):
+        from teyssir.catalog.bookscan.ocr import VisionLlmOcrProvider
+
+        reply = json.dumps({
+            "title": "الأمير الصغير", "subtitle": "Le Petit Prince",
+            "authors": ["Antoine de Saint-Exupéry"], "translators": ["محمد التهامي"],
+            "publisher": "دار الجنوب", "languages": ["ar", "fr"],
+            "pub_year": 2018, "pages": 110, "isbn13": "978-2-07-061275-8",
+            "subject": "Roman", "description": "حكاية الأمير الصغير",
+        }, ensure_ascii=False)
+        prov = VisionLlmOcrProvider(transport=lambda b64: "data: " + reply)
+
+        _, draft = prov.extract(self._png_path())
+        self.assertEqual(draft.title, "الأمير الصغير")
+        self.assertEqual(draft.subtitle, "Le Petit Prince")
+        self.assertEqual(draft.authors, ["Antoine de Saint-Exupéry"])
+        self.assertEqual(draft.translators, ["محمد التهامي"])
+        self.assertEqual(draft.languages, ["ar", "fr"])
+        self.assertEqual(draft.pub_year, 2018)
+        self.assertEqual(draft.pages, 110)
+        self.assertEqual(draft.isbn13, "9782070612758")    # dashes stripped
+        self.assertEqual(draft.source, "vision")
+
+    def test_degrades_to_manual_when_model_unreachable(self):
+        from teyssir.catalog.bookscan.ocr import VisionLlmOcrProvider
+
+        def boom(_b64):
+            raise OSError("connection refused")
+
+        _, draft = VisionLlmOcrProvider(transport=boom).extract(self._png_path())
+        self.assertEqual(draft.source, "manual")           # graceful fallback, never crashes
