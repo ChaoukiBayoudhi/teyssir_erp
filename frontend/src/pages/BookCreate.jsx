@@ -4,7 +4,7 @@ import {
   Chip, IconButton, LinearProgress,
 } from "@mui/material";
 import { useTranslation } from "react-i18next";
-import { scanBook, createBook } from "../api";
+import { scanBook, pollScanJob, createBook } from "../api";
 import LangToggle from "../LangToggle.jsx";
 
 // Try the browser-native barcode detector for an ISBN (EAN-13). Best-effort, feature-detected.
@@ -74,7 +74,8 @@ export default function BookCreate({ onBack, onLogout }) {
     setError("");
     try {
       const isbn = await detectIsbn(images[0]);
-      const d = await scanBook(images, isbn);
+      let d = await scanBook(images, isbn);
+      if (d.status === "pending") d = await pollScanJob(d.job_id);   // async OCR backend
       setDraft(d);
       setForm({
         ...EMPTY,

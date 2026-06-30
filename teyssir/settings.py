@@ -150,6 +150,8 @@ METADATA_PROVIDERS = [
 OLLAMA_URL = os.environ.get("TEYSSIR_OLLAMA_URL", "http://localhost:11434")
 VISION_MODEL = os.environ.get("TEYSSIR_VISION_MODEL", "qwen2.5vl:3b")
 VISION_TIMEOUT = int(os.environ.get("TEYSSIR_VISION_TIMEOUT", "120"))
+# Scan execution: inline (sync, default) | thread (background, so slow OCR doesn't block the request)
+SCAN_EXECUTOR = os.environ.get("TEYSSIR_SCAN_EXECUTOR", "inline")
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [

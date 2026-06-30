@@ -104,6 +104,17 @@ export async function scanBook(files, isbn) {
   if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
   return res.json();
 }
+
+// Poll a scan job until it leaves the "pending" state (async OCR backend). Returns the final job.
+export async function pollScanJob(jobId, { interval = 2000, tries = 120 } = {}) {
+  for (let i = 0; i < tries; i++) {
+    const job = await request(`/catalog/books/scan/${jobId}`);
+    if (job.status !== "pending") return job;
+    await new Promise((r) => setTimeout(r, interval));
+  }
+  throw new Error("scan timed out");
+}
+
 export const createBook = (data) => request("/catalog/books", { method: "POST", body: data });
 
 export const listCustomers = () => request("/customers/");

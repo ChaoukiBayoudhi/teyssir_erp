@@ -64,10 +64,18 @@ Default = local filesystem per node (offline-first). The DB stores only a **path
 moving to **MinIO/S3** later (django-storages) is a **settings-only change, zero migration**.
 Hub image consolidation = a media-replication step (designed, Phase-later).
 
-## 6. Async OCR
-OCR/enrichment is isolated behind the provider call, so it can move from **inline** (default, no new
-dep) to **Celery/Django-Q** by swapping `run_extraction()`'s executor. Offline: Tesseract runs locally;
-enrichment is queued until the node is online. The scan endpoint returns a **draft** the user reviews.
+## 6. Async OCR — implemented
+A scan is a **`ScanJob`** (local-only model) processed by a pluggable executor (`SCAN_EXECUTOR`):
+- **`inline`** (default) — runs synchronously; the POST already returns the draft. Deterministic for
+  tests, fine for fast OCR (Tesseract).
+- **`thread`** — runs in a background daemon thread; the POST returns **`202 {job_id, status:"pending"}`**
+  and the client **polls** `GET /catalog/books/scan/<job_id>` until `done`/`failed`. This keeps a slow
+  engine (a vision LLM ~tens of seconds) from blocking the request.
+
+`enqueue_scan(job_id)` (catalog/bookscan/jobs.py) is the seam: add a **Celery/Django-Q** backend later
+without touching the HTTP API (the client already polls). Implemented with the **stdlib only** (no new
+dep). A failed scan records `FAILED` + the error — a job is never lost. Verified live: with `thread`,
+the scan POST returns in **~0.02 s** and the vision result lands ~60 s later via polling.
 
 ## 7. Workflow & API
 ```

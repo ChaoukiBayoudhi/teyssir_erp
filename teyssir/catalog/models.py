@@ -1,6 +1,6 @@
 from django.db import models
 
-from teyssir.core.models import MONEY, QTY, SyncableModel
+from teyssir.core.models import MONEY, QTY, SyncableModel, TimeStampedModel, UUIDModel
 
 
 class TaxRate(SyncableModel):
@@ -138,3 +138,24 @@ class ProductImage(SyncableModel):
 
     class Meta:
         ordering = ["order", "created_at"]
+
+
+class ScanJob(UUIDModel, TimeStampedModel):
+    """A book-scan request processed by the OCR pipeline. Local-only (never synced to the hub); it
+    lets the scan run *asynchronously* so a slow OCR engine (a vision LLM can take tens of seconds)
+    doesn't block the HTTP request. The client polls this job until DONE (docs/BOOK-OCR §6)."""
+
+    PENDING = "PENDING"
+    DONE = "DONE"
+    FAILED = "FAILED"
+    STATUSES = [(x, x) for x in (PENDING, DONE, FAILED)]
+
+    status = models.CharField(max_length=8, choices=STATUSES, default=PENDING)
+    isbn = models.CharField(max_length=20, blank=True, default="")
+    image_ids = models.JSONField(default=list)
+    result = models.JSONField(null=True, blank=True)        # the reviewable BookDraft, once DONE
+    ocr_text = models.TextField(blank=True, default="")
+    error = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at"]

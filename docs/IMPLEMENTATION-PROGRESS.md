@@ -18,7 +18,8 @@ one commit per milestone.
 | Double-entry GL: chart of accounts, journals (sales/receipts/payments/**VAT**), trial balance, P&L, balance sheet, **monthly VAT declaration** | ✅ |
 | **Camera book registration + OCR** (ISBN-first, pluggable providers, images) backend + **camera UI** + **hub→till federation incl. covers** | ✅ |
 | **Tesseract offline OCR active** (ara+fra+eng) — photo → OCR finds ISBN → OpenLibrary enrichment | ✅ verified live |
-| **Vision-LLM OCR provider** (free/offline via Ollama, default `qwen2.5vl:3b`) — direct structured multilingual extraction | ✅ **verified live** (title/author/publisher/lang/ISBN; ~54s first call → run async in prod) |
+| **Vision-LLM OCR provider** (free/offline via Ollama, default `qwen2.5vl:3b`) — direct structured multilingual extraction | ✅ **verified live** (title/author/publisher/lang/ISBN) |
+| **Async OCR** (`SCAN_EXECUTOR=thread`) — scan returns `202 {job_id}` instantly, PWA polls; stdlib only, Celery-swappable seam | ✅ **verified live** (POST ~0.02s, result via poll) |
 | Reporting/Dashboards + **Financials UI** (P&L, balance sheet, VAT, trial balance) | ✅ |
 | PWA: Login · POS · Dashboard · Financials · StockTake · CashSession · Receiving · Customers · BookCreate · Quotation; FR/AR + RTL; nav consolidated into a Menu | ✅ |
 

@@ -157,3 +157,39 @@ class VisionLlmOcrTests(TestCase):
 
         _, draft = VisionLlmOcrProvider(transport=boom).extract(self._png_path())
         self.assertEqual(draft.source, "manual")           # graceful fallback, never crashes
+
+
+@override_settings(OCR_PROVIDER="manual", METADATA_PROVIDERS=[], MEDIA_ROOT=tempfile.mkdtemp())
+class ScanJobTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.client.force_authenticate(User.objects.create_superuser("owner", password="pw-strong-123"))
+
+    def test_run_scan_job_worker_completes(self):
+        from teyssir.catalog.bookscan.jobs import run_scan_job
+        from teyssir.catalog.models import ScanJob
+
+        job = ScanJob.objects.create(isbn="9782070612758", image_ids=[])
+        run_scan_job(job.id)
+        job.refresh_from_db()
+        self.assertEqual(job.status, ScanJob.DONE)
+        self.assertEqual(job.result["isbn13"], "9782070612758")
+
+    def test_inline_scan_returns_done_with_draft(self):
+        # default executor is inline -> the job is already DONE in the POST response (backward compat)
+        r = self.client.post("/api/v1/catalog/books/scan",
+                             {"images": _png(), "isbn": "9782070612758"}, format="multipart")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["status"], "done")
+        self.assertEqual(body["isbn13"], "9782070612758")
+        self.assertIn("job_id", body)
+
+    def test_poll_scan_job_endpoint(self):
+        job_id = self.client.post("/api/v1/catalog/books/scan",
+                                  {"images": _png(), "isbn": "9782070612758"},
+                                  format="multipart").json()["job_id"]
+        r = self.client.get(f"/api/v1/catalog/books/scan/{job_id}")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["status"], "done")
+        self.assertEqual(r.json()["isbn13"], "9782070612758")

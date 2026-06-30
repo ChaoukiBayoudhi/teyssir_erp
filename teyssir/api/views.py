@@ -434,16 +434,38 @@ def _image_payload(request, img):
             "kind": img.kind, "is_primary": img.is_primary, "order": img.order}
 
 
+def _scan_job_payload(request, job, images=None):
+    """Shape a ScanJob for the client. When DONE, the reviewable draft fields are merged at the
+    top level (backward-compatible with the original synchronous scan response)."""
+    from teyssir.catalog.models import ProductImage, ScanJob
+
+    if images is None:
+        images = ProductImage.objects.filter(id__in=job.image_ids)
+    body = {
+        "job_id": str(job.id),
+        "status": job.status.lower(),                       # pending | done | failed
+        "image_ids": [str(i) for i in job.image_ids],
+        "images": [_image_payload(request, img) for img in images],
+    }
+    if job.status == ScanJob.DONE and job.result:
+        body.update(job.result)
+    if job.status == ScanJob.FAILED:
+        body["error"] = job.error
+    return body
+
+
 class BookScanView(APIView):
-    """POST multipart {images[], isbn?} -> store draft images, run ISBN enrichment + OCR,
-    return a reviewable draft + image refs (docs/BOOK-OCR-ARCHITECTURE.md)."""
+    """POST multipart {images[], isbn?} -> store draft images, enqueue OCR + ISBN enrichment as a
+    ScanJob, return the job. With the inline executor the job is already DONE (the draft is in the
+    response); with the thread executor it returns 202 pending and the client polls ScanJobView.
+    Docs/BOOK-OCR-ARCHITECTURE.md §6."""
 
     permission_classes = [capability("edit_product")]
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
-        from teyssir.catalog.bookscan.services import scan_book
-        from teyssir.catalog.models import ProductImage
+        from teyssir.catalog.bookscan.jobs import enqueue_scan
+        from teyssir.catalog.models import ProductImage, ScanJob
 
         files = request.FILES.getlist("images")
         isbn = (request.data.get("isbn") or "").strip()
@@ -452,14 +474,25 @@ class BookScanView(APIView):
                 image=f, kind=ProductImage.COVER if i == 0 else ProductImage.OTHER, order=i)
             for i, f in enumerate(files)
         ]
-        draft, ocr_text = scan_book([img.image.path for img in images], isbn=isbn)
-        if images and ocr_text:
-            ProductImage.objects.filter(pk=images[0].pk).update(ocr_text=ocr_text)
+        job = ScanJob.objects.create(isbn=isbn, image_ids=[str(img.id) for img in images])
+        enqueue_scan(job.id)
+        job.refresh_from_db()
+        code = status.HTTP_202_ACCEPTED if job.status == ScanJob.PENDING else status.HTTP_200_OK
+        return Response(_scan_job_payload(request, job, images), status=code)
 
-        data = draft.as_dict()
-        data["image_ids"] = [str(img.id) for img in images]
-        data["images"] = [_image_payload(request, img) for img in images]
-        return Response(data)
+
+class ScanJobView(APIView):
+    """GET /catalog/books/scan/<job_id> — poll a scan job until status is done/failed."""
+
+    permission_classes = [capability("edit_product")]
+
+    def get(self, request, pk):
+        from teyssir.catalog.models import ScanJob
+
+        job = ScanJob.objects.filter(pk=pk).first()
+        if not job:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(_scan_job_payload(request, job))
 
 
 class BookCreateView(APIView):
