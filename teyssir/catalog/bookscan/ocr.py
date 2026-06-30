@@ -105,8 +105,9 @@ def _draft_from_vision_json(raw):
         draft.languages = [str(a).strip() for a in data["languages"] if str(a).strip()]
     for num in ("pub_year", "pages"):
         try:
-            if data.get(num) not in (None, "", []):
-                setattr(draft, num, int(data[num]))
+            value = int(data.get(num))
+            if value > 0:                     # models emit 0 for "unknown" — treat as empty
+                setattr(draft, num, value)
         except (TypeError, ValueError):
             pass
     if draft.isbn13:
