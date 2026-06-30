@@ -1,6 +1,6 @@
 # Teyssir ERP — Implementation Progress & Plan
 
-Living status of the build. Backend tests: **57 passing**. PWA: **9 screens**. Git: standalone repo,
+Living status of the build. Backend tests: **61 passing**. PWA: **10 screens**. Git: standalone repo,
 one commit per milestone.
 
 ## Done (this and prior phases)
@@ -16,7 +16,8 @@ one commit per milestone.
 | Federated sync (sales, returns, quotes, reservations, stock-take, customers, **cash, identity**) | ✅ |
 | Identity: UUID-pk users replicated hub→till (offline login) | ✅ |
 | Double-entry GL: chart of accounts, journals (sales/receipts/payments/**VAT**), trial balance, P&L, balance sheet, **monthly VAT declaration** | ✅ |
-| **Camera book registration + OCR** (ISBN-first, pluggable providers, images) backend + **camera UI** | ✅ |
+| **Camera book registration + OCR** (ISBN-first, pluggable providers, images) backend + **camera UI** + **hub→till federation incl. covers** | ✅ |
+| **Tesseract offline OCR active** (ara+fra+eng) — photo → OCR finds ISBN → OpenLibrary enrichment | ✅ verified live |
 | Reporting/Dashboards + **Financials UI** (P&L, balance sheet, VAT, trial balance) | ✅ |
 | PWA: Login · POS · Dashboard · Financials · StockTake · CashSession · Receiving · Customers · BookCreate · Quotation; FR/AR + RTL; nav consolidated into a Menu | ✅ |
 

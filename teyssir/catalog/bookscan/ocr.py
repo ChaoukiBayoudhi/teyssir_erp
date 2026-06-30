@@ -26,13 +26,20 @@ class ManualOcrProvider(OcrProvider):
 
 
 def _draft_from_text(text):
+    """Best-effort fields from OCR text. The ISBN is the high-value signal — once found it drives
+    accurate metadata enrichment; title/author are loose heuristics for books without an ISBN."""
     draft = BookDraft(source="tesseract", confidence=0.4)
     isbn = re.search(r"(97[89][-\s]?(?:\d[-\s]?){9}\d)", text)
     if isbn:
         draft.isbn13 = re.sub(r"[-\s]", "", isbn.group(1))
-    lines = [ln.strip() for ln in text.splitlines() if len(ln.strip()) >= 3]
+    lines = [
+        ln.strip() for ln in text.splitlines()
+        if len(ln.strip()) >= 3 and not ln.strip().upper().startswith("ISBN")
+    ]
     if lines:
-        draft.title = lines[0]            # heuristic: first substantial line ≈ title
+        draft.title = lines[0]            # first substantial line ≈ title
+    if len(lines) > 1:
+        draft.authors = [lines[1]]        # next line ≈ author
     return draft
 
 

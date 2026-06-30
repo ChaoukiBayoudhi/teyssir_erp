@@ -1,11 +1,22 @@
+import os
 import tempfile
+import unittest
 from io import BytesIO
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from rest_framework.test import APIClient
+
+
+def _tesseract_ready():
+    try:
+        import pytesseract
+        pytesseract.get_tesseract_version()
+        return "fra" in pytesseract.get_languages()
+    except Exception:
+        return False
 
 from teyssir.catalog.bookscan.draft import BookDraft
 from teyssir.catalog.bookscan.services import create_book_from_draft, scan_book
@@ -80,3 +91,26 @@ class BookScanApiTests(TestCase):
         linked = ProductImage.objects.get(id=image_id)
         self.assertEqual(str(linked.product_id), str(product.id))
         self.assertTrue(linked.is_primary)
+
+
+@unittest.skipUnless(_tesseract_ready(), "tesseract engine + fra language data not installed")
+@override_settings(OCR_PROVIDER="tesseract")
+class TesseractOcrTests(TestCase):
+    def test_extracts_title_and_isbn_from_a_rendered_cover(self):
+        from teyssir.catalog.bookscan.ocr import get_ocr_provider
+
+        img = Image.new("RGB", (700, 320), "white")
+        draw = ImageDraw.Draw(img)
+        try:
+            font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial.ttf", 40)
+        except Exception:
+            font = ImageFont.load_default()
+        draw.text((40, 40), "Le Petit Prince", fill="black", font=font)
+        draw.text((40, 160), "ISBN 978-2-07-061275-8", fill="black", font=font)
+        path = os.path.join(tempfile.mkdtemp(), "cover.png")
+        img.save(path)
+
+        text, detected = get_ocr_provider().extract(path)
+        self.assertIn("Petit", text)
+        self.assertEqual(detected.isbn13, "9782070612758")   # ISBN drives enrichment
+        self.assertEqual(detected.title, "Le Petit Prince")

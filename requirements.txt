@@ -3,6 +3,11 @@ Django>=5.2,<7.0
 djangorestframework>=3.15
 python-dotenv>=1.0
 argon2-cffi>=23.1            # Argon2id password hashing (spec §18)
+Pillow>=10                   # product/book images (ImageField)
+
+# --- Book registration / OCR (docs/BOOK-OCR-ARCHITECTURE.md) ---
+pytesseract>=0.3            # offline OCR; needs the `tesseract` binary + ara/fra/eng language data
+                            #   macOS: brew install tesseract  + ara/fra traineddata in tessdata/
 
 # --- Hub (PostgreSQL) only; tills run on the built-in SQLite, no driver needed ---
 # psycopg[binary]>=3.2
