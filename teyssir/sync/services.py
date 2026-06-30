@@ -130,7 +130,9 @@ def collect_master_changes(since=None):
     fresh server-side cursor (spec §4.4). Config tables are tiny, so we ship them whole and
     upsert by natural key on the till — no per-row change-tracking needed."""
     from teyssir.billing.models import FiscalStampConfig
-    from teyssir.catalog.models import Barcode, Category, Product, TaxRate
+    from teyssir.catalog.models import (
+        Barcode, Book, BookContributor, Category, Contributor, Product, TaxRate,
+    )
 
     from django.contrib.auth.models import Group
 
@@ -141,6 +143,14 @@ def collect_master_changes(since=None):
     objs = []
     for name in MASTER_MODELS_ORDERED:
         qs = models_by_name[name].objects.all()
+        if since:
+            qs = qs.filter(updated_at__gt=since)
+        objs += list(qs.order_by("created_at"))
+
+    # Book bibliographic profile: Contributor -> Book (FK Product, already above) -> BookContributor.
+    # Cover images replicate separately (media replication, docs/BOOK-OCR-ARCHITECTURE §5).
+    for Model in (Contributor, Book, BookContributor):
+        qs = Model.objects.all()
         if since:
             qs = qs.filter(updated_at__gt=since)
         objs += list(qs.order_by("created_at"))

@@ -136,3 +136,23 @@ class SyncTests(TestCase):
         self.assertEqual(replicated.username, "sami")
         self.assertTrue(replicated.check_password("pw-strong-123"))   # hash replicated -> offline login
         self.assertTrue(replicated.groups.filter(name="Cashier").exists())  # RBAC offline
+
+    def test_book_metadata_replicates_hub_to_till(self):
+        from teyssir.catalog.bookscan.services import create_book_from_draft
+        from teyssir.catalog.models import Book
+
+        product = create_book_from_draft(data={
+            "title": "Le Petit Prince", "isbn13": "9782070612758", "authors": ["Saint-Exupéry"],
+        }, sale_price="12.500")
+        book = Book.objects.get(product=product)
+
+        collected = collect_master_changes()
+        models = [r["model"] for r in json.loads(collected["records"])]
+        self.assertIn("catalog.book", models)
+        self.assertIn("catalog.bookcontributor", models)
+
+        # a till that lacks the book applies the pull -> book + contributor recreated
+        Book.objects.filter(pk=book.pk).delete()
+        apply_master_changes(collected["records"], config=collected["config"])
+        replicated = Book.objects.get(pk=book.pk)
+        self.assertEqual(replicated.contributors.first().contributor.name, "Saint-Exupéry")
