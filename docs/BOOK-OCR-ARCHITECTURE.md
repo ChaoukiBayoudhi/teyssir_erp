@@ -19,14 +19,18 @@ This makes the common case (a barcoded book) a one-scan, high-accuracy, **free**
 ## 2. OCR engine — analysis & decision
 | Option | AR/FR/EN | Offline | Free | Verdict |
 |---|---|---|---|---|
-| **Tesseract** (OSS) | `ara+fra+eng` packs; moderate AR, good FR/EN | ✅ | ✅ | **default** (offline) |
-| Cloud Vision (Google/Azure/AWS) | high incl. AR | ❌ | ❌ (paid) | optional plug |
-| **Vision LLM** (Claude/GPT-4o) | best for mixed-language *structured* extraction | ❌ | ❌ | best "future AI" plug |
+| **Tesseract** (OSS) | `ara+fra+eng` packs; moderate AR, good FR/EN | ✅ | ✅ | **default** (offline) — text → ISBN regex |
+| **Vision LLM via Ollama** (qwen2.5vl / llama3.2-vision / minicpm-v) | best for mixed-language *structured* extraction | ✅ | ✅ | **implemented** — `OCR_PROVIDER=vision`, free+offline, no key |
+| Cloud Vision (Google/Azure/AWS) or hosted Vision LLM (Claude/GPT-4o) | highest incl. AR | ❌ | ❌ (paid) | optional plug, same interface |
 
-**Decision — Strategy pattern (`OcrProvider`)**: ship a **`TesseractOcrProvider`** (free/offline),
-degrading to a **`ManualOcrProvider`** no-op if Tesseract isn't installed; a **`VisionLlmOcrProvider`**
-can be plugged for online high-accuracy extraction **without schema or API changes**. Selected by
-`TEYSSIR_OCR_PROVIDER`. Providers return `(text, fields, confidence)`.
+**Decision — Strategy pattern (`OcrProvider`)**: ship a **`TesseractOcrProvider`** (free/offline text
+OCR; the ISBN it finds drives enrichment), degrading to a **`ManualOcrProvider`** no-op if Tesseract
+isn't installed. **`VisionLlmOcrProvider`** (implemented) calls a **local Ollama vision model** — free,
+offline, no API key — and returns a *structured* multilingual `BookDraft` directly (title, authors,
+translators, publisher, languages, year, pages, ISBN, subject), so it doesn't depend on the ISBN being
+present/registered. A hosted Vision LLM (paid) is the same interface with a different transport — no
+schema/API change. Selected by `TEYSSIR_OCR_PROVIDER`; model via `TEYSSIR_VISION_MODEL`. Providers
+return `(raw_text, BookDraft)` and degrade gracefully (never crash a scan).
 
 ## 3. Metadata-provider abstraction
 `BookMetadataProvider.enrich(isbn) -> BookData | None`. Implementations `OpenLibraryProvider`,

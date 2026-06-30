@@ -8,6 +8,9 @@ Pillow>=10                   # product/book images (ImageField)
 # --- Book registration / OCR (docs/BOOK-OCR-ARCHITECTURE.md) ---
 pytesseract>=0.3            # offline OCR; needs the `tesseract` binary + ara/fra/eng language data
                             #   macOS: brew install tesseract  + ara/fra traineddata in tessdata/
+                            #   Linux: apt install tesseract-ocr tesseract-ocr-ara tesseract-ocr-fra
+# Vision-LLM OCR (OCR_PROVIDER=vision) is free/offline via Ollama (no Python dep — uses urllib):
+#   install Ollama, then `ollama pull qwen2.5vl:3b` (or llama3.2-vision / minicpm-v).
 
 # --- Hub (PostgreSQL) only; tills run on the built-in SQLite, no driver needed ---
 # psycopg[binary]>=3.2
