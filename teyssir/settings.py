@@ -136,6 +136,17 @@ USE_TZ = True
 STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# Media (product/book images). ImageField stores a path; the storage backend is pluggable
+# (local FS now; S3/MinIO later via django-storages — no schema change). Spec docs/BOOK-OCR.
+MEDIA_URL = "media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
+# Book registration / OCR providers (replaceable; docs/BOOK-OCR-ARCHITECTURE.md)
+OCR_PROVIDER = os.environ.get("TEYSSIR_OCR_PROVIDER", "tesseract")          # tesseract|manual|vision
+METADATA_PROVIDERS = [
+    p for p in os.environ.get("TEYSSIR_METADATA_PROVIDERS", "openlibrary").split(",") if p
+]
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.TokenAuthentication",

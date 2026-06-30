@@ -5,7 +5,8 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     CashOpenView, CashXView, CashZView, CheckoutView, CustomerViewSet, ProductViewSet,
     QuotationConvertView, QuotationCreateView, ReceiveView, ReservationCreateView,
-    FinancialsView, ReservationReleaseView, ReturnView, SalesReportView, StockTakeView,
+    BookCreateView, BookScanView, FinancialsView, ProductImageView, ProductImagesView,
+    ReservationReleaseView, ReturnView, SalesReportView, StockTakeView,
     SupplierViewSet, TaxRateViewSet, TrialBalanceView, VatDeclarationView, me,
 )
 
@@ -29,6 +30,10 @@ urlpatterns = [
     path("reservations/<uuid:pk>/release", ReservationReleaseView.as_view(), name="reservation-release"),
     path("inventory/stocktake", StockTakeView.as_view(), name="inventory-stocktake"),
     path("purchasing/receive", ReceiveView.as_view(), name="purchasing-receive"),
+    path("catalog/books/scan", BookScanView.as_view(), name="book-scan"),
+    path("catalog/books", BookCreateView.as_view(), name="book-create"),
+    path("catalog/products/<uuid:pk>/images", ProductImagesView.as_view(), name="product-images"),
+    path("catalog/images/<uuid:pk>", ProductImageView.as_view(), name="product-image"),
     path("reports/sales", SalesReportView.as_view(), name="reports-sales"),
     path("reports/trial-balance", TrialBalanceView.as_view(), name="reports-trial-balance"),
     path("reports/financials", FinancialsView.as_view(), name="reports-financials"),

@@ -59,3 +59,82 @@ class Barcode(SyncableModel):
 
     def __str__(self):
         return f"{self.symbology}:{self.value}"
+
+
+class Book(SyncableModel):
+    """Rich bibliographic profile for a book product (camera/OCR registration, spec docs/BOOK-OCR).
+
+    `raw_metadata` keeps the full external-provider payload so future enrichment fields need no
+    migration; `source_provider`/`ocr_confidence` record how the data was obtained."""
+
+    product = models.OneToOneField(Product, on_delete=models.CASCADE, related_name="book")
+    isbn13 = models.CharField(max_length=13, blank=True, default="", db_index=True)
+    isbn10 = models.CharField(max_length=10, blank=True, default="")
+    subtitle = models.CharField(max_length=255, blank=True, default="")
+    publisher = models.CharField(max_length=160, blank=True, default="")
+    series = models.CharField(max_length=160, blank=True, default="")
+    edition = models.CharField(max_length=80, blank=True, default="")
+    languages = models.JSONField(default=list, blank=True)        # e.g. ["ar","fr"]
+    pub_year = models.IntegerField(null=True, blank=True)
+    pages = models.IntegerField(null=True, blank=True)
+    dimensions = models.CharField(max_length=60, blank=True, default="")
+    cover_type = models.CharField(max_length=40, blank=True, default="")  # paperback/hardcover
+    subject = models.CharField(max_length=160, blank=True, default="")
+    keywords = models.JSONField(default=list, blank=True)
+    description = models.TextField(blank=True, default="")
+    source_provider = models.CharField(max_length=40, blank=True, default="")  # openlibrary/ocr/manual
+    ocr_confidence = models.FloatField(default=0.0)
+    raw_metadata = models.JSONField(default=dict, blank=True)
+
+    def __str__(self):
+        return f"Book {self.isbn13 or self.product_id}"
+
+
+class Contributor(SyncableModel):
+    """A person credited on books (author/translator/…). Normalized to avoid redundancy."""
+
+    name = models.CharField(max_length=160, unique=True)
+
+    def __str__(self):
+        return self.name
+
+
+class BookContributor(SyncableModel):
+    AUTHOR = "AUTHOR"
+    TRANSLATOR = "TRANSLATOR"
+    EDITOR = "EDITOR"
+    ILLUSTRATOR = "ILLUSTRATOR"
+    ROLES = [(x, x) for x in (AUTHOR, TRANSLATOR, EDITOR, ILLUSTRATOR)]
+
+    book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name="contributors")
+    contributor = models.ForeignKey(Contributor, on_delete=models.PROTECT)
+    role = models.CharField(max_length=12, choices=ROLES, default=AUTHOR)
+    order = models.IntegerField(default=0)
+
+    class Meta:
+        unique_together = [("book", "contributor", "role")]
+        ordering = ["order"]
+
+
+class ProductImage(SyncableModel):
+    """Original images for a product (book cover/back/pages). Stored via Django ImageField over a
+    pluggable storage backend (local FS by default; S3/MinIO via settings, no schema change)."""
+
+    COVER = "COVER"
+    BACK = "BACK"
+    PAGE = "PAGE"
+    OTHER = "OTHER"
+    KINDS = [(x, x) for x in (COVER, BACK, PAGE, OTHER)]
+
+    # nullable: a scan stores draft images before the product exists; create_book links them
+    product = models.ForeignKey(
+        Product, null=True, blank=True, on_delete=models.CASCADE, related_name="images"
+    )
+    image = models.ImageField(upload_to="product_images/%Y/%m/")
+    kind = models.CharField(max_length=8, choices=KINDS, default=COVER)
+    is_primary = models.BooleanField(default=False)
+    order = models.IntegerField(default=0)
+    ocr_text = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["order", "created_at"]

@@ -1,8 +1,10 @@
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
 from django.utils.dateparse import parse_date
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import BasePermission, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -373,6 +375,96 @@ class CashZView(APIView):
         if counted in (None, ""):
             return Response({"detail": "counted_cash required"}, status=status.HTTP_400_BAD_REQUEST)
         return Response(z_report(session, counted))
+
+
+def _image_payload(request, img):
+    return {"id": str(img.id), "url": request.build_absolute_uri(img.image.url),
+            "kind": img.kind, "is_primary": img.is_primary, "order": img.order}
+
+
+class BookScanView(APIView):
+    """POST multipart {images[], isbn?} -> store draft images, run ISBN enrichment + OCR,
+    return a reviewable draft + image refs (docs/BOOK-OCR-ARCHITECTURE.md)."""
+
+    permission_classes = [capability("edit_product")]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        from teyssir.catalog.bookscan.services import scan_book
+        from teyssir.catalog.models import ProductImage
+
+        files = request.FILES.getlist("images")
+        isbn = (request.data.get("isbn") or "").strip()
+        images = [
+            ProductImage.objects.create(
+                image=f, kind=ProductImage.COVER if i == 0 else ProductImage.OTHER, order=i)
+            for i, f in enumerate(files)
+        ]
+        draft, ocr_text = scan_book([img.image.path for img in images], isbn=isbn)
+        if images and ocr_text:
+            ProductImage.objects.filter(pk=images[0].pk).update(ocr_text=ocr_text)
+
+        data = draft.as_dict()
+        data["image_ids"] = [str(img.id) for img in images]
+        data["images"] = [_image_payload(request, img) for img in images]
+        return Response(data)
+
+
+class BookCreateView(APIView):
+    """POST reviewed JSON (+ image_ids) -> create Product + Book + Contributors."""
+
+    permission_classes = [capability("edit_product")]
+
+    def post(self, request):
+        from teyssir.catalog.bookscan.services import create_book_from_draft
+
+        d = request.data
+        product = create_book_from_draft(
+            data=d, image_ids=d.get("image_ids", []),
+            sale_price=d.get("sale_price", "0"), origin_terminal=settings.TERMINAL,
+        )
+        return Response({"id": str(product.id), "sku": product.sku, "name": product.name_fr},
+                        status=status.HTTP_201_CREATED)
+
+
+class ProductImagesView(APIView):
+    """GET list / POST add images for a product (docs/BOOK-OCR)."""
+
+    permission_classes = [capability("edit_product")]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get(self, request, pk):
+        from teyssir.catalog.models import ProductImage
+        imgs = ProductImage.objects.filter(product_id=pk)
+        return Response([_image_payload(request, i) for i in imgs])
+
+    def post(self, request, pk):
+        from teyssir.catalog.models import ProductImage
+        img = ProductImage.objects.create(
+            product_id=pk, image=request.FILES.get("image"),
+            kind=request.data.get("kind", ProductImage.OTHER))
+        return Response(_image_payload(request, img), status=status.HTTP_201_CREATED)
+
+
+class ProductImageView(APIView):
+    """DELETE an image; PATCH to set it primary."""
+
+    permission_classes = [capability("edit_product")]
+
+    def delete(self, request, pk):
+        from teyssir.catalog.models import ProductImage
+        ProductImage.objects.filter(pk=pk).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def patch(self, request, pk):
+        from teyssir.catalog.models import ProductImage
+        img = ProductImage.objects.filter(pk=pk).first()
+        if not img:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        if request.data.get("is_primary"):
+            ProductImage.objects.filter(product=img.product).update(is_primary=False)
+            ProductImage.objects.filter(pk=pk).update(is_primary=True)
+        return Response(_image_payload(request, ProductImage.objects.get(pk=pk)))
 
 
 def _print_receipt(sale):
