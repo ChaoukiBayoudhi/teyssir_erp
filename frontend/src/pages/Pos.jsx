@@ -12,7 +12,7 @@ const TIMBRE = 1.0; // facture stamp (server snapshots the authoritative value)
 const r3 = (x) => Math.round(x * 1000) / 1000;
 const fmt = (x) => x.toFixed(2); // 2-dp display (server stores 3-dp)
 
-export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onReceiving, onCustomers }) {
+export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onReceiving, onCustomers, onNewBook }) {
   const { t } = useTranslation();
   const [terminal, setTerminal] = useState("C1");
   const [query, setQuery] = useState("");
@@ -121,6 +121,7 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
           <Button color="inherit" onClick={onDashboard}>{t("dashboard")}</Button>
           <Button color="inherit" onClick={onStockTake}>{t("inventory")}</Button>
           <Button color="inherit" onClick={onReceiving}>{t("receiving")}</Button>
+          <Button color="inherit" onClick={onNewBook}>{t("newBook")}</Button>
           <Button color="inherit" onClick={onCustomers}>{t("customers")}</Button>
           <Button color="inherit" onClick={onCash}>{t("session")}</Button>
           <LangToggle />

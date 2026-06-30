@@ -75,6 +75,26 @@ export const createSupplier = (name) =>
 export const receiveGoods = (payload) =>
   request("/purchasing/receive", { method: "POST", body: payload });
 
+// Book scan = multipart (images + optional ISBN). Browser sets the multipart boundary.
+export async function scanBook(files, isbn) {
+  const fd = new FormData();
+  files.forEach((f) => fd.append("images", f));
+  if (isbn) fd.append("isbn", isbn);
+  const headers = {};
+  if (getToken()) headers["Authorization"] = `Token ${getToken()}`;
+  let res;
+  try {
+    res = await fetch(`${BASE}/catalog/books/scan`, { method: "POST", headers, body: fd });
+  } catch {
+    const err = new Error("offline");
+    err.offline = true;
+    throw err;
+  }
+  if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+  return res.json();
+}
+export const createBook = (data) => request("/catalog/books", { method: "POST", body: data });
+
 export const listCustomers = () => request("/customers/");
 export const createCustomer = (body) =>
   request("/customers/", { method: "POST", body });
