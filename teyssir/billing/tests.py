@@ -1,7 +1,7 @@
 import datetime
 from decimal import Decimal
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from teyssir.billing.models import DocumentCounter, FiscalStampConfig
@@ -37,6 +37,24 @@ class NumberingTests(TestCase):
         self.assertEqual(s_july, 1)
         # the counters are distinct rows
         self.assertEqual(DocumentCounter.objects.count(), 2)
+
+
+class StoreScopedNumberingTests(TestCase):
+    """Phase 6: with a STORE_CODE set, numbers are globally unique across stores; default unchanged."""
+
+    @override_settings(STORE_CODE="S1")
+    def test_store_prefix_when_set(self):
+        n, _, _ = allocate_document_number("C1", "FACTURE", _june_2026())
+        self.assertEqual(n, "S1C1-202606-0001")
+
+    @override_settings(STORE_CODE="S2")
+    def test_avoir_segment_keeps_store_prefix(self):
+        n, _, _ = allocate_document_number("C1", "AVOIR", _june_2026())
+        self.assertEqual(n, "S2C1-AV-202606-0001")
+
+    def test_default_single_store_is_unchanged(self):
+        n, _, _ = allocate_document_number("C1", "FACTURE", _june_2026())
+        self.assertEqual(n, "C1-202606-0001")   # STORE_CODE="" -> backward compatible
 
 
 class StampTests(TestCase):

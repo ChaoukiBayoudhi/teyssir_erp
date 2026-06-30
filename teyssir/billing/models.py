@@ -46,6 +46,7 @@ class Invoice(UUIDModel, TimeStampedModel):
 
     sale = models.OneToOneField("sales.Sale", on_delete=models.PROTECT, related_name="invoice")
     doc_type = models.CharField(max_length=12, choices=DOC_TYPES, default=FACTURE)
+    store_code = models.CharField(max_length=8, blank=True, default="")  # Phase 6: cross-store rollup
     terminal = models.CharField(max_length=8)
     year = models.IntegerField()
     month = models.IntegerField()

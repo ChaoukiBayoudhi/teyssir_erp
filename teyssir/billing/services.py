@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -14,7 +15,8 @@ _TYPE_CODE = {"FACTURE": "", "TICKET": "T", "AVOIR": "AV"}
 def allocate_document_number(terminal, doc_type, when=None):
     """Atomically allocate the next gapless number for (terminal, YYYY, MM, doc_type).
 
-    Returns ``(number, seq, when)`` with ``number`` formatted ``C1-YYYYMM-XXXX`` —
+    Returns ``(number, seq, when)`` with ``number`` formatted ``C1-YYYYMM-XXXX`` (or
+    ``S1C1-YYYYMM-XXXX`` when a multi-store ``STORE_CODE`` is set, for global uniqueness) —
     4-digit zero-padded sequence that auto-widens past 9999 so gaplessness never breaks.
     Spec §4.4. Row-locked so two concurrent finalizes can never get the same seq.
     """
@@ -30,7 +32,8 @@ def allocate_document_number(terminal, doc_type, when=None):
     counter.save(update_fields=["seq"])
     seg = _TYPE_CODE.get(doc_type, doc_type[:2].upper())
     mid = f"{seg}-" if seg else ""
-    number = f"{terminal}-{mid}{when.year}{when.month:02d}-{counter.seq:04d}"
+    prefix = f"{settings.STORE_CODE}{terminal}"      # store-scoped when STORE_CODE is set
+    number = f"{prefix}-{mid}{when.year}{when.month:02d}-{counter.seq:04d}"
     return number, counter.seq, when
 
 
@@ -48,6 +51,7 @@ def issue_invoice(sale, doc_type=Invoice.FACTURE, when=None):
     return Invoice.objects.create(
         sale=sale,
         doc_type=doc_type,
+        store_code=settings.STORE_CODE,
         terminal=sale.terminal,
         year=when.year,
         month=when.month,

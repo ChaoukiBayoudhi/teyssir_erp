@@ -569,4 +569,6 @@ def me(request):
         "username": request.user.get_username(),
         "language": getattr(request.user, "preferred_language", "fr"),
         "terminal": request.headers.get("X-Terminal", ""),
+        "store_code": settings.STORE_CODE,
+        "role": settings.ROLE,
     })

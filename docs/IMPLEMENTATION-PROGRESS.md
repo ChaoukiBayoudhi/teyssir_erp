@@ -24,7 +24,18 @@ one commit per milestone.
 | PWA: Login · POS · Dashboard · Financials · StockTake · CashSession · Receiving · Customers · BookCreate · Quotation; FR/AR + RTL; nav consolidated into a Menu | ✅ |
 
 ## Remaining
-### Phase 6 — Multi-store cloud hub (design plan)
+### Phase 6 — Multi-store cloud hub (in progress)
+**Done — store identity + globally-unique numbering (the keystone):** `TEYSSIR_STORE_CODE` (empty =
+single-store, unchanged). When set, document numbers become `S1C1-YYYYMM-XXXX` so they never collide
+across stores once consolidated. `Invoice.store_code` is stamped at issue (clean cross-store roll-up
+without parsing the number); `GET /me` reports `store_code` + `role`. Backward-compatible (existing
+`C1-YYYYMM-XXXX` series and all tests unchanged). Verified live (`/me` → `store_code:"S1"`).
+
+**Next:** (2) cloud-hub sync peer — the store hub pushes its outbox to a cloud hub (reuses §4.4
+push/pull recursively); (3) consolidation API — group GL/sales by `store_code`, add an optional
+`store` filter to Financials/Dashboard; (4) flip `STORAGES` to MinIO/S3 at the cloud tier.
+
+#### Original design plan
 Today: one local hub per store (`teyssir-hub.local`) + offline tills syncing to it. Phase 6 federates
 **multiple stores** under a cloud hub for consolidated reporting/inventory.
 

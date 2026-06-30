@@ -22,6 +22,10 @@ except Exception:  # pragma: no cover
 # --- Node identity -----------------------------------------------------------
 ROLE = os.environ.get("TEYSSIR_ROLE", "till").lower()        # "hub" | "till"
 TERMINAL = os.environ.get("TEYSSIR_TERMINAL", "C1")          # till series prefix
+# Multi-store (Phase 6): a short code identifying THIS store. Empty = single-store (numbers stay
+# C1-YYYYMM-XXXX). When set (e.g. "S1"), document numbers become S1C1-YYYYMM-XXXX so they are
+# globally unique across stores once consolidated at a cloud hub. All tills in a store share it.
+STORE_CODE = os.environ.get("TEYSSIR_STORE_CODE", "").strip()
 HUB_URL = os.environ.get("TEYSSIR_HUB_URL", "")
 SYNC_KEY = os.environ.get("TEYSSIR_SYNC_KEY", "")            # shared secret for /api/v1/sync/*
 
