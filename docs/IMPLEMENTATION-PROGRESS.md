@@ -8,7 +8,7 @@ one commit per milestone.
 |---|---|
 | POS (cart, barcode, checkout, offline queue, ESC/POS receipt) | ✅ |
 | Inventory (append-only ledger, weighted-avg cost, stock-take) | ✅ |
-| Purchasing (supplier, receive goods, PO/GR/invoice **services**) | ✅ (UI: receive only) |
+| Purchasing (supplier, receive goods, **PO → receive → supplier-invoice UI**) | ✅ |
 | Returns / credit notes (AVOIR series) | ✅ |
 | Customers + credit accounts (ledger, statement, payments) + **UI** | ✅ |
 | Cash sessions (open → X → Z variance) + **UI** | ✅ |
@@ -21,13 +21,7 @@ one commit per milestone.
 | PWA: Login · POS · Dashboard · Financials · StockTake · CashSession · Receiving · Customers · BookCreate · Quotation; FR/AR + RTL; nav consolidated into a Menu | ✅ |
 
 ## Remaining
-### A) Formal Purchase-Order workflow UI
-Backend services exist (`create_po`, `receive_po`, `record_purchase_invoice`). Needs:
-- API: `POST/GET /purchasing/orders`, `POST /purchasing/orders/<id>/receive`, `POST /purchasing/invoices`.
-- PWA page: create a PO (supplier + lines), receive against it (partial allowed), record the supplier
-  invoice (books TVA déductible — already wired in the GL). Mark invoices paid.
-
-### B) Phase 6 — Multi-store cloud hub (design plan)
+### Phase 6 — Multi-store cloud hub (design plan)
 Today: one local hub per store (`teyssir-hub.local`) + offline tills syncing to it. Phase 6 federates
 **multiple stores** under a cloud hub for consolidated reporting/inventory.
 
