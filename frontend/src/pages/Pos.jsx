@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AppBar, Toolbar, Typography, Box, Grid, Paper, TextField, List, ListItemButton,
-  ListItemText, IconButton, Stack, Button, Divider, Alert, Select, MenuItem, Snackbar, Chip,
+  ListItemText, IconButton, Stack, Button, Divider, Alert, Select, MenuItem, Menu, Snackbar, Chip,
 } from "@mui/material";
 import { useTranslation } from "react-i18next";
 import { searchProducts, lookupBarcode, checkout } from "../api";
@@ -12,9 +12,11 @@ const TIMBRE = 1.0; // facture stamp (server snapshots the authoritative value)
 const r3 = (x) => Math.round(x * 1000) / 1000;
 const fmt = (x) => x.toFixed(2); // 2-dp display (server stores 3-dp)
 
-export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onReceiving, onCustomers, onNewBook }) {
+export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onReceiving,
+                              onCustomers, onNewBook, onQuotation }) {
   const { t } = useTranslation();
   const [terminal, setTerminal] = useState("C1");
+  const [menuAnchor, setMenuAnchor] = useState(null);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [cart, setCart] = useState([]);
@@ -118,12 +120,20 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
           >
             {["C1", "C2", "C3"].map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
           </Select>
-          <Button color="inherit" onClick={onDashboard}>{t("dashboard")}</Button>
-          <Button color="inherit" onClick={onStockTake}>{t("inventory")}</Button>
-          <Button color="inherit" onClick={onReceiving}>{t("receiving")}</Button>
-          <Button color="inherit" onClick={onNewBook}>{t("newBook")}</Button>
-          <Button color="inherit" onClick={onCustomers}>{t("customers")}</Button>
-          <Button color="inherit" onClick={onCash}>{t("session")}</Button>
+          <Button color="inherit" onClick={(e) => setMenuAnchor(e.currentTarget)}>{t("menu")} ▾</Button>
+          <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)}>
+            {[
+              ["dashboard", onDashboard],
+              ["inventory", onStockTake],
+              ["receiving", onReceiving],
+              ["newBook", onNewBook],
+              ["quotation", onQuotation],
+              ["customers", onCustomers],
+              ["session", onCash],
+            ].map(([key, fn]) => (
+              <MenuItem key={key} onClick={() => { setMenuAnchor(null); fn && fn(); }}>{t(key)}</MenuItem>
+            ))}
+          </Menu>
           <LangToggle />
           <Button color="inherit" onClick={onLogout}>{t("logout")}</Button>
         </Toolbar>

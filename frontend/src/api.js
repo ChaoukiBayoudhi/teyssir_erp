@@ -54,6 +54,11 @@ export const lookupBarcode = (code) =>
 export const checkout = (payload) =>
   request("/pos/checkout", { method: "POST", body: payload });
 
+export const createQuotation = (payload) =>
+  request("/quotations", { method: "POST", body: payload });
+export const convertQuotation = (id, payment_method) =>
+  request(`/quotations/${id}/convert`, { method: "POST", body: { payment_method } });
+
 export const salesReport = (from, to) =>
   request(`/reports/sales?from=${from}&to=${to}`);
 export const trialBalance = () => request("/reports/trial-balance");

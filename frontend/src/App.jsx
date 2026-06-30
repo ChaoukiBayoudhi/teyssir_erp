@@ -13,6 +13,7 @@ import Receiving from "./pages/Receiving.jsx";
 import Customers from "./pages/Customers.jsx";
 import Financials from "./pages/Financials.jsx";
 import BookCreate from "./pages/BookCreate.jsx";
+import Quotation from "./pages/Quotation.jsx";
 
 export default function App() {
   const { i18n } = useTranslation();
@@ -54,6 +55,8 @@ export default function App() {
           <Customers onBack={() => setView("pos")} onLogout={logout} />
         ) : view === "book" ? (
           <BookCreate onBack={() => setView("pos")} onLogout={logout} />
+        ) : view === "quotation" ? (
+          <Quotation onBack={() => setView("pos")} onLogout={logout} />
         ) : (
           <Pos
             onLogout={logout}
@@ -63,6 +66,7 @@ export default function App() {
             onReceiving={() => setView("receiving")}
             onCustomers={() => setView("customers")}
             onNewBook={() => setView("book")}
+            onQuotation={() => setView("quotation")}
           />
         )}
       </ThemeProvider>
