@@ -1,0 +1,15 @@
+# Teyssir ERP — Phase-0 skeleton dependencies (all free/OSS)
+Django>=5.2,<7.0
+djangorestframework>=3.15
+python-dotenv>=1.0
+argon2-cffi>=23.1            # Argon2id password hashing (spec §18)
+
+# --- Hub (PostgreSQL) only; tills run on the built-in SQLite, no driver needed ---
+# psycopg[binary]>=3.2
+
+# --- Later phases (NOT required to run the Phase-0 skeleton) ---
+# channels>=4 ; channels-redis>=4        # WebSocket stock alerts (§16)
+# celery>=5 ; redis>=5                    # async jobs, backups, notifications
+# python-escpos>=3                        # ESC/POS thermal receipts (§13.5)
+# weasyprint>=62                          # A4 facture PDF (§13.5)
+# python-barcode>=0.15 ; Pillow>=10       # internal Code-128 labels (§12.3)

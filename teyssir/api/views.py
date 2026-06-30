@@ -1,0 +1,379 @@
+from django.db import transaction
+from django.db.models import Q
+from django.utils.dateparse import parse_date
+from rest_framework import mixins, status, viewsets
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.permissions import BasePermission, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from teyssir.catalog.models import Barcode, Product, TaxRate
+from teyssir.core.money import display
+from teyssir.customers.models import Customer
+from teyssir.customers.services import balance, charge_account, post_payment, statement
+from teyssir.inventory.services import post_stocktake
+from teyssir.reports.services import sales_report
+from teyssir.purchasing.models import Supplier
+from teyssir.purchasing.services import receive_direct
+from teyssir.quotations.models import Quotation, Reservation
+from teyssir.quotations.services import (
+    convert_quotation, create_quotation, create_reservation, release_reservation,
+)
+from teyssir.sales.cash import current_session, open_session, x_report, z_report
+from teyssir.sales.models import Sale, SaleLine
+from teyssir.sales.services import finalize_sale, process_return
+
+from .serializers import (
+    CheckoutSerializer, CustomerSerializer, ProductSerializer, QuotationCreateSerializer,
+    ReceiveSerializer, ReservationCreateSerializer, ReturnSerializer, StockTakeSerializer,
+    SupplierSerializer, TaxRateSerializer,
+)
+
+
+def capability(codename):
+    """Build a DRF permission gating on an RBAC capability (spec §10)."""
+
+    class _Capability(BasePermission):
+        message = f"Requires the '{codename}' permission."
+
+        def has_permission(self, request, view):
+            user = request.user
+            return bool(
+                user
+                and user.is_authenticated
+                and (user.is_superuser or user.has_perm(f"accounts.{codename}"))
+            )
+
+    return _Capability
+
+
+CanViewReports = capability("view_financial_reports")
+
+
+class ProductViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    """Catalog read + search + barcode lookup for the POS (spec §12/§13)."""
+
+    serializer_class = ProductSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = Product.objects.filter(active=True).select_related("tax_rate")
+        barcode = self.request.query_params.get("barcode")
+        search = self.request.query_params.get("search")
+        if barcode:
+            ids = Barcode.objects.filter(value=barcode).values_list("product_id", flat=True)
+            return qs.filter(id__in=list(ids))
+        if search:
+            qs = qs.filter(
+                Q(name_fr__icontains=search) | Q(name_ar__icontains=search) | Q(sku__icontains=search)
+            )
+        return qs.order_by("name_fr")[:50]
+
+
+class TaxRateViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+    queryset = TaxRate.objects.all()
+    serializer_class = TaxRateSerializer
+    permission_classes = [IsAuthenticated]
+
+
+class CustomerViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
+                      mixins.CreateModelMixin, viewsets.GenericViewSet):
+    """Customers + their credit-account statement and on-account payments (spec §M9)."""
+
+    queryset = Customer.objects.filter(active=True).order_by("name")
+    serializer_class = CustomerSerializer
+    permission_classes = [IsAuthenticated]
+
+    def perform_create(self, serializer):
+        from django.conf import settings
+        from teyssir.sync.services import enqueue_customer
+        customer = serializer.save(origin_terminal=settings.TERMINAL)
+        enqueue_customer(customer)   # quick-created at a till -> sync up to the hub (§4.4)
+
+    @action(detail=True, methods=["get"])
+    def statement(self, request, pk=None):
+        return Response(statement(self.get_object()))
+
+    @action(detail=True, methods=["post"])
+    def payment(self, request, pk=None):
+        customer = self.get_object()
+        amount = request.data.get("amount")
+        if amount in (None, ""):
+            return Response({"detail": "amount required"}, status=status.HTTP_400_BAD_REQUEST)
+        post_payment(customer, amount, note=request.data.get("note", ""))
+        return Response({"balance": str(balance(customer))}, status=status.HTTP_201_CREATED)
+
+
+class CheckoutView(APIView):
+    """Build a sale from a cart and finalize it (offline-capable, spec §13)."""
+
+    permission_classes = [IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request):
+        ser = CheckoutSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        data = ser.validated_data
+
+        customer_id = data.get("customer")
+        sale = Sale.objects.create(
+            terminal=data["terminal"], status=Sale.DRAFT,
+            customer_id=str(customer_id) if customer_id else "",
+            cash_session=current_session(data["terminal"]),  # attribute to the open shift (§13.3)
+            created_by=request.user, origin_terminal=data["terminal"],
+        )
+        for ln in data["lines"]:
+            product = Product.objects.get(pk=ln["product"])
+            SaleLine.objects.create(
+                sale=sale, product=product,
+                qty=ln["qty"],
+                unit_price=ln.get("unit_price") or product.sale_price,
+                discount=ln.get("discount") or 0,
+                tax_rate=(product.tax_rate.rate_percent if product.tax_rate else 0),
+                origin_terminal=data["terminal"],
+            )
+        invoice = finalize_sale(sale, payment_method=data["payment_method"])
+        if data["payment_method"] == "ACCOUNT" and customer_id:
+            charge_account(Customer.objects.get(pk=customer_id), sale.total, "SALE", sale.id)
+        _print_receipt(sale)
+        return Response(
+            {
+                "invoice_number": invoice.fiscal_number,
+                "subtotal": str(sale.subtotal),
+                "tax_total": str(sale.tax_total),
+                "timbre": str(sale.timbre_amount_snapshot),
+                "total": str(sale.total),
+                "total_display": display(sale.total),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class ReturnView(APIView):
+    """POST /api/v1/pos/return — issue a credit note (AVOIR). Gated by void_refund (spec §10/§13)."""
+
+    permission_classes = [capability("void_refund")]
+
+    @transaction.atomic
+    def post(self, request):
+        ser = ReturnSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+        original = (
+            Sale.objects.filter(pk=d.get("original_sale")).first()
+            if d.get("original_sale") else None
+        )
+        ret = process_return(
+            original_sale=original,
+            items=[
+                {"product_id": i["product"], "qty": i["qty"],
+                 "unit_price": i["unit_price"], "tax_rate": i["tax_rate"]}
+                for i in d["items"]
+            ],
+            reason=d["reason"],
+            refund_method=d["refund_method"],
+            terminal=(original.terminal if original else "C1"),
+            created_by=request.user,
+        )
+        return Response(
+            {"number": ret.number, "total": str(ret.total), "refund_method": ret.refund_method},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class SalesReportView(APIView):
+    """GET /api/v1/reports/sales?from=YYYY-MM-DD&to=YYYY-MM-DD (spec §15)."""
+
+    permission_classes = [CanViewReports]
+
+    def get(self, request):
+        date_from = parse_date(request.query_params.get("from", ""))
+        date_to = parse_date(request.query_params.get("to", ""))
+        if not date_from or not date_to:
+            return Response({"detail": "from and to (YYYY-MM-DD) are required."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        return Response(sales_report(date_from, date_to))
+
+
+class TrialBalanceView(APIView):
+    """GET /api/v1/reports/trial-balance — post sales/receipts/payments to the GL, then return
+    the trial balance (debits must equal credits). Spec §15 (Phase 5)."""
+
+    permission_classes = [CanViewReports]
+
+    def get(self, request):
+        from teyssir.ledger.services import post_all_to_gl, trial_balance
+        post_all_to_gl()
+        return Response(trial_balance())
+
+
+class FinancialsView(APIView):
+    """GET /api/v1/reports/financials — income statement + balance sheet from the GL. Spec §15."""
+
+    permission_classes = [CanViewReports]
+
+    def get(self, request):
+        from teyssir.ledger.services import financial_statements, post_all_to_gl
+        post_all_to_gl()
+        return Response(financial_statements())
+
+
+class SupplierViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
+                      mixins.CreateModelMixin, viewsets.GenericViewSet):
+    queryset = Supplier.objects.filter(active=True).order_by("name")
+    serializer_class = SupplierSerializer
+    permission_classes = [IsAuthenticated]
+
+
+class ReceiveView(APIView):
+    """POST /api/v1/purchasing/receive — ad-hoc goods receipt; rolls weighted-avg cost (§14.2)."""
+
+    permission_classes = [capability("manage_purchasing")]
+
+    def post(self, request):
+        ser = ReceiveSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+        supplier = Supplier.objects.filter(pk=d["supplier"]).first()
+        if not supplier:
+            return Response({"detail": "supplier not found"}, status=status.HTTP_404_NOT_FOUND)
+        result = receive_direct(
+            supplier=supplier, terminal=d["terminal"],
+            items=[{"product_id": i["product"], "qty": i["qty"], "unit_cost": i["unit_cost"]}
+                   for i in d["items"]],
+        )
+        return Response(result, status=status.HTTP_201_CREATED)
+
+
+class StockTakeView(APIView):
+    permission_classes = [capability("adjust_stock")]
+
+    def post(self, request):
+        ser = StockTakeSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+        result = post_stocktake(
+            [{"product_id": i["product"], "counted_qty": i["counted_qty"]} for i in d["items"]],
+            terminal=d["terminal"],
+        )
+        return Response(result, status=status.HTTP_201_CREATED)
+
+
+class QuotationCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        ser = QuotationCreateSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+        q = create_quotation(
+            customer_id=d["customer"], terminal=d["terminal"], valid_until=d.get("valid_until"),
+            items=[{"product_id": i["product"], "qty": i["qty"],
+                    "unit_price": i["unit_price"], "tax_rate": i["tax_rate"]} for i in d["items"]],
+            created_by=request.user,
+        )
+        return Response(
+            {"id": str(q.id), "subtotal": str(q.subtotal),
+             "tax_total": str(q.tax_total), "total": str(q.total)},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class QuotationConvertView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        q = Quotation.objects.filter(pk=pk).first()
+        if not q:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            invoice = convert_quotation(
+                q, payment_method=request.data.get("payment_method", "CASH"),
+                created_by=request.user,
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"invoice_number": invoice.fiscal_number}, status=status.HTTP_201_CREATED)
+
+
+class ReservationCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        ser = ReservationCreateSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+        r = create_reservation(
+            product_id=d["product"], qty=d["qty"], customer_id=d["customer"],
+            terminal=d["terminal"], expires_at=d.get("expires_at"), created_by=request.user,
+        )
+        return Response({"id": str(r.id), "status": r.status}, status=status.HTTP_201_CREATED)
+
+
+class ReservationReleaseView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        r = Reservation.objects.filter(pk=pk).first()
+        if not r:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        release_reservation(r)
+        return Response({"id": str(r.id), "status": r.status})
+
+
+class CashOpenView(APIView):
+    permission_classes = [capability("open_close_cash")]
+
+    def post(self, request):
+        session = open_session(
+            user=request.user, terminal=request.data.get("terminal", "C1"),
+            opening_float=request.data.get("opening_float", 0),
+        )
+        return Response(
+            {"session": str(session.id), "terminal": session.terminal,
+             "opening_float": str(session.opening_float)},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class CashXView(APIView):
+    permission_classes = [capability("open_close_cash")]
+
+    def get(self, request):
+        session = current_session(request.query_params.get("terminal", "C1"))
+        if not session:
+            return Response({"detail": "no open session"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(x_report(session))
+
+
+class CashZView(APIView):
+    permission_classes = [capability("open_close_cash")]
+
+    def post(self, request):
+        session = current_session(request.data.get("terminal", "C1"))
+        if not session:
+            return Response({"detail": "no open session"}, status=status.HTTP_404_NOT_FOUND)
+        counted = request.data.get("counted_cash")
+        if counted in (None, ""):
+            return Response({"detail": "counted_cash required"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(z_report(session, counted))
+
+
+def _print_receipt(sale):
+    """Best-effort: print the receipt on the local node's printer; never block a sale."""
+    try:
+        from teyssir.printing.devices import send
+        from teyssir.printing.receipt import render_sale_receipt
+        send(render_sale_receipt(sale))
+    except Exception:
+        pass
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def me(request):
+    return Response({
+        "username": request.user.get_username(),
+        "language": getattr(request.user, "preferred_language", "fr"),
+        "terminal": request.headers.get("X-Terminal", ""),
+    })

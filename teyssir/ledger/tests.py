@@ -1,0 +1,70 @@
+from decimal import Decimal
+
+from django.db.models import Sum
+from django.test import TestCase
+
+from teyssir.billing.models import FiscalStampConfig
+from teyssir.catalog.models import Product, TaxRate
+from teyssir.ledger.models import JournalEntry
+from teyssir.ledger.services import (
+    post_sale_to_gl, post_sales_to_gl, seed_chart, trial_balance,
+)
+from teyssir.purchasing.services import receive_goods
+from teyssir.sales.models import Sale, SaleLine
+from teyssir.sales.services import finalize_sale
+
+
+class GeneralLedgerTests(TestCase):
+    def setUp(self):
+        seed_chart()
+        FiscalStampConfig.objects.create(doc_type="FACTURE", amount=Decimal("1.000"))
+        tva7 = TaxRate.objects.create(name="TVA 7%", rate_percent=Decimal("7.00"))
+        self.product = Product.objects.create(
+            sku="PEN", name_fr="Stylo", tax_rate=tva7, sale_price=Decimal("0.850"),
+        )
+        receive_goods(product_id=self.product.id, qty=Decimal("100"), unit_cost=Decimal("0.400"))
+        sale = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
+        SaleLine.objects.create(sale=sale, product=self.product, qty=Decimal("3"),
+                                unit_price=Decimal("0.850"), tax_rate=Decimal("7.00"))
+        finalize_sale(sale, payment_method="CASH")
+        self.sale = sale
+
+    def test_sale_posts_balanced_double_entry(self):
+        entry = post_sale_to_gl(self.sale)
+        agg = entry.lines.aggregate(d=Sum("debit"), c=Sum("credit"))
+        self.assertEqual(agg["d"], agg["c"])                          # double-entry balances
+
+        by = {line.account.code: (line.debit, line.credit) for line in entry.lines.all()}
+        self.assertEqual(by["531"][0], Decimal("3.729"))             # Dr Caisse = total tendered
+        self.assertEqual(by["700"][1], Decimal("2.550"))             # Cr Ventes (ex-VAT)
+        self.assertEqual(by["4367"][1], Decimal("0.179"))            # Cr TVA collectée
+        self.assertEqual(by["4471"][1], Decimal("1.000"))            # Cr Droit de timbre
+        self.assertEqual(by["607"][0], Decimal("1.200"))            # Dr COGS = 3 * 0.400
+        self.assertEqual(by["370"][1], Decimal("1.200"))            # Cr Stocks
+
+    def test_trial_balance_balances_and_posting_is_idempotent(self):
+        self.assertEqual(post_sales_to_gl(), 1)
+        tb = trial_balance()
+        self.assertTrue(tb["balanced"])
+        self.assertEqual(tb["total_debit"], tb["total_credit"])
+
+        self.assertEqual(post_sales_to_gl(), 0)                       # idempotent re-run
+        self.assertEqual(JournalEntry.objects.filter(ref_type="SALE").count(), 1)
+
+    def test_full_postings_and_balance_sheet(self):
+        from teyssir.customers.models import Customer
+        from teyssir.customers.services import post_payment
+        from teyssir.ledger.services import financial_statements, post_all_to_gl
+        from teyssir.purchasing.models import Supplier
+        from teyssir.purchasing.services import receive_direct
+
+        receive_direct(supplier=Supplier.objects.create(name="Sup"),
+                       items=[{"product_id": self.product.id, "qty": "50", "unit_cost": "0.400"}])
+        post_payment(Customer.objects.create(name="Cust"), Decimal("5.000"))
+
+        counts = post_all_to_gl()
+        self.assertEqual(counts, {"sales": 1, "receipts": 1, "payments": 1})
+
+        fs = financial_statements()
+        self.assertTrue(fs["balance_sheet"]["balanced"])              # A = L + Equity
+        self.assertEqual(fs["income_statement"]["net_income"], "1.350")  # 2.550 revenue - 1.200 COGS
