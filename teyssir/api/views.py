@@ -218,6 +218,22 @@ class FinancialsView(APIView):
         return Response(financial_statements())
 
 
+class VatDeclarationView(APIView):
+    """GET /api/v1/reports/vat?from=YYYY-MM-DD&to=YYYY-MM-DD — TVA collected − deductible. Spec §15."""
+
+    permission_classes = [CanViewReports]
+
+    def get(self, request):
+        from teyssir.ledger.services import post_all_to_gl, vat_declaration
+        date_from = parse_date(request.query_params.get("from", ""))
+        date_to = parse_date(request.query_params.get("to", ""))
+        if not date_from or not date_to:
+            return Response({"detail": "from and to (YYYY-MM-DD) are required."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        post_all_to_gl()
+        return Response(vat_declaration(date_from, date_to))
+
+
 class SupplierViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
                       mixins.CreateModelMixin, viewsets.GenericViewSet):
     queryset = Supplier.objects.filter(active=True).order_by("name")

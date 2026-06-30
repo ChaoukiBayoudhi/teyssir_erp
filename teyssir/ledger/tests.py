@@ -63,8 +63,25 @@ class GeneralLedgerTests(TestCase):
         post_payment(Customer.objects.create(name="Cust"), Decimal("5.000"))
 
         counts = post_all_to_gl()
-        self.assertEqual(counts, {"sales": 1, "receipts": 1, "payments": 1})
+        self.assertEqual(counts, {"sales": 1, "receipts": 1, "purchase_invoices": 0, "payments": 1})
 
         fs = financial_statements()
         self.assertTrue(fs["balance_sheet"]["balanced"])              # A = L + Equity
         self.assertEqual(fs["income_statement"]["net_income"], "1.350")  # 2.550 revenue - 1.200 COGS
+
+    def test_vat_declaration_collected_minus_deductible(self):
+        import datetime
+
+        from teyssir.ledger.services import post_all_to_gl, vat_declaration
+        from teyssir.purchasing.models import Supplier
+        from teyssir.purchasing.services import record_purchase_invoice
+
+        record_purchase_invoice(supplier=Supplier.objects.create(name="Sup"),
+                                supplier_number="F-2026-1", subtotal="100.000", tva_total="19.000")
+        post_all_to_gl()  # sale collects 0.179 TVA ; purchase invoice books 19.000 deductible
+
+        today = datetime.date.today()
+        vd = vat_declaration(today, today)
+        self.assertEqual(vd["tva_collected"], "0.179")
+        self.assertEqual(vd["tva_deductible"], "19.000")
+        self.assertEqual(vd["net_payable"], "-18.821")   # VAT credit carried forward

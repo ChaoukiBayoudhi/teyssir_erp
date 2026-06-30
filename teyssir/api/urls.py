@@ -6,7 +6,7 @@ from .views import (
     CashOpenView, CashXView, CashZView, CheckoutView, CustomerViewSet, ProductViewSet,
     QuotationConvertView, QuotationCreateView, ReceiveView, ReservationCreateView,
     FinancialsView, ReservationReleaseView, ReturnView, SalesReportView, StockTakeView,
-    SupplierViewSet, TaxRateViewSet, TrialBalanceView, me,
+    SupplierViewSet, TaxRateViewSet, TrialBalanceView, VatDeclarationView, me,
 )
 
 router = DefaultRouter()
@@ -32,5 +32,6 @@ urlpatterns = [
     path("reports/sales", SalesReportView.as_view(), name="reports-sales"),
     path("reports/trial-balance", TrialBalanceView.as_view(), name="reports-trial-balance"),
     path("reports/financials", FinancialsView.as_view(), name="reports-financials"),
+    path("reports/vat", VatDeclarationView.as_view(), name="reports-vat"),
     path("", include(router.urls)),
 ]

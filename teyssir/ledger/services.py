@@ -123,27 +123,64 @@ def post_account_payment_to_gl(entry):
                         ref_type="ACCT_PAYMENT", ref_id=entry.id)
 
 
+def post_purchase_invoice_to_gl(inv):
+    """Record deductible TVA on a supplier invoice: Dr TVA déductible / Cr Fournisseurs.
+    The goods value is booked by the goods receipt (Dr Stocks / Cr Fournisseurs), so we post the
+    VAT portion only — no double count. Completes the TVA picture for the monthly declaration."""
+    if not inv.tva_total:
+        return None
+    return post_journal(
+        date=(inv.invoice_date or inv.created_at.date()),
+        memo=f"TVA déductible {inv.supplier_number}",
+        lines=[("4366", inv.tva_total, 0), ("401", 0, inv.tva_total)],
+        ref_type="PURCHASE_INVOICE", ref_id=inv.id,
+    )
+
+
+def _post_batch(ref_type, queryset, poster):
+    """Post each not-yet-posted object via `poster`; count only entries actually created."""
+    already = set(JournalEntry.objects.filter(ref_type=ref_type).values_list("ref_id", flat=True))
+    posted = 0
+    for obj in queryset:
+        if str(obj.id) not in already and poster(obj):
+            posted += 1
+    return posted
+
+
 def post_all_to_gl():
-    """Hub batch: post sales, goods receipts and on-account payments (all idempotent)."""
+    """Hub batch: post sales, goods receipts, purchase-invoice VAT and on-account payments."""
     from teyssir.customers.models import AccountEntry
-    from teyssir.purchasing.models import GoodsReceipt
+    from teyssir.purchasing.models import GoodsReceipt, PurchaseInvoice
 
-    sales = post_sales_to_gl()
+    return {
+        "sales": post_sales_to_gl(),
+        "receipts": _post_batch("RECEIPT", GoodsReceipt.objects.all(), post_goods_receipt_to_gl),
+        "purchase_invoices": _post_batch(
+            "PURCHASE_INVOICE", PurchaseInvoice.objects.all(), post_purchase_invoice_to_gl),
+        "payments": _post_batch(
+            "ACCT_PAYMENT", AccountEntry.objects.filter(entry_type=AccountEntry.PAYMENT),
+            post_account_payment_to_gl),
+    }
 
-    rcv = 0
-    posted_rcv = set(JournalEntry.objects.filter(ref_type="RECEIPT").values_list("ref_id", flat=True))
-    for gr in GoodsReceipt.objects.all():
-        if str(gr.id) not in posted_rcv and post_goods_receipt_to_gl(gr):
-            rcv += 1
 
-    pay = 0
-    posted_pay = set(JournalEntry.objects.filter(ref_type="ACCT_PAYMENT").values_list("ref_id", flat=True))
-    for e in AccountEntry.objects.filter(entry_type=AccountEntry.PAYMENT):
-        if str(e.id) not in posted_pay:
-            post_account_payment_to_gl(e)
-            pay += 1
+def vat_declaration(date_from, date_to):
+    """Monthly TVA declaration from the GL: collected (4367) − deductible (4366) = net payable.
+    Negative net = VAT credit carried forward. Spec §15."""
+    def balance(code, normal):
+        agg = JournalLine.objects.filter(
+            account__code=code, entry__date__gte=date_from, entry__date__lte=date_to,
+        ).aggregate(d=Sum("debit"), c=Sum("credit"))
+        d, c = to_money(agg["d"] or 0), to_money(agg["c"] or 0)
+        return to_money(c - d) if normal == "C" else to_money(d - c)
 
-    return {"sales": sales, "receipts": rcv, "payments": pay}
+    collected = balance("4367", "C")
+    deductible = balance("4366", "D")
+    return {
+        "from": str(date_from), "to": str(date_to),
+        "tva_collected": str(collected),
+        "tva_deductible": str(deductible),
+        "net_payable": str(to_money(collected - deductible)),
+    }
 
 
 def financial_statements():
