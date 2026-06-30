@@ -11,6 +11,7 @@ import StockTake from "./pages/StockTake.jsx";
 import CashSession from "./pages/CashSession.jsx";
 import Receiving from "./pages/Receiving.jsx";
 import Customers from "./pages/Customers.jsx";
+import Financials from "./pages/Financials.jsx";
 
 export default function App() {
   const { i18n } = useTranslation();
@@ -38,7 +39,10 @@ export default function App() {
         {!authed ? (
           <Login onLogin={() => setAuthed(true)} />
         ) : view === "dashboard" ? (
-          <Dashboard onBack={() => setView("pos")} onLogout={logout} />
+          <Dashboard onBack={() => setView("pos")} onLogout={logout}
+                     onFinancials={() => setView("financials")} />
+        ) : view === "financials" ? (
+          <Financials onBack={() => setView("dashboard")} onLogout={logout} />
         ) : view === "stocktake" ? (
           <StockTake onBack={() => setView("pos")} onLogout={logout} />
         ) : view === "cash" ? (
