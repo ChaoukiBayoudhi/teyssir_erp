@@ -15,8 +15,8 @@ from teyssir.customers.models import Customer
 from teyssir.customers.services import balance, charge_account, post_payment, statement
 from teyssir.inventory.services import post_stocktake
 from teyssir.reports.services import sales_report
-from teyssir.purchasing.models import Supplier
-from teyssir.purchasing.services import receive_direct
+from teyssir.purchasing.models import PurchaseOrder, Supplier
+from teyssir.purchasing.services import create_po, receive_direct, receive_po, record_purchase_invoice
 from teyssir.quotations.models import Quotation, Reservation
 from teyssir.quotations.services import (
     convert_quotation, create_quotation, create_reservation, release_reservation,
@@ -26,7 +26,8 @@ from teyssir.sales.models import Sale, SaleLine
 from teyssir.sales.services import finalize_sale, process_return
 
 from .serializers import (
-    CheckoutSerializer, CustomerSerializer, ProductSerializer, QuotationCreateSerializer,
+    CheckoutSerializer, CustomerSerializer, POCreateSerializer, ProductSerializer,
+    PurchaseInvoiceCreateSerializer, PurchaseOrderSerializer, QuotationCreateSerializer,
     ReceiveSerializer, ReservationCreateSerializer, ReturnSerializer, StockTakeSerializer,
     SupplierSerializer, TaxRateSerializer,
 )
@@ -241,6 +242,57 @@ class SupplierViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
     queryset = Supplier.objects.filter(active=True).order_by("name")
     serializer_class = SupplierSerializer
     permission_classes = [IsAuthenticated]
+
+
+class PurchaseOrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
+                          viewsets.GenericViewSet):
+    """Purchase orders: list/retrieve/create + receive against the PO (spec §"Purchase mgmt")."""
+
+    queryset = PurchaseOrder.objects.all().order_by("-created_at")
+    serializer_class = PurchaseOrderSerializer
+    permission_classes = [capability("manage_purchasing")]
+
+    def create(self, request):
+        ser = POCreateSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+        supplier = Supplier.objects.filter(pk=d["supplier"]).first()
+        if not supplier:
+            return Response({"detail": "supplier not found"}, status=status.HTTP_404_NOT_FOUND)
+        po = create_po(
+            supplier=supplier, created_by=request.user,
+            items=[{"product_id": i["product"], "qty": i["qty"], "unit_cost": i["unit_cost"]}
+                   for i in d["items"]],
+        )
+        return Response(PurchaseOrderSerializer(po).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"])
+    def receive(self, request, pk=None):
+        po = self.get_object()
+        receive_po(po=po)
+        po.refresh_from_db()
+        return Response(PurchaseOrderSerializer(po).data)
+
+
+class PurchaseInvoiceView(APIView):
+    """POST /api/v1/purchasing/invoices — record a supplier invoice (books TVA déductible)."""
+
+    permission_classes = [capability("manage_purchasing")]
+
+    def post(self, request):
+        ser = PurchaseInvoiceCreateSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+        supplier = Supplier.objects.filter(pk=d["supplier"]).first()
+        if not supplier:
+            return Response({"detail": "supplier not found"}, status=status.HTTP_404_NOT_FOUND)
+        po = PurchaseOrder.objects.filter(pk=d.get("po")).first() if d.get("po") else None
+        inv = record_purchase_invoice(
+            supplier=supplier, supplier_number=d["supplier_number"],
+            subtotal=d["subtotal"], tva_total=d["tva_total"], po=po,
+        )
+        return Response({"id": str(inv.id), "total": str(inv.total), "status": inv.status},
+                        status=status.HTTP_201_CREATED)
 
 
 class ReceiveView(APIView):

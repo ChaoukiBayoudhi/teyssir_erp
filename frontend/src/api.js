@@ -80,6 +80,12 @@ export const createSupplier = (name) =>
 export const receiveGoods = (payload) =>
   request("/purchasing/receive", { method: "POST", body: payload });
 
+export const listPOs = () => request("/purchasing/orders/");
+export const createPO = (payload) => request("/purchasing/orders/", { method: "POST", body: payload });
+export const receivePO = (id) => request(`/purchasing/orders/${id}/receive/`, { method: "POST", body: {} });
+export const createPurchaseInvoice = (payload) =>
+  request("/purchasing/invoices", { method: "POST", body: payload });
+
 // Book scan = multipart (images + optional ISBN). Browser sets the multipart boundary.
 export async function scanBook(files, isbn) {
   const fd = new FormData();

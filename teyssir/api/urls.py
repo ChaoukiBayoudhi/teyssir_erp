@@ -6,8 +6,9 @@ from .views import (
     CashOpenView, CashXView, CashZView, CheckoutView, CustomerViewSet, ProductViewSet,
     QuotationConvertView, QuotationCreateView, ReceiveView, ReservationCreateView,
     BookCreateView, BookScanView, FinancialsView, ProductImageView, ProductImagesView,
-    ReservationReleaseView, ReturnView, SalesReportView, StockTakeView,
-    SupplierViewSet, TaxRateViewSet, TrialBalanceView, VatDeclarationView, me,
+    PurchaseInvoiceView, PurchaseOrderViewSet, ReservationReleaseView, ReturnView,
+    SalesReportView, StockTakeView, SupplierViewSet, TaxRateViewSet, TrialBalanceView,
+    VatDeclarationView, me,
 )
 
 router = DefaultRouter()
@@ -15,6 +16,7 @@ router.register("catalog/products", ProductViewSet, basename="product")
 router.register("catalog/tax-rates", TaxRateViewSet, basename="taxrate")
 router.register("customers", CustomerViewSet, basename="customer")
 router.register("suppliers", SupplierViewSet, basename="supplier")
+router.register("purchasing/orders", PurchaseOrderViewSet, basename="po")
 
 urlpatterns = [
     path("auth/token", obtain_auth_token, name="auth-token"),
@@ -30,6 +32,7 @@ urlpatterns = [
     path("reservations/<uuid:pk>/release", ReservationReleaseView.as_view(), name="reservation-release"),
     path("inventory/stocktake", StockTakeView.as_view(), name="inventory-stocktake"),
     path("purchasing/receive", ReceiveView.as_view(), name="purchasing-receive"),
+    path("purchasing/invoices", PurchaseInvoiceView.as_view(), name="purchase-invoice"),
     path("catalog/books/scan", BookScanView.as_view(), name="book-scan"),
     path("catalog/books", BookCreateView.as_view(), name="book-create"),
     path("catalog/products/<uuid:pk>/images", ProductImagesView.as_view(), name="product-images"),

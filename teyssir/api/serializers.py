@@ -2,7 +2,7 @@ from rest_framework import serializers
 
 from teyssir.catalog.models import Product, TaxRate
 from teyssir.customers.models import Customer
-from teyssir.purchasing.models import Supplier
+from teyssir.purchasing.models import PurchaseOrder, PurchaseOrderLine, Supplier
 
 
 class CustomerSerializer(serializers.ModelSerializer):
@@ -33,6 +33,36 @@ class ReceiveSerializer(serializers.Serializer):
     supplier = serializers.UUIDField()
     terminal = serializers.CharField(required=False, default="C1")
     items = ReceiveLineSerializer(many=True)
+
+
+class PurchaseOrderLineSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source="product.name_fr", read_only=True)
+
+    class Meta:
+        model = PurchaseOrderLine
+        fields = ["id", "product", "product_name", "qty_ordered", "unit_cost", "qty_received"]
+
+
+class PurchaseOrderSerializer(serializers.ModelSerializer):
+    lines = PurchaseOrderLineSerializer(many=True, read_only=True)
+    supplier_name = serializers.CharField(source="supplier.name", read_only=True)
+
+    class Meta:
+        model = PurchaseOrder
+        fields = ["id", "supplier", "supplier_name", "status", "created_at", "lines"]
+
+
+class POCreateSerializer(serializers.Serializer):
+    supplier = serializers.UUIDField()
+    items = ReceiveLineSerializer(many=True)        # {product, qty, unit_cost}
+
+
+class PurchaseInvoiceCreateSerializer(serializers.Serializer):
+    supplier = serializers.UUIDField()
+    supplier_number = serializers.CharField()
+    subtotal = serializers.DecimalField(max_digits=14, decimal_places=3)
+    tva_total = serializers.DecimalField(max_digits=14, decimal_places=3)
+    po = serializers.UUIDField(required=False, allow_null=True)
 
 
 class TaxRateSerializer(serializers.ModelSerializer):

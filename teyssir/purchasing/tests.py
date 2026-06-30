@@ -1,6 +1,8 @@
 from decimal import Decimal
 
+from django.contrib.auth import get_user_model
 from django.test import TestCase
+from rest_framework.test import APIClient
 
 from teyssir.catalog.models import Product
 from teyssir.purchasing.models import PurchaseOrder, Supplier
@@ -53,6 +55,33 @@ class PurchaseWorkflowTests(TestCase):
         )
         self.assertEqual(inv.total, Decimal("4.280"))
         self.assertEqual(inv.status, "UNPAID")
+
+    def test_po_workflow_via_api(self):
+        api = APIClient()
+        api.force_authenticate(get_user_model().objects.create_superuser("boss", password="pw-strong-123"))
+        product = Product.objects.create(sku="CAH-API", name_fr="Cahier", qty_on_hand=Decimal("0"))
+
+        r = api.post("/api/v1/purchasing/orders/", {
+            "supplier": str(self.supplier.id),
+            "items": [{"product": str(product.id), "qty": "10", "unit_cost": "0.400"}],
+        }, format="json")
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()["status"], PurchaseOrder.ORDERED)
+        po_id = r.json()["id"]
+
+        r2 = api.post(f"/api/v1/purchasing/orders/{po_id}/receive/", {}, format="json")
+        self.assertEqual(r2.status_code, 200)
+        self.assertEqual(r2.json()["status"], PurchaseOrder.RECEIVED)
+        product.refresh_from_db()
+        self.assertEqual(product.qty_on_hand, Decimal("10.000"))
+        self.assertEqual(product.cost_avg, Decimal("0.400"))
+
+        r3 = api.post("/api/v1/purchasing/invoices", {
+            "supplier": str(self.supplier.id), "supplier_number": "F-API-1",
+            "subtotal": "4.000", "tva_total": "0.760", "po": po_id,
+        }, format="json")
+        self.assertEqual(r3.status_code, 201)
+        self.assertEqual(r3.json()["total"], "4.760")
 
     def test_direct_receive_rolls_cost(self):
         self.product.cost_avg = Decimal("0.400")
