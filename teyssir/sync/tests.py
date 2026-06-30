@@ -156,3 +156,28 @@ class SyncTests(TestCase):
         apply_master_changes(collected["records"], config=collected["config"])
         replicated = Book.objects.get(pk=book.pk)
         self.assertEqual(replicated.contributors.first().contributor.name, "Saint-Exupéry")
+
+    def test_fetch_missing_media_downloads_cover_files(self):
+        import tempfile
+        from io import BytesIO
+
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from django.test import override_settings
+        from PIL import Image
+
+        from teyssir.catalog.models import ProductImage
+        from teyssir.sync.client import fetch_missing_media
+
+        buf = BytesIO()
+        Image.new("RGB", (8, 8), "white").save(buf, "PNG")
+        with override_settings(MEDIA_ROOT=tempfile.mkdtemp()):
+            img = ProductImage.objects.create(
+                product=self.product,
+                image=SimpleUploadedFile("c.png", buf.getvalue(), content_type="image/png"))
+            name = img.image.name
+            img.image.storage.delete(name)                    # till has the row but not the file
+            self.assertFalse(img.image.storage.exists(name))
+
+            n = fetch_missing_media("http://hub", "k", fetch=lambda nm: b"PNGDATA")
+            self.assertEqual(n, 1)
+            self.assertTrue(img.image.storage.exists(name))   # file pulled from the hub

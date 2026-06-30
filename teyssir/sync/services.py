@@ -131,7 +131,7 @@ def collect_master_changes(since=None):
     upsert by natural key on the till — no per-row change-tracking needed."""
     from teyssir.billing.models import FiscalStampConfig
     from teyssir.catalog.models import (
-        Barcode, Book, BookContributor, Category, Contributor, Product, TaxRate,
+        Barcode, Book, BookContributor, Category, Contributor, Product, ProductImage, TaxRate,
     )
 
     from django.contrib.auth.models import Group
@@ -154,6 +154,13 @@ def collect_master_changes(since=None):
         if since:
             qs = qs.filter(updated_at__gt=since)
         objs += list(qs.order_by("created_at"))
+
+    # Product image *rows* sync here; the image *files* are fetched by the till after applying
+    # (sync.client.fetch_missing_media). Only product-linked images (skip draft/orphan uploads).
+    img_qs = ProductImage.objects.filter(product__isnull=False)
+    if since:
+        img_qs = img_qs.filter(updated_at__gt=since)
+    objs += list(img_qs.order_by("created_at"))
 
     # Identity (hub-authored, small N -> shipped whole): groups before users (User.groups m2m),
     # so tills can authenticate + enforce RBAC offline and created_by/cash_session.user FKs resolve

@@ -29,6 +29,31 @@ def _get(url, key):
         return json.load(resp)
 
 
+def fetch_missing_media(hub_url, key, fetch=None):
+    """Download any product-image files whose row synced but whose file is absent locally
+    (media replication, docs/BOOK-OCR §5). `fetch(name) -> bytes` is injectable for tests."""
+    from django.core.files.base import ContentFile
+
+    from teyssir.catalog.models import ProductImage
+
+    def _default(name):
+        req = urllib.request.Request(f"{hub_url}/media/{name}", headers={"X-Sync-Key": key})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.read()
+
+    fetch = fetch or _default
+    fetched = 0
+    for img in ProductImage.objects.filter(product__isnull=False).exclude(image=""):
+        if img.image and not img.image.storage.exists(img.image.name):
+            try:
+                data = fetch(img.image.name)
+            except Exception:
+                continue
+            img.image.storage.save(img.image.name, ContentFile(data))
+            fetched += 1
+    return fetched
+
+
 def push_outbox(hub_url, key):
     pending = list(SyncOutbox.objects.filter(pushed=False).order_by("seq"))
     if not pending:
@@ -51,9 +76,10 @@ def pull_master(hub_url, key):
         url += f"?since={quote(state.last_pull_cursor)}"
     resp = _get(url, key)
     applied = apply_master_changes(resp["records"], config=resp.get("config"))
+    media = fetch_missing_media(hub_url, key)   # download any new cover image files
     state.last_pull_cursor = resp["cursor"]
     state.save(update_fields=["last_pull_cursor"])
-    return {"applied": applied, "cursor": resp["cursor"]}
+    return {"applied": applied, "media": media, "cursor": resp["cursor"]}
 
 
 def sync_now(hub_url, key):
