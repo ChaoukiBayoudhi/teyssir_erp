@@ -1,0 +1,57 @@
+# Teyssir ERP — Implementation Progress & Plan
+
+Living status of the build. Backend tests: **57 passing**. PWA: **9 screens**. Git: standalone repo,
+one commit per milestone.
+
+## Done (this and prior phases)
+| Area | Status |
+|---|---|
+| POS (cart, barcode, checkout, offline queue, ESC/POS receipt) | ✅ |
+| Inventory (append-only ledger, weighted-avg cost, stock-take) | ✅ |
+| Purchasing (supplier, receive goods, PO/GR/invoice **services**) | ✅ (UI: receive only) |
+| Returns / credit notes (AVOIR series) | ✅ |
+| Customers + credit accounts (ledger, statement, payments) + **UI** | ✅ |
+| Cash sessions (open → X → Z variance) + **UI** | ✅ |
+| Quotations / reservations + **convert-to-sale UI** | ✅ |
+| Federated sync (sales, returns, quotes, reservations, stock-take, customers, **cash, identity**) | ✅ |
+| Identity: UUID-pk users replicated hub→till (offline login) | ✅ |
+| Double-entry GL: chart of accounts, journals (sales/receipts/payments/**VAT**), trial balance, P&L, balance sheet, **monthly VAT declaration** | ✅ |
+| **Camera book registration + OCR** (ISBN-first, pluggable providers, images) backend + **camera UI** | ✅ |
+| Reporting/Dashboards + **Financials UI** (P&L, balance sheet, VAT, trial balance) | ✅ |
+| PWA: Login · POS · Dashboard · Financials · StockTake · CashSession · Receiving · Customers · BookCreate · Quotation; FR/AR + RTL; nav consolidated into a Menu | ✅ |
+
+## Remaining
+### A) Formal Purchase-Order workflow UI
+Backend services exist (`create_po`, `receive_po`, `record_purchase_invoice`). Needs:
+- API: `POST/GET /purchasing/orders`, `POST /purchasing/orders/<id>/receive`, `POST /purchasing/invoices`.
+- PWA page: create a PO (supplier + lines), receive against it (partial allowed), record the supplier
+  invoice (books TVA déductible — already wired in the GL). Mark invoices paid.
+
+### B) Phase 6 — Multi-store cloud hub (design plan)
+Today: one local hub per store (`teyssir-hub.local`) + offline tills syncing to it. Phase 6 federates
+**multiple stores** under a cloud hub for consolidated reporting/inventory.
+
+**Design (reuses the existing sync primitives):**
+- **Store hub stays the local source of truth**; add a **cloud hub** (managed Postgres) as a *second*
+  sync peer. The local hub becomes a *node* relative to the cloud hub — the same outbox/push +
+  master-pull mechanism (§4.4) already generalizes (it's peer-to-hub, recursively).
+- **Store identity:** add a `store` dimension (e.g. terminal codes already namespace per till; add a
+  `store_code` so the cloud hub disaggregates by store). Numbering series become
+  `{store}{terminal}-YYYYMM-XXXX` (the `_TYPE_CODE` seam already exists in `allocate_document_number`).
+- **Master data direction:** catalog/prices can be **cloud-authored** (chain-wide) and pulled to store
+  hubs, or store-local with cloud overrides — config per chain. The single-writer invariant holds at
+  whatever tier owns the data.
+- **Images:** flip `STORAGES` to **MinIO/S3** at the cloud tier (zero schema change — `ImageField`
+  stores a key); store hubs keep local copies for offline. Media replication = an object-store sync.
+- **Consolidation:** the cloud hub runs `post_all_to_gl` per store and a cross-store roll-up
+  (group GL/sales by `store_code`); the Financials/Dashboard APIs gain an optional `store` filter.
+- **Transport/security:** TLS to the cloud, per-store `X-Sync-Key` (rotate to mTLS/JWT), conflict
+  rules unchanged (per-terminal series, append-only stock ledger, hub-authoritative master data).
+- **Rollout:** a store works fully standalone (today); enabling the cloud peer is additive and
+  backward-compatible. No big-bang migration.
+
+## Architectural notes added this phase
+- `docs/BOOK-OCR-ARCHITECTURE.md` — ISBN-first, OCR-fallback, pluggable metadata/OCR providers,
+  image-storage trade-offs (chose `ImageField` over pluggable storage).
+- GL: VAT déductible posts the VAT portion only (goods booked by the receipt) to avoid double-count.
+- UX: consolidated the POS toolbar into a single Menu (was 6+ buttons).
