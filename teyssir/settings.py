@@ -37,7 +37,16 @@ CLOUD_SYNC_KEY = os.environ.get("TEYSSIR_CLOUD_SYNC_KEY", "")
 # --- Core --------------------------------------------------------------------
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-insecure-change-me")
 DEBUG = os.environ.get("DEBUG", "1") == "1"
-ALLOWED_HOSTS = ["localhost", "127.0.0.1", "teyssir-hub.local"]
+ALLOWED_HOSTS = [
+    h.strip() for h in os.environ.get(
+        "TEYSSIR_ALLOWED_HOSTS", "localhost,127.0.0.1,teyssir-hub.local"
+    ).split(",") if h.strip()
+]
+# Trust the hub origin for admin POSTs when served over the LAN with DEBUG=0 (the PWA uses token
+# auth, not CSRF). Provide scheme://host[:port], comma-separated, e.g. http://teyssir-hub.local:8000
+CSRF_TRUSTED_ORIGINS = [
+    o.strip() for o in os.environ.get("TEYSSIR_CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()
+]
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -66,6 +75,8 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # WhiteNoise serves the built PWA + Django static on one port (Windows deploy, no Nginx/Caddy).
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.locale.LocaleMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -143,7 +154,16 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"          # collectstatic target (Django admin assets)
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# Serve the built React PWA (frontend/dist) at the site root via WhiteNoise, so ONE process serves
+# both the app and the /api on a single port (Windows deploy). API/admin/media URLs fall through to
+# Django when no static file matches. Only enabled once the frontend has been built.
+_SPA_DIST = BASE_DIR / "frontend" / "dist"
+if _SPA_DIST.is_dir():
+    WHITENOISE_ROOT = _SPA_DIST
+    WHITENOISE_INDEX_FILE = True
 
 # Media (product/book images). ImageField stores a path/key; the storage backend is pluggable
 # (local FS now; S3/MinIO at a cloud tier — no schema change). Spec docs/BOOK-OCR.

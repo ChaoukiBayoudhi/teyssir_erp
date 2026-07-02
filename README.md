@@ -1,10 +1,48 @@
-# Teyssir ERP
+<p align="center">
+  <img src="assets/branding/logo.png" alt="Teyssir" width="420">
+</p>
 
-Retail management platform for **Teyssir Library** (Tunisia) — POS, inventory, purchasing,
-accounting. Full architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+<h1 align="center">Teyssir ERP</h1>
 
-This repository currently contains the **Phase-0 skeleton** implementing the *correctness-critical*
-core of the spec:
+<p align="center">
+Offline-first retail platform for <b>Teyssir Library</b> (Tunisia) — POS, inventory, purchasing,
+double-entry accounting &amp; VAT, camera book registration (OCR), federated multi-store sync.
+<br>Django + DRF backend · React PWA (FR/AR) · 100&nbsp;% free/open-source tools.
+</p>
+
+<p align="center">
+  🪟 <b><a href="docs/INSTALL-WINDOWS.md">Install on Windows (step-by-step)</a></b>
+  · 🏗️ <a href="docs/ARCHITECTURE.md">Architecture</a>
+  · 📊 <a href="docs/IMPLEMENTATION-PROGRESS.md">Progress</a>
+  · 📖 <a href="docs/BOOK-OCR-ARCHITECTURE.md">Book&nbsp;OCR</a>
+</p>
+
+---
+
+## Capabilities
+
+POS (offline queue, barcode, ESC/POS receipts) · inventory (append-only ledger, weighted-avg cost,
+stock-take) · purchasing (supplier → PO → receive → invoice) · returns/credit-notes · customers &amp;
+credit accounts · cash sessions (X/Z) · quotations → sales · **double-entry GL** (chart of accounts,
+journals, trial balance, P&amp;L, balance sheet, **monthly VAT declaration**) · **camera book
+registration + OCR** (ISBN-first; Tesseract &amp; a free offline Vision-LLM; async) · **federated
+sync** (till → store-hub → cloud-hub) with **multi-store consolidation**. 75 automated tests.
+
+## Deploy for the client (Windows)
+
+One PC Hub + up to 3 tills, each serving the PWA + API on a single port (WhiteNoise + waitress).
+Full guide: **[docs/INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md)** · kit: [deploy/windows/](deploy/windows/).
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass -Force
+.\deploy\windows\install.ps1 -Role hub          # note the printed SYNC KEY
+.\deploy\windows\install.ps1 -Role till -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey <hub-key>
+.\deploy\windows\start-teyssir.bat              # open http://localhost:8000
+```
+
+---
+
+## Backend modules
 
 - `teyssir/core` — `Money` helpers (store `Decimal(14,3)` millime, display 2 dp, `ROUND_HALF_UP`);
   sync-ready abstract base models; SQLite WAL/PRAGMA wiring; `/health` endpoint.

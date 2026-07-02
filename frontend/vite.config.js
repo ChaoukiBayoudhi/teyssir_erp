@@ -9,15 +9,22 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
+      includeAssets: ["favicon.svg", "favicon.ico", "apple-touch-icon.png"],
       manifest: {
-        name: "Teyssir POS",
+        name: "Teyssir — Librairie & POS",
         short_name: "Teyssir",
+        description: "Point de vente, stock, achats, comptabilité et registre des livres pour la librairie Teyssir.",
         lang: "fr",
         dir: "auto",
         theme_color: "#1B5E20",
         background_color: "#ffffff",
         display: "standalone",
         start_url: "/",
+        icons: [
+          { src: "pwa-192x192.png", sizes: "192x192", type: "image/png" },
+          { src: "pwa-512x512.png", sizes: "512x512", type: "image/png" },
+          { src: "maskable-512x512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+        ],
       },
     }),
   ],

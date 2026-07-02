@@ -1,0 +1,50 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Teyssir">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2A8A3E"/>
+      <stop offset="1" stop-color="#124D1A"/>
+    </linearGradient>
+    <linearGradient id="page" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FCEFCC"/>
+      <stop offset="1" stop-color="#F2C14E"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F8D775"/>
+      <stop offset="1" stop-color="#D9992A"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <rect width="512" height="248" rx="116" fill="#ffffff" opacity="0.06"/>
+
+  <!-- five-point star (Tunisian nod / mark of quality) -->
+  <path d="M256 106 L266 136.2 L297.8 136.4 L272.2 155.3 L281.9 185.6 L256 167
+           L230.1 185.6 L239.8 155.3 L214.2 136.4 L246 136.2 Z" fill="url(#gold)"/>
+
+  <!-- book shadow -->
+  <ellipse cx="256" cy="356" rx="150" ry="18" fill="#000000" opacity="0.18"/>
+
+  <!-- open book: two pages -->
+  <path d="M256 222 C204 194 150 198 118 216 L118 322 C154 304 214 306 256 332 Z" fill="url(#page)"/>
+  <path d="M256 222 C308 194 362 198 394 216 L394 322 C358 304 298 306 256 332 Z" fill="url(#page)"/>
+
+  <!-- spine shade -->
+  <path d="M240 226 L256 222 L256 332 L240 322 Z" fill="#000000" opacity="0.07"/>
+  <path d="M272 226 L256 222 L256 332 L272 322 Z" fill="#000000" opacity="0.04"/>
+
+  <!-- page text lines -->
+  <g stroke="#C98A1E" stroke-width="6" stroke-linecap="round" opacity="0.55">
+    <line x1="150" y1="246" x2="226" y2="256"/>
+    <line x1="150" y1="270" x2="226" y2="280"/>
+    <line x1="150" y1="294" x2="222" y2="303"/>
+    <line x1="286" y1="256" x2="362" y2="246"/>
+    <line x1="286" y1="280" x2="362" y2="270"/>
+    <line x1="290" y1="303" x2="362" y2="294"/>
+  </g>
+
+  <!-- spine -->
+  <rect x="250" y="220" width="12" height="114" rx="6" fill="url(#gold)"/>
+
+  <!-- bookmark ribbon -->
+  <path d="M304 206 L332 206 L332 300 L318 288 L304 300 Z" fill="#E4572E"/>
+</svg>
