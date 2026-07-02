@@ -117,7 +117,30 @@ def apply_push(entries):
         on_hand = recompute_on_hand(pid)
         if on_hand < 0:
             warnings.append({"product_id": str(pid), "on_hand": str(on_hand)})
+
+    from django.conf import settings
+    if settings.CLOUD_HUB_URL:                     # store hub -> forward upward to the cloud hub
+        _forward_for_cloud(entries)
     return {"applied": applied, "reconciliation_warnings": warnings}
+
+
+def _forward_for_cloud(entries):
+    """Phase 6: re-enqueue applied entries into THIS hub's outbox so they forward to the cloud hub
+    (sync.client.sync_to_cloud). Idempotent by the original entry id — a retried till push does not
+    duplicate the forward. The cloud re-applies each payload idempotently by UUID, exactly like a
+    till->store-hub push (the mechanism is recursive)."""
+    for entry in entries:
+        entry_id = entry.get("id")
+        if not entry_id:
+            continue
+        SyncOutbox.objects.get_or_create(
+            id=entry_id,
+            defaults=dict(
+                entity=entry.get("entity", ""), entity_id=entry.get("entity_id", ""),
+                op=entry.get("op", "UPSERT"), payload=entry["payload"],
+                origin_terminal=entry.get("origin_terminal", ""), seq=entry["seq"],
+            ),
+        )
 
 
 # --- Hub side: serve master-data changes; Till side: apply them -------------

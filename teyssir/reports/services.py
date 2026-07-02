@@ -5,19 +5,21 @@ cost at the moment of sale), so it is correct even as costs change later.
 """
 from decimal import Decimal
 
-from django.db.models import F, Sum
+from django.db.models import Count, F, Sum
 
 from teyssir.core.money import to_money
 from teyssir.inventory.models import StockMovement
 from teyssir.sales.models import Payment, Sale, SaleLine
 
 
-def sales_report(date_from, date_to):
+def sales_report(date_from, date_to, store=None):
     sales = Sale.objects.filter(
         status=Sale.FINALIZED,
         created_at__date__gte=date_from,
         created_at__date__lte=date_to,
     )
+    if store is not None:                            # Phase 6: cloud-hub per-store slice
+        sales = sales.filter(invoice__store_code=store)
     agg = sales.aggregate(
         subtotal=Sum("subtotal"), tax=Sum("tax_total"),
         timbre=Sum("timbre_amount_snapshot"), total=Sum("total"),
@@ -72,4 +74,42 @@ def sales_report(date_from, date_to):
         "payment_mix": [
             {"method": p["method"], "amount": str(to_money(p["amount"]))} for p in pay
         ],
+    }
+
+
+def consolidated_sales_by_store(date_from, date_to):
+    """Phase 6: roll up finalized sales by store (Invoice.store_code) for a cloud hub holding data
+    from several stores. Empty store_code = the standalone/single store. Returns per-store lines
+    plus a chain-wide grand total (spec §15, multi-store)."""
+    sales = Sale.objects.filter(
+        status=Sale.FINALIZED,
+        created_at__date__gte=date_from,
+        created_at__date__lte=date_to,
+    )
+    rows = (
+        sales.values("invoice__store_code")
+        .annotate(count=Count("id"), ex=Sum("subtotal"), tax=Sum("tax_total"), inc=Sum("total"))
+        .order_by("invoice__store_code")
+    )
+    stores = [
+        {
+            "store_code": r["invoice__store_code"] or "",
+            "sales_count": r["count"],
+            "revenue_ex_tax": str(to_money(r["ex"] or 0)),
+            "tax_total": str(to_money(r["tax"] or 0)),
+            "revenue_inc_tax": str(to_money(r["inc"] or 0)),
+        }
+        for r in rows
+    ]
+    g = sales.aggregate(c=Count("id"), ex=Sum("subtotal"), tax=Sum("tax_total"), inc=Sum("total"))
+    return {
+        "from": str(date_from),
+        "to": str(date_to),
+        "stores": stores,
+        "grand_total": {
+            "sales_count": g["c"] or 0,
+            "revenue_ex_tax": str(to_money(g["ex"] or 0)),
+            "tax_total": str(to_money(g["tax"] or 0)),
+            "revenue_inc_tax": str(to_money(g["inc"] or 0)),
+        },
     }

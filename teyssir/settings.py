@@ -28,6 +28,11 @@ TERMINAL = os.environ.get("TEYSSIR_TERMINAL", "C1")          # till series prefi
 STORE_CODE = os.environ.get("TEYSSIR_STORE_CODE", "").strip()
 HUB_URL = os.environ.get("TEYSSIR_HUB_URL", "")
 SYNC_KEY = os.environ.get("TEYSSIR_SYNC_KEY", "")            # shared secret for /api/v1/sync/*
+# Multi-store (Phase 6): when a store hub is federated under a cloud hub, set CLOUD_HUB_URL so the
+# store hub forwards its transactions upward (reusing the same push mechanism, recursively). Empty
+# = standalone store (no forwarding). CLOUD_SYNC_KEY defaults to SYNC_KEY if unset.
+CLOUD_HUB_URL = os.environ.get("TEYSSIR_CLOUD_HUB_URL", "")
+CLOUD_SYNC_KEY = os.environ.get("TEYSSIR_CLOUD_SYNC_KEY", "")
 
 # --- Core --------------------------------------------------------------------
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-insecure-change-me")

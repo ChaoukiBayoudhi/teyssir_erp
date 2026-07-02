@@ -88,3 +88,16 @@ def sync_now(hub_url, key):
     pull = pull_master(hub_url, key)
     SyncState.objects.filter(singleton=True).update(last_push_at=timezone.now())
     return {"push": push, "pull": pull}
+
+
+def sync_to_cloud():
+    """Phase 6: forward a store hub's transactions up to the cloud hub. The store hub's outbox holds
+    entries re-enqueued by apply_push (services._forward_for_cloud); pushing it reuses the same
+    idempotent push. No-op unless CLOUD_HUB_URL is configured."""
+    from django.conf import settings
+
+    if not settings.CLOUD_HUB_URL:
+        return {"forwarded": 0, "reason": "no cloud hub configured"}
+    result = push_outbox(settings.CLOUD_HUB_URL, settings.CLOUD_SYNC_KEY or settings.SYNC_KEY)
+    return {"forwarded": result.get("pushed", 0),
+            "reconciliation_warnings": result.get("reconciliation_warnings", [])}

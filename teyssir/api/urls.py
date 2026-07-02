@@ -7,7 +7,8 @@ from .views import (
     QuotationConvertView, QuotationCreateView, ReceiveView, ReservationCreateView,
     BookCreateView, BookScanView, FinancialsView, ProductImageView, ProductImagesView, ScanJobView,
     PurchaseInvoiceView, PurchaseOrderViewSet, ReservationReleaseView, ReturnView,
-    SalesReportView, StockTakeView, SupplierViewSet, TaxRateViewSet, TrialBalanceView,
+    ConsolidatedReportView, SalesReportView, StockTakeView, SupplierViewSet, TaxRateViewSet,
+    TrialBalanceView,
     VatDeclarationView, me,
 )
 
@@ -39,6 +40,7 @@ urlpatterns = [
     path("catalog/products/<uuid:pk>/images", ProductImagesView.as_view(), name="product-images"),
     path("catalog/images/<uuid:pk>", ProductImageView.as_view(), name="product-image"),
     path("reports/sales", SalesReportView.as_view(), name="reports-sales"),
+    path("reports/consolidated", ConsolidatedReportView.as_view(), name="reports-consolidated"),
     path("reports/trial-balance", TrialBalanceView.as_view(), name="reports-trial-balance"),
     path("reports/financials", FinancialsView.as_view(), name="reports-financials"),
     path("reports/vat", VatDeclarationView.as_view(), name="reports-vat"),

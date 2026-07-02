@@ -31,9 +31,18 @@ across stores once consolidated. `Invoice.store_code` is stamped at issue (clean
 without parsing the number); `GET /me` reports `store_code` + `role`. Backward-compatible (existing
 `C1-YYYYMM-XXXX` series and all tests unchanged). Verified live (`/me` → `store_code:"S1"`).
 
-**Next:** (2) cloud-hub sync peer — the store hub pushes its outbox to a cloud hub (reuses §4.4
-push/pull recursively); (3) consolidation API — group GL/sales by `store_code`, add an optional
-`store` filter to Financials/Dashboard; (4) flip `STORAGES` to MinIO/S3 at the cloud tier.
+**Done — cloud-hub sync peer (increment 2):** `CLOUD_HUB_URL`/`CLOUD_SYNC_KEY`. When set, a store
+hub's `apply_push` re-enqueues applied transactions into its own outbox (idempotent by entry id);
+`sync_to_cloud()` (+ `manage.py sync_to_cloud`) forwards them to the cloud hub via the *same*
+idempotent push — the mechanism is recursive (till→store-hub→cloud-hub). Empty = standalone store,
+no forwarding. Tested: re-enqueue, retry-idempotent, standalone no-op, mocked end-to-end drain.
+
+**Done — consolidation API (increment 3):** `GET /reports/consolidated?from=&to=` rolls up sales by
+`Invoice.store_code` (per-store lines + chain-wide grand total); `GET /reports/sales` gains an
+optional `?store=` slice. Verified live. Tested: disaggregation math + store filter.
+
+**Next:** (4) flip `STORAGES` to MinIO/S3 at the cloud tier (zero schema change); optional PWA
+consolidated dashboard; cloud-authored master data (chain-wide catalog/prices) if desired.
 
 #### Original design plan
 Today: one local hub per store (`teyssir-hub.local`) + offline tills syncing to it. Phase 6 federates

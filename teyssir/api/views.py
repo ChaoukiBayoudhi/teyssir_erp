@@ -14,7 +14,7 @@ from teyssir.core.money import display
 from teyssir.customers.models import Customer
 from teyssir.customers.services import balance, charge_account, post_payment, statement
 from teyssir.inventory.services import post_stocktake
-from teyssir.reports.services import sales_report
+from teyssir.reports.services import consolidated_sales_by_store, sales_report
 from teyssir.purchasing.models import PurchaseOrder, Supplier
 from teyssir.purchasing.services import create_po, receive_direct, receive_po, record_purchase_invoice
 from teyssir.quotations.models import Quotation, Reservation
@@ -195,7 +195,24 @@ class SalesReportView(APIView):
         if not date_from or not date_to:
             return Response({"detail": "from and to (YYYY-MM-DD) are required."},
                             status=status.HTTP_400_BAD_REQUEST)
-        return Response(sales_report(date_from, date_to))
+        store = request.query_params.get("store")        # Phase 6: optional per-store slice
+        return Response(sales_report(date_from, date_to, store=store))
+
+
+class ConsolidatedReportView(APIView):
+    """GET /api/v1/reports/consolidated?from=&to= — cross-store roll-up by store_code (Phase 6).
+    On a cloud hub this disaggregates chain-wide sales per store; on a single store it returns one
+    line (the empty store_code)."""
+
+    permission_classes = [CanViewReports]
+
+    def get(self, request):
+        date_from = parse_date(request.query_params.get("from", ""))
+        date_to = parse_date(request.query_params.get("to", ""))
+        if not date_from or not date_to:
+            return Response({"detail": "from and to (YYYY-MM-DD) are required."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        return Response(consolidated_sales_by_store(date_from, date_to))
 
 
 class TrialBalanceView(APIView):

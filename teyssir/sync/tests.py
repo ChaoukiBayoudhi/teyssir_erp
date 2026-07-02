@@ -181,3 +181,70 @@ class SyncTests(TestCase):
             n = fetch_missing_media("http://hub", "k", fetch=lambda nm: b"PNGDATA")
             self.assertEqual(n, 1)
             self.assertTrue(img.image.storage.exists(name))   # file pulled from the hub
+
+
+@override_settings(SYNC_KEY="test-key", CLOUD_HUB_URL="http://cloud.local", CLOUD_SYNC_KEY="cloud-key")
+class CloudForwardingTests(TestCase):
+    """Phase 6: a store hub re-enqueues applied transactions and forwards them up to a cloud hub."""
+
+    def setUp(self):
+        FiscalStampConfig.objects.create(doc_type="FACTURE", amount=Decimal("1.000"))
+        self.tva7 = TaxRate.objects.create(name="TVA 7%", rate_percent=Decimal("7.00"))
+        self.product = Product.objects.create(
+            sku="PEN-1", name_fr="Stylo", tax_rate=self.tva7,
+            cost_avg=Decimal("0.400"), sale_price=Decimal("0.850"),
+        )
+
+    def _incoming_from_a_till(self):
+        """Make a finalized sale, serialize its outbox entries, then clear the local outbox to
+        simulate entries that arrived at the store hub over HTTP (not authored locally)."""
+        apply_movement(product_id=self.product.id, qty=Decimal("10"), reason=StockMovement.RECEIPT)
+        sale = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
+        SaleLine.objects.create(sale=sale, product=self.product, qty=Decimal("1"),
+                                unit_price=Decimal("0.850"), tax_rate=Decimal("7.00"))
+        finalize_sale(sale, when=WHEN)
+        entries = [{"id": str(e.id), "entity": e.entity, "entity_id": e.entity_id, "op": e.op,
+                    "payload": e.payload, "origin_terminal": e.origin_terminal, "seq": e.seq}
+                   for e in SyncOutbox.objects.order_by("seq")]
+        SyncOutbox.objects.all().delete()
+        return entries
+
+    def test_store_hub_reenqueues_transactions_for_the_cloud(self):
+        entries = self._incoming_from_a_till()
+        self.assertGreater(len(entries), 0)
+        apply_push(entries)                          # CLOUD_HUB_URL set -> re-enqueue for forwarding
+        self.assertEqual(SyncOutbox.objects.filter(pushed=False).count(), len(entries))
+        # a retried till push must not duplicate the forward (idempotent by entry id)
+        apply_push(entries)
+        self.assertEqual(SyncOutbox.objects.count(), len(entries))
+
+    @override_settings(CLOUD_HUB_URL="")
+    def test_standalone_store_does_not_forward(self):
+        entries = self._incoming_from_a_till()
+        apply_push(entries)
+        self.assertEqual(SyncOutbox.objects.count(), 0)   # no cloud hub -> nothing queued
+
+    def test_sync_to_cloud_drains_outbox_to_the_cloud(self):
+        import teyssir.sync.client as client
+
+        apply_push(self._incoming_from_a_till())
+        queued = SyncOutbox.objects.filter(pushed=False).count()
+        self.assertGreater(queued, 0)
+
+        sent = {}
+
+        def fake_post(url, key, data):
+            sent.update(url=url, key=key)
+            return {"applied": [{"id": e["id"], "seq": e["seq"]} for e in data["entries"]]}
+
+        orig = client._post
+        client._post = fake_post
+        try:
+            result = client.sync_to_cloud()
+        finally:
+            client._post = orig
+
+        self.assertEqual(result["forwarded"], queued)
+        self.assertEqual(sent["url"], "http://cloud.local/api/v1/sync/push")
+        self.assertEqual(sent["key"], "cloud-key")                       # CLOUD_SYNC_KEY used
+        self.assertFalse(SyncOutbox.objects.filter(pushed=False).exists())  # outbox drained
