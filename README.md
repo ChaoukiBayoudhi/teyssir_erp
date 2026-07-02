@@ -11,7 +11,8 @@ double-entry accounting &amp; VAT, camera book registration (OCR), federated mul
 </p>
 
 <p align="center">
-  🪟 <b><a href="docs/INSTALL-WINDOWS.md">Install on Windows (step-by-step)</a></b>
+  🪟 <b><a href="docs/INSTALL-WINDOWS.md">Install on Windows</a></b>
+  · 🍎 <b><a href="docs/INSTALL-MACOS.md">Install on macOS (M1)</a></b>
   · 🏗️ <a href="docs/ARCHITECTURE.md">Architecture</a>
   · 📊 <a href="docs/IMPLEMENTATION-PROGRESS.md">Progress</a>
   · 📖 <a href="docs/BOOK-OCR-ARCHITECTURE.md">Book&nbsp;OCR</a>
