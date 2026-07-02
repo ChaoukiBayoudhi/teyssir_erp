@@ -21,7 +21,7 @@ function Kpi({ label, value, suffix }) {
   );
 }
 
-export default function Dashboard({ onBack, onLogout, onFinancials }) {
+export default function Dashboard({ onBack, onLogout, onFinancials, onConsolidated }) {
   const { t } = useTranslation();
   const [from, setFrom] = useState(today());
   const [to, setTo] = useState(today());
@@ -51,6 +51,7 @@ export default function Dashboard({ onBack, onLogout, onFinancials }) {
         <Toolbar sx={{ gap: 2 }}>
           <Typography variant="h6" sx={{ flexGrow: 1 }}>{t("dashboard")}</Typography>
           <Button color="inherit" onClick={onFinancials}>{t("accounting")}</Button>
+          <Button color="inherit" onClick={onConsolidated}>{t("consolidated")}</Button>
           <Button color="inherit" onClick={onBack}>{t("pos")}</Button>
           <LangToggle />
           <Button color="inherit" onClick={onLogout}>{t("logout")}</Button>

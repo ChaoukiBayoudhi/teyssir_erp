@@ -41,8 +41,15 @@ no forwarding. Tested: re-enqueue, retry-idempotent, standalone no-op, mocked en
 `Invoice.store_code` (per-store lines + chain-wide grand total); `GET /reports/sales` gains an
 optional `?store=` slice. Verified live. Tested: disaggregation math + store filter.
 
-**Next:** (4) flip `STORAGES` to MinIO/S3 at the cloud tier (zero schema change); optional PWA
-consolidated dashboard; cloud-authored master data (chain-wide catalog/prices) if desired.
+**Done — object storage + consolidated UI (increment 4):** `STORAGES` is env-driven — set
+`TEYSSIR_S3_BUCKET` (+ endpoint for MinIO) to flip media to S3/MinIO at the cloud tier, zero schema
+change (default stays local FS). OCR is storage-agnostic (`local_image_paths` streams remote files
+to a temp copy). New PWA **Multi-magasins** screen (Dashboard → Consolidated) shows per-store
+roll-up + chain total; FR/AR. Verified live.
+
+**Optional remaining:** cloud-authored chain-wide master data (catalog/prices) if a chain wants
+central control; deploy MinIO + docker-compose for the cloud hub; per-store `X-Sync-Key` rotation.
+Phase 6 core is complete — a store runs standalone and federates to a cloud hub additively.
 
 #### Original design plan
 Today: one local hub per store (`teyssir-hub.local`) + offline tills syncing to it. Phase 6 federates

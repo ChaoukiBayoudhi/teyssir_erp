@@ -145,10 +145,30 @@ USE_TZ = True
 STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# Media (product/book images). ImageField stores a path; the storage backend is pluggable
-# (local FS now; S3/MinIO later via django-storages — no schema change). Spec docs/BOOK-OCR.
+# Media (product/book images). ImageField stores a path/key; the storage backend is pluggable
+# (local FS now; S3/MinIO at a cloud tier — no schema change). Spec docs/BOOK-OCR.
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
+
+# Phase 6: flip media to S3-compatible object storage (MinIO = free/self-hosted, or AWS S3) with a
+# settings/env change only — set TEYSSIR_S3_BUCKET (+ endpoint for MinIO). Needs django-storages +
+# boto3 (optional; installed only at the cloud tier). Default stays local filesystem.
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+}
+if os.environ.get("TEYSSIR_S3_BUCKET"):
+    STORAGES["default"] = {
+        "BACKEND": "storages.backends.s3.S3Storage",
+        "OPTIONS": {
+            "bucket_name": os.environ["TEYSSIR_S3_BUCKET"],
+            "endpoint_url": os.environ.get("TEYSSIR_S3_ENDPOINT") or None,   # MinIO: http://minio:9000
+            "access_key": os.environ.get("TEYSSIR_S3_ACCESS_KEY", ""),
+            "secret_key": os.environ.get("TEYSSIR_S3_SECRET_KEY", ""),
+            "region_name": os.environ.get("TEYSSIR_S3_REGION", ""),
+            "querystring_auth": False,
+        },
+    }
 
 # Book registration / OCR providers (replaceable; docs/BOOK-OCR-ARCHITECTURE.md)
 OCR_PROVIDER = os.environ.get("TEYSSIR_OCR_PROVIDER", "tesseract")          # tesseract|manual|vision

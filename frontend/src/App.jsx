@@ -12,6 +12,7 @@ import CashSession from "./pages/CashSession.jsx";
 import Receiving from "./pages/Receiving.jsx";
 import Customers from "./pages/Customers.jsx";
 import Financials from "./pages/Financials.jsx";
+import Consolidated from "./pages/Consolidated.jsx";
 import BookCreate from "./pages/BookCreate.jsx";
 import Quotation from "./pages/Quotation.jsx";
 import PurchaseOrders from "./pages/PurchaseOrders.jsx";
@@ -43,9 +44,12 @@ export default function App() {
           <Login onLogin={() => setAuthed(true)} />
         ) : view === "dashboard" ? (
           <Dashboard onBack={() => setView("pos")} onLogout={logout}
-                     onFinancials={() => setView("financials")} />
+                     onFinancials={() => setView("financials")}
+                     onConsolidated={() => setView("consolidated")} />
         ) : view === "financials" ? (
           <Financials onBack={() => setView("dashboard")} onLogout={logout} />
+        ) : view === "consolidated" ? (
+          <Consolidated onBack={() => setView("dashboard")} onLogout={logout} />
         ) : view === "stocktake" ? (
           <StockTake onBack={() => setView("pos")} onLogout={logout} />
         ) : view === "cash" ? (

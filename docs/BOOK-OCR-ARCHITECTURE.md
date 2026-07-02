@@ -59,10 +59,13 @@ Existing tables are untouched → fully backward-compatible.
 | Object store (MinIO/S3) | excellent | ❌ (online) | adds service | future |
 | Cloud (S3/GCS) | excellent | ❌ | lock-in, paid | future |
 
-**Decision — Django `ImageField` over a pluggable storage backend** (`STORAGES`/`DEFAULT_FILE_STORAGE`).
-Default = local filesystem per node (offline-first). The DB stores only a **path/key string**, so
-moving to **MinIO/S3** later (django-storages) is a **settings-only change, zero migration**.
-Hub image consolidation = a media-replication step (designed, Phase-later).
+**Decision — Django `ImageField` over a pluggable storage backend** (`STORAGES`). Default = local
+filesystem per node (offline-first). The DB stores only a **path/key string**, so moving to
+**MinIO/S3** is a **settings/env change, zero migration** — **implemented**: set `TEYSSIR_S3_BUCKET`
+(+ `TEYSSIR_S3_ENDPOINT` for MinIO) and media goes to object storage (needs django-storages+boto3,
+installed only at the cloud tier; MinIO is free/self-hosted). OCR reads are **storage-agnostic**
+(`bookscan.jobs.local_image_paths` streams remote files to a temp copy since S3 has no `.path`).
+Store→hub image consolidation is the media-replication step already shipped (`fetch_missing_media`).
 
 ## 6. Async OCR — implemented
 A scan is a **`ScanJob`** (local-only model) processed by a pluggable executor (`SCAN_EXECUTOR`):

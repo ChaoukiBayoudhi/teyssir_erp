@@ -9,7 +9,37 @@
 To scale later (e.g. on the hub), add a ``celery``/``django-q`` backend here — the HTTP API
 (a job id you poll) does not change. Uses only the stdlib (threading), no extra dependency.
 """
+import contextlib
+import os
+import tempfile
+
 from django.conf import settings
+
+
+@contextlib.contextmanager
+def local_image_paths(image_fields):
+    """Yield real filesystem paths for a list of ImageField values. Local storage exposes ``.path``
+    directly; remote storage (S3/MinIO) has none, so we stream each file to a temp copy that OCR can
+    read, and clean the temps up afterwards. Keeps the OCR engines storage-agnostic (Phase 6)."""
+    temps, paths = [], []
+    try:
+        for field in image_fields:
+            try:
+                paths.append(field.path)                     # local FileSystemStorage
+            except (NotImplementedError, ValueError):
+                suffix = os.path.splitext(field.name)[1] or ".img"
+                fd, tmp = tempfile.mkstemp(suffix=suffix)
+                field.open("rb")
+                with os.fdopen(fd, "wb") as out:
+                    out.write(field.read())
+                field.close()
+                temps.append(tmp)
+                paths.append(tmp)
+        yield paths
+    finally:
+        for tmp in temps:
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
 
 
 def run_scan_job(job_id):
@@ -22,7 +52,8 @@ def run_scan_job(job_id):
     job = ScanJob.objects.get(pk=job_id)
     try:
         images = ProductImage.objects.filter(id__in=job.image_ids).order_by("order")
-        draft, ocr_text = scan_book([img.image.path for img in images], isbn=job.isbn)
+        with local_image_paths([img.image for img in images]) as paths:
+            draft, ocr_text = scan_book(paths, isbn=job.isbn)
         job.result = draft.as_dict()
         job.ocr_text = ocr_text or ""
         job.status = ScanJob.DONE

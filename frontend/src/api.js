@@ -64,6 +64,8 @@ export const salesReport = (from, to) =>
 export const trialBalance = () => request("/reports/trial-balance");
 export const financials = () => request("/reports/financials");
 export const vatDeclaration = (from, to) => request(`/reports/vat?from=${from}&to=${to}`);
+export const consolidatedReport = (from, to) =>
+  request(`/reports/consolidated?from=${from}&to=${to}`);
 
 export const stocktake = (payload) =>
   request("/inventory/stocktake", { method: "POST", body: payload });

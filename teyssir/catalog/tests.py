@@ -193,3 +193,24 @@ class ScanJobTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["status"], "done")
         self.assertEqual(r.json()["isbn13"], "9782070612758")
+
+    def test_local_image_paths_streams_remote_storage(self):
+        """S3/MinIO fields have no .path -> the helper streams to a temp file OCR can read, then
+        cleans it up (Phase 6 object-storage support)."""
+        from teyssir.catalog.bookscan.jobs import local_image_paths
+
+        class _RemoteField:                                  # mimics an S3-backed ImageField value
+            name = "product_images/2026/06/cover.png"
+            def __init__(self, data): self._data = data
+            @property
+            def path(self): raise NotImplementedError
+            def open(self, mode="rb"): return BytesIO(self._data)
+            def read(self): return self._data
+            def close(self): pass
+
+        with local_image_paths([_RemoteField(b"COVERBYTES")]) as paths:
+            self.assertEqual(len(paths), 1)
+            with open(paths[0], "rb") as fh:
+                self.assertEqual(fh.read(), b"COVERBYTES")
+            tmp = paths[0]
+        self.assertFalse(os.path.exists(tmp))                # temp cleaned up afterwards
