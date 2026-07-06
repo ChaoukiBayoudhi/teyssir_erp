@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import {
   AppBar, Toolbar, Typography, Button, Box, Grid, Paper, TextField, Stack, Alert, Snackbar,
-  Chip, IconButton, LinearProgress,
+  Chip, IconButton, LinearProgress, Select, MenuItem,
 } from "@mui/material";
 import { useTranslation } from "react-i18next";
 import { scanBook, pollScanJob, createBook } from "../api";
@@ -39,18 +39,31 @@ export default function BookCreate({ onBack, onLogout }) {
   const [form, setForm] = useState(EMPTY);
   const [done, setDone] = useState(false);
   const [error, setError] = useState("");
+  const [cameras, setCameras] = useState([]);
+  const [cameraId, setCameraId] = useState(localStorage.getItem("teyssir_camera") || "");
 
   const addImage = (file) => {
     setImages((a) => [...a, file]);
     setPreviews((a) => [...a, URL.createObjectURL(file)]);
   };
 
-  const startCamera = async () => {
+  const listCameras = async () => {
+    try {
+      const devs = await navigator.mediaDevices.enumerateDevices();
+      setCameras(devs.filter((d) => d.kind === "videoinput"));   // labels appear after permission
+    } catch { /* enumeration unsupported */ }
+  };
+
+  const startCamera = async (deviceId) => {
     setError("");
     try {
-      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+      if (stream) stream.getTracks().forEach((tk) => tk.stop());  // release before switching
+      const video = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: "environment" };
+      const s = await navigator.mediaDevices.getUserMedia({ video });
       setStream(s);
       if (videoRef.current) videoRef.current.srcObject = s;
+      if (deviceId) { setCameraId(deviceId); localStorage.setItem("teyssir_camera", deviceId); }
+      await listCameras();
     } catch {
       setError("Caméra indisponible — utilisez « Photos »");
     }
@@ -154,9 +167,18 @@ export default function BookCreate({ onBack, onLogout }) {
               <Box sx={{ bgcolor: "#000", borderRadius: 1, overflow: "hidden", mb: 1, minHeight: 180 }}>
                 <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", display: stream ? "block" : "none" }} />
               </Box>
+              {stream && cameras.length > 1 && (
+                <Select size="small" fullWidth sx={{ mb: 1 }}
+                        value={cameraId || cameras[0]?.deviceId || ""}
+                        onChange={(e) => startCamera(e.target.value)}>
+                  {cameras.map((c, i) => (
+                    <MenuItem key={c.deviceId} value={c.deviceId}>{c.label || `${t("camera")} ${i + 1}`}</MenuItem>
+                  ))}
+                </Select>
+              )}
               <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                 {!stream
-                  ? <Button variant="outlined" onClick={startCamera}>{t("startCamera")}</Button>
+                  ? <Button variant="outlined" onClick={() => startCamera(cameraId || undefined)}>{t("startCamera")}</Button>
                   : <Button variant="contained" onClick={capture}>{t("capture")}</Button>}
                 <Button variant="outlined" onClick={() => fileRef.current?.click()}>{t("choosePhotos")}</Button>
                 <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple hidden

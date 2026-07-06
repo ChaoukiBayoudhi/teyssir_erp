@@ -13,7 +13,7 @@ const r3 = (x) => Math.round(x * 1000) / 1000;
 const fmt = (x) => x.toFixed(2); // 2-dp display (server stores 3-dp)
 
 export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onReceiving,
-                              onCustomers, onNewBook, onQuotation, onPurchaseOrders }) {
+                              onCustomers, onNewBook, onQuotation, onPurchaseOrders, onCatalog }) {
   const { t } = useTranslation();
   const [terminal, setTerminal] = useState("C1");
   const [menuAnchor, setMenuAnchor] = useState(null);
@@ -125,6 +125,7 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
             {[
               ["dashboard", onDashboard],
               ["inventory", onStockTake],
+              ["catalog", onCatalog],
               ["receiving", onReceiving],
               ["purchaseOrders", onPurchaseOrders],
               ["newBook", onNewBook],

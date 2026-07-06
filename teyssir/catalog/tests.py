@@ -117,6 +117,64 @@ class TesseractOcrTests(TestCase):
         self.assertEqual(detected.title, "Le Petit Prince")
 
 
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+class CatalogBrowseApiTests(TestCase):
+    """The catalogue browser: multi-criteria search, filters, sort, pagination, and detail."""
+
+    def setUp(self):
+        from decimal import Decimal
+
+        from teyssir.catalog.models import Category
+
+        self.client = APIClient()
+        self.client.force_authenticate(User.objects.create_superuser("owner", password="pw-strong-123"))
+        self.cat = Category.objects.create(name_fr="Romans")
+        self.book = create_book_from_draft(data={
+            "title": "Le Petit Prince", "isbn13": "9782070612758", "publisher": "Gallimard",
+            "authors": ["Antoine de Saint-Exupéry"]}, sale_price="12.500")
+        self.book.category = self.cat
+        self.book.qty_on_hand = Decimal("5"); self.book.reorder_point = Decimal("3")
+        self.book.save()
+        self.pen = Product.objects.create(sku="PEN-9", name_fr="Stylo Bic",
+                                          sale_price=Decimal("0.850"), qty_on_hand=Decimal("0"))
+        self.cah = Product.objects.create(sku="CAH-9", name_fr="Cahier", sale_price=Decimal("1.200"),
+                                          qty_on_hand=Decimal("2"), reorder_point=Decimal("5"))
+
+    def _skus(self, url, params=None):
+        return {x["sku"] for x in self.client.get(url, params or {}).json()["results"]}
+
+    def test_search_matches_title_author_isbn_barcode_publisher(self):
+        for term in ("Petit", "Saint-Exupéry", "9782070612758", "Gallimard"):
+            self.assertIn(self.book.sku, self._skus("/api/v1/catalog/search", {"q": term}),
+                          f"search term did not match the book: {term}")
+
+    def test_filters_type_stock_category(self):
+        self.assertEqual(self._skus("/api/v1/catalog/search", {"type": "book"}), {self.book.sku})
+        self.assertEqual(self._skus("/api/v1/catalog/search", {"stock": "out"}), {"PEN-9"})
+        self.assertEqual(self._skus("/api/v1/catalog/search", {"stock": "low"}), {"CAH-9"})
+        self.assertEqual(self._skus("/api/v1/catalog/search", {"category": str(self.cat.id)}),
+                         {self.book.sku})
+
+    def test_ordering_and_pagination(self):
+        from decimal import Decimal
+
+        r = self.client.get("/api/v1/catalog/search",
+                            {"ordering": "price", "page_size": 2, "page": 1}).json()
+        self.assertEqual(set(r), {"count", "page", "page_size", "num_pages", "results"})
+        self.assertEqual((r["count"], r["page_size"], r["num_pages"]), (3, 2, 2))
+        prices = [Decimal(x["sale_price"]) for x in r["results"]]
+        self.assertEqual(prices, sorted(prices))                       # ascending by price
+        page2 = self.client.get("/api/v1/catalog/search", {"page_size": 2, "page": 2}).json()
+        self.assertEqual(len(page2["results"]), 1)                     # 3 items, 2 per page
+
+    def test_detail_returns_full_profile(self):
+        d = self.client.get(f"/api/v1/catalog/products/{self.book.id}/detail").json()
+        self.assertEqual(d["book"]["publisher"], "Gallimard")
+        self.assertEqual(d["book"]["contributors"][0]["name"], "Antoine de Saint-Exupéry")
+        self.assertTrue(any(b["value"] == "9782070612758" for b in d["barcodes"]))
+        self.assertEqual(d["qty_on_hand"], "5.000")
+
+
 @override_settings(OCR_PROVIDER="vision")
 class VisionLlmOcrTests(TestCase):
     """The Vision-LLM provider with an injected transport — no live model needed."""

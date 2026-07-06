@@ -73,6 +73,150 @@ class ProductViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.
         return qs.order_by("name_fr")[:50]
 
 
+def _catalog_row(request, p, primary):
+    """Compact row for the catalogue browser (list view)."""
+    img = primary.get(p.id)
+    reorder = p.reorder_point or 0
+    return {
+        "id": str(p.id), "sku": p.sku, "name_fr": p.name_fr, "name_ar": p.name_ar,
+        "sale_price": str(p.sale_price), "qty_on_hand": str(p.qty_on_hand),
+        "reorder_point": str(reorder), "is_book": p.is_book,
+        "category": p.category.name_fr if p.category_id else "",
+        "out_of_stock": p.qty_on_hand <= 0,
+        "low_stock": bool(reorder) and 0 < p.qty_on_hand <= reorder,
+        "image": request.build_absolute_uri(img.image.url) if img else None,
+    }
+
+
+class CatalogSearchView(APIView):
+    """GET /catalog/search — paginated, multi-criteria catalogue browser (search + filter + sort).
+
+    Params: q (name/sku/isbn/internal-code/barcode/publisher/subtitle/author, partial, case-insensitive),
+    category, type=book|supply, stock=in|low|out, ordering=name|-name|price|-price|stock|-stock,
+    page, page_size. Returns {count, page, page_size, num_pages, results}."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        import math
+
+        from django.db.models import F
+
+        from teyssir.catalog.models import Barcode, BookContributor, Product, ProductImage
+
+        qs = Product.objects.filter(active=True).select_related("category")
+
+        q = (request.query_params.get("q") or "").strip()
+        if q:
+            barcode_ids = list(Barcode.objects.filter(value__icontains=q)
+                               .values_list("product_id", flat=True))
+            author_ids = list(BookContributor.objects.filter(contributor__name__icontains=q)
+                              .values_list("book__product_id", flat=True))
+            qs = qs.filter(
+                Q(name_fr__icontains=q) | Q(name_ar__icontains=q) | Q(sku__icontains=q)
+                | Q(isbn__icontains=q) | Q(internal_code__icontains=q)
+                | Q(book__isbn13__icontains=q) | Q(book__publisher__icontains=q)
+                | Q(book__subtitle__icontains=q)
+                | Q(id__in=barcode_ids) | Q(id__in=author_ids)
+            ).distinct()
+
+        if request.query_params.get("category"):
+            qs = qs.filter(category_id=request.query_params["category"])
+        typ = request.query_params.get("type")
+        if typ == "book":
+            qs = qs.filter(is_book=True)
+        elif typ == "supply":
+            qs = qs.filter(is_book=False)
+        stock = request.query_params.get("stock")
+        if stock == "in":
+            qs = qs.filter(qty_on_hand__gt=0)
+        elif stock == "out":
+            qs = qs.filter(qty_on_hand__lte=0)
+        elif stock == "low":
+            qs = qs.filter(qty_on_hand__gt=0, qty_on_hand__lte=F("reorder_point"),
+                           reorder_point__gt=0)
+
+        order_map = {"name": "name_fr", "-name": "-name_fr", "price": "sale_price",
+                     "-price": "-sale_price", "stock": "qty_on_hand", "-stock": "-qty_on_hand"}
+        qs = qs.order_by(order_map.get(request.query_params.get("ordering"), "name_fr"))
+
+        try:
+            page = max(1, int(request.query_params.get("page", 1)))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = min(100, max(1, int(request.query_params.get("page_size", 25))))
+        except (TypeError, ValueError):
+            page_size = 25
+
+        count = qs.count()
+        rows = list(qs[(page - 1) * page_size: (page - 1) * page_size + page_size])
+        images = (ProductImage.objects.filter(product_id__in=[r.id for r in rows])
+                  .order_by("product_id", "-is_primary", "order"))
+        primary = {}
+        for img in images:
+            primary.setdefault(img.product_id, img)     # primary (—is_primary first) or first image
+        return Response({
+            "count": count, "page": page, "page_size": page_size,
+            "num_pages": max(1, math.ceil(count / page_size)),
+            "results": [_catalog_row(request, p, primary) for p in rows],
+        })
+
+
+class CategoryListView(APIView):
+    """GET /catalog/categories — categories for the catalogue filter dropdown."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from teyssir.catalog.models import Category
+
+        return Response([{"id": str(c.id), "name": c.name_fr}
+                         for c in Category.objects.order_by("name_fr")])
+
+
+class ProductDetailView(APIView):
+    """GET /catalog/products/<pk>/detail — full product profile (info, stock, barcodes, cover
+    images, and the bibliographic book record) for the 'Show details' view."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        from teyssir.catalog.models import Product, ProductImage
+
+        p = (Product.objects.select_related("category", "tax_rate").filter(pk=pk).first())
+        if not p:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        data = {
+            "id": str(p.id), "sku": p.sku, "internal_code": p.internal_code,
+            "name_fr": p.name_fr, "name_ar": p.name_ar,
+            "category": p.category.name_fr if p.category_id else "",
+            "is_book": p.is_book, "isbn": p.isbn, "active": p.active,
+            "sale_price": str(p.sale_price), "cost_avg": str(p.cost_avg),
+            "qty_on_hand": str(p.qty_on_hand), "reorder_point": str(p.reorder_point),
+            "reorder_qty": str(p.reorder_qty),
+            "tax_rate_percent": str(p.tax_rate.rate_percent) if p.tax_rate_id else "0",
+            "barcodes": list(p.barcodes.values("value", "symbology")),
+            "images": [_image_payload(request, i)
+                       for i in ProductImage.objects.filter(product=p).order_by("-is_primary", "order")],
+        }
+        book = getattr(p, "book", None)
+        if book:
+            data["book"] = {
+                "isbn13": book.isbn13, "isbn10": book.isbn10, "subtitle": book.subtitle,
+                "publisher": book.publisher, "series": book.series, "edition": book.edition,
+                "languages": book.languages, "pub_year": book.pub_year, "pages": book.pages,
+                "dimensions": book.dimensions, "cover_type": book.cover_type,
+                "subject": book.subject, "description": book.description,
+                "contributors": [
+                    {"name": bc.contributor.name, "role": bc.role}
+                    for bc in book.contributors.select_related("contributor").order_by("order")
+                ],
+            }
+        return Response(data)
+
+
 class TaxRateViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     queryset = TaxRate.objects.all()
     serializer_class = TaxRateSerializer

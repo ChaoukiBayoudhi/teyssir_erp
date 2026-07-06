@@ -51,6 +51,14 @@ export const searchProducts = (q) =>
 export const lookupBarcode = (code) =>
   request(`/catalog/products/?barcode=${encodeURIComponent(code)}`);
 
+// Catalogue browser: paginated multi-criteria search + filters + sort.
+export const catalogSearch = (params) => {
+  const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v !== "" && v != null));
+  return request(`/catalog/search?${new URLSearchParams(clean).toString()}`);
+};
+export const productDetail = (id) => request(`/catalog/products/${id}/detail`);
+export const listCategories = () => request("/catalog/categories");
+
 export const checkout = (payload) =>
   request("/pos/checkout", { method: "POST", body: payload });
 

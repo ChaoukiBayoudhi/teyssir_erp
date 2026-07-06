@@ -3,7 +3,8 @@ from rest_framework.authtoken.views import obtain_auth_token
 from rest_framework.routers import DefaultRouter
 
 from .views import (
-    CashOpenView, CashXView, CashZView, CheckoutView, CustomerViewSet, ProductViewSet,
+    CashOpenView, CashXView, CashZView, CatalogSearchView, CategoryListView, CheckoutView,
+    CustomerViewSet, ProductDetailView, ProductViewSet,
     QuotationConvertView, QuotationCreateView, ReceiveView, ReservationCreateView,
     BookCreateView, BookScanView, FinancialsView, ProductImageView, ProductImagesView, ScanJobView,
     PurchaseInvoiceView, PurchaseOrderViewSet, ReservationReleaseView, ReturnView,
@@ -34,6 +35,9 @@ urlpatterns = [
     path("inventory/stocktake", StockTakeView.as_view(), name="inventory-stocktake"),
     path("purchasing/receive", ReceiveView.as_view(), name="purchasing-receive"),
     path("purchasing/invoices", PurchaseInvoiceView.as_view(), name="purchase-invoice"),
+    path("catalog/search", CatalogSearchView.as_view(), name="catalog-search"),
+    path("catalog/categories", CategoryListView.as_view(), name="catalog-categories"),
+    path("catalog/products/<uuid:pk>/detail", ProductDetailView.as_view(), name="product-detail"),
     path("catalog/books/scan", BookScanView.as_view(), name="book-scan"),
     path("catalog/books/scan/<uuid:pk>", ScanJobView.as_view(), name="scan-job"),
     path("catalog/books", BookCreateView.as_view(), name="book-create"),
