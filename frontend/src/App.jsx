@@ -17,6 +17,7 @@ import BookCreate from "./pages/BookCreate.jsx";
 import Quotation from "./pages/Quotation.jsx";
 import PurchaseOrders from "./pages/PurchaseOrders.jsx";
 import Catalog from "./pages/Catalog.jsx";
+import ProductCreate from "./pages/ProductCreate.jsx";
 
 export default function App() {
   const { i18n } = useTranslation();
@@ -66,7 +67,10 @@ export default function App() {
         ) : view === "po" ? (
           <PurchaseOrders onBack={() => setView("pos")} onLogout={logout} />
         ) : view === "catalog" ? (
-          <Catalog onBack={() => setView("pos")} onLogout={logout} />
+          <Catalog onBack={() => setView("pos")} onLogout={logout}
+                   onNewProduct={() => setView("newProduct")} />
+        ) : view === "newProduct" ? (
+          <ProductCreate onBack={() => setView("pos")} onLogout={logout} />
         ) : (
           <Pos
             onLogout={logout}
@@ -79,6 +83,7 @@ export default function App() {
             onQuotation={() => setView("quotation")}
             onPurchaseOrders={() => setView("po")}
             onCatalog={() => setView("catalog")}
+            onNewProduct={() => setView("newProduct")}
           />
         )}
       </ThemeProvider>

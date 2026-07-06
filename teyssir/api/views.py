@@ -163,6 +163,53 @@ class CatalogSearchView(APIView):
         })
 
 
+class BarcodeLookupView(APIView):
+    """GET /catalog/lookup?barcode=XXXX — resolve a scanned barcode (hardware reader or camera) to
+    an existing product, or report that it is unknown so the UI can offer to register it."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        code = (request.query_params.get("barcode") or "").strip()
+        bc = (Barcode.objects.filter(value=code).select_related("product").first()
+              if code else None)
+        if not bc:
+            return Response({"found": False, "barcode": code})
+        p = bc.product
+        return Response({"found": True, "barcode": code, "product": {
+            "id": str(p.id), "sku": p.sku, "name_fr": p.name_fr, "name_ar": p.name_ar,
+            "sale_price": str(p.sale_price), "qty_on_hand": str(p.qty_on_hand),
+            "is_book": p.is_book, "active": p.active,
+        }})
+
+
+class ProductCreateView(APIView):
+    """POST /catalog/register — register ANY article (book or supply) with its barcode + opening
+    stock. Books normally use the richer scan flow, but supplies (fournitures) register here."""
+
+    permission_classes = [capability("edit_product")]
+
+    def post(self, request):
+        from teyssir.catalog.services import create_product
+
+        d = request.data
+        if not (d.get("name_fr") or "").strip():
+            return Response({"detail": "name_fr is required"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            p = create_product(
+                name_fr=d["name_fr"], name_ar=d.get("name_ar", ""),
+                category_id=d.get("category") or None, tax_rate_id=d.get("tax_rate") or None,
+                sale_price=d.get("sale_price", "0"), is_book=bool(d.get("is_book")),
+                barcode=d.get("barcode", ""), symbology=d.get("symbology", ""),
+                initial_qty=d.get("initial_qty", "0"), cost=d.get("cost", "0"),
+                reorder_point=d.get("reorder_point", "0"), origin_terminal=settings.TERMINAL,
+            )
+        except ValueError as exc:                       # duplicate barcode
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        return Response({"id": str(p.id), "sku": p.sku, "name": p.name_fr},
+                        status=status.HTTP_201_CREATED)
+
+
 class CategoryListView(APIView):
     """GET /catalog/categories — categories for the catalogue filter dropdown."""
 

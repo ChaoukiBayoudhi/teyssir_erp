@@ -175,6 +175,44 @@ class CatalogBrowseApiTests(TestCase):
         self.assertEqual(d["qty_on_hand"], "5.000")
 
 
+class ProductRegisterApiTests(TestCase):
+    """Register ANY article (supply or book) from a scanned barcode, then find it by that barcode."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.client.force_authenticate(User.objects.create_superuser("owner", password="pw-strong-123"))
+
+    def test_lookup_unknown_then_register_then_found_with_stock(self):
+        r = self.client.get("/api/v1/catalog/lookup", {"barcode": "6191234567890"})
+        self.assertFalse(r.json()["found"])                       # unknown before
+
+        r = self.client.post("/api/v1/catalog/register", {
+            "name_fr": "Stylo Bille Bleu", "barcode": "6191234567890",
+            "sale_price": "0.850", "initial_qty": "50", "cost": "0.400"}, format="json")
+        self.assertEqual(r.status_code, 201)
+        pid = r.json()["id"]
+
+        r = self.client.get("/api/v1/catalog/lookup", {"barcode": "6191234567890"})
+        self.assertTrue(r.json()["found"])                        # scannable afterwards
+        self.assertEqual(r.json()["product"]["id"], pid)
+        self.assertEqual(r.json()["product"]["qty_on_hand"], "50.000")   # opening stock applied
+        self.assertFalse(r.json()["product"]["is_book"])          # a supply, not a book
+        self.assertTrue(Barcode.objects.filter(value="6191234567890").exists())
+
+    def test_duplicate_barcode_is_rejected(self):
+        self.client.post("/api/v1/catalog/register",
+                         {"name_fr": "A", "barcode": "6199999999999"}, format="json")
+        r = self.client.post("/api/v1/catalog/register",
+                             {"name_fr": "B", "barcode": "6199999999999"}, format="json")
+        self.assertEqual(r.status_code, 409)
+
+    def test_register_without_barcode_generates_sku(self):
+        r = self.client.post("/api/v1/catalog/register", {"name_fr": "Article sans code"},
+                             format="json")
+        self.assertEqual(r.status_code, 201)
+        self.assertTrue(r.json()["sku"].startswith("ART-"))
+
+
 @override_settings(OCR_PROVIDER="vision")
 class VisionLlmOcrTests(TestCase):
     """The Vision-LLM provider with an injected transport — no live model needed."""

@@ -15,7 +15,7 @@ function StockChip({ row, t }) {
   return <Chip size="small" color="success" variant="outlined" label={row.qty_on_hand} />;
 }
 
-export default function Catalog({ onBack, onLogout }) {
+export default function Catalog({ onBack, onLogout, onNewProduct }) {
   const { t } = useTranslation();
   const [q, setQ] = useState("");
   const [category, setCategory] = useState("");
@@ -54,6 +54,7 @@ export default function Catalog({ onBack, onLogout }) {
       <AppBar position="static" color="primary">
         <Toolbar sx={{ gap: 2 }}>
           <Typography variant="h6" sx={{ flexGrow: 1 }}>{t("catalog")}</Typography>
+          {onNewProduct && <Button color="inherit" onClick={onNewProduct}>＋ {t("newArticle")}</Button>}
           <Button color="inherit" onClick={onBack}>{t("pos")}</Button>
           <LangToggle />
           <Button color="inherit" onClick={onLogout}>{t("logout")}</Button>

@@ -58,6 +58,12 @@ export const catalogSearch = (params) => {
 };
 export const productDetail = (id) => request(`/catalog/products/${id}/detail`);
 export const listCategories = () => request("/catalog/categories");
+export const listTaxRates = () => request("/catalog/tax-rates/");
+// Register any article (book or supply) from its scanned barcode.
+export const barcodeLookup = (code) =>
+  request(`/catalog/lookup?barcode=${encodeURIComponent(code)}`);
+export const createProduct = (payload) =>
+  request("/catalog/register", { method: "POST", body: payload });
 
 export const checkout = (payload) =>
   request("/pos/checkout", { method: "POST", body: payload });
