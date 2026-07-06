@@ -57,15 +57,17 @@ if (-not $SkipBuild -and -not (Test-Path "frontend\dist\index.html")) {
 }
 
 # 4) .env (created once, with random secrets) -------------------------------
+# Pick n random chars WITH replacement (robust for any n; allows repeats for full entropy).
 function New-Key([int]$n) {
-    -join ((48..57) + (65..90) + (97..122) | Get-Random -Count $n | ForEach-Object { [char]$_ })
+    $chars = [char[]]((48..57) + (65..90) + (97..122))
+    -join (1..$n | ForEach-Object { $chars | Get-Random })
 }
 if (-not (Test-Path ".env")) {
     $secret = New-Key 50
     if (-not $SyncKey) { $SyncKey = New-Key 40 }
     $pcName = [System.Net.Dns]::GetHostName()
     if ($Role -eq "hub") {
-        @"
+        $envText = @"
 TEYSSIR_ROLE=hub
 TEYSSIR_STORE_CODE=$StoreCode
 TEYSSIR_DB=sqlite
@@ -74,10 +76,10 @@ DEBUG=0
 SECRET_KEY=$secret
 TEYSSIR_ALLOWED_HOSTS=localhost,127.0.0.1,$pcName,teyssir-hub.local
 TEYSSIR_CSRF_TRUSTED_ORIGINS=http://$pcName:8000,http://teyssir-hub.local:8000
-"@ | Set-Content -Encoding UTF8 ".env"
+"@
     }
     else {
-        @"
+        $envText = @"
 TEYSSIR_ROLE=till
 TEYSSIR_TERMINAL=$Terminal
 TEYSSIR_STORE_CODE=$StoreCode
@@ -86,8 +88,15 @@ TEYSSIR_SYNC_KEY=$SyncKey
 DEBUG=0
 SECRET_KEY=$secret
 TEYSSIR_ALLOWED_HOSTS=localhost,127.0.0.1
-"@ | Set-Content -Encoding UTF8 ".env"
+"@
     }
+    # Write WITHOUT a BOM: Windows PowerShell 5.1 `Set-Content -Encoding UTF8` prepends a UTF-8 BOM,
+    # which makes python-dotenv read the first key as "﻿TEYSSIR_ROLE" -> TEYSSIR_ROLE is lost
+    # and a hub would silently start as a till. UTF8Encoding($false) = no BOM (all PS versions).
+    [System.IO.File]::WriteAllText(
+        (Join-Path (Get-Location).Path ".env"),
+        ($envText -replace "`r`n", "`n"),
+        (New-Object System.Text.UTF8Encoding($false)))
     Write-Host ""
     Write-Host "  .env created." -ForegroundColor Green
     Write-Host "  SHARED SYNC KEY = $SyncKey" -ForegroundColor Yellow
