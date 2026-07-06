@@ -48,6 +48,17 @@ CSRF_TRUSTED_ORIGINS = [
     o.strip() for o in os.environ.get("TEYSSIR_CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()
 ]
 
+# HTTPS hardening — ONLY when actually served behind TLS (e.g. a cloud hub). Enabling these on the
+# shop LAN (plain HTTP) would make cookies never send and redirect-loop, so they are OFF by default.
+HTTPS = os.environ.get("TEYSSIR_HTTPS", "0") == "1"
+if HTTPS:
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_SSL_REDIRECT = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -126,7 +137,10 @@ else:
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": BASE_DIR / os.environ.get("TEYSSIR_SQLITE_NAME", default_name),
-            "OPTIONS": {"timeout": 20},
+            # transaction_mode=IMMEDIATE makes every atomic() take the write lock at BEGIN, so
+            # concurrent writes (waitress serves with multiple threads) WAIT on busy_timeout instead
+            # of failing with "database is locked" on a read->write upgrade. `timeout` = busy_timeout.
+            "OPTIONS": {"timeout": 20, "transaction_mode": "IMMEDIATE"},
         }
     }
 
@@ -221,3 +235,30 @@ MONEY_DISPLAY_DP = 2  # display 2 decimals
 STORE_MATRICULE_FISCAL = os.environ.get("TEYSSIR_MATRICULE_FISCAL", "")
 # Receipt printer target for this node: dummy | file:/path | tcp:host:port (spec §6)
 # (read at send time from TEYSSIR_PRINTER env)
+
+# --- Logging -----------------------------------------------------------------
+# The node runs headless (waitress). Persist warnings/errors to a rotating file so a shop problem
+# can be diagnosed after the fact, and echo to the console. Level via TEYSSIR_LOG_LEVEL.
+_LOG_DIR = BASE_DIR / "logs"
+_LOG_DIR.mkdir(exist_ok=True)
+_LOG_LEVEL = os.environ.get("TEYSSIR_LOG_LEVEL", "INFO").upper()
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "std": {"format": "{asctime} {levelname} {name}: {message}", "style": "{"},
+    },
+    "handlers": {
+        "console": {"class": "logging.StreamHandler", "formatter": "std"},
+        "file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": str(_LOG_DIR / "teyssir.log"),
+            "maxBytes": 2_000_000, "backupCount": 5, "formatter": "std", "encoding": "utf-8",
+        },
+    },
+    "root": {"handlers": ["console", "file"], "level": _LOG_LEVEL},
+    "loggers": {
+        # Always capture server 500s to the file, even if the root level is raised.
+        "django.request": {"handlers": ["console", "file"], "level": "ERROR", "propagate": False},
+    },
+}

@@ -1,6 +1,7 @@
 import datetime
 from decimal import Decimal
 
+from django.conf import settings
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
@@ -10,6 +11,20 @@ from teyssir.billing.services import allocate_document_number, resolve_fiscal_st
 
 def _june_2026():
     return timezone.make_aware(datetime.datetime(2026, 6, 15, 12, 0))
+
+
+class SqliteConcurrencyConfigTests(TestCase):
+    """Regression guard: concurrent till writes must WAIT, not fail with 'database is locked'.
+    See tools/stress_numbering.py for the reproduction."""
+
+    def test_sqlite_begins_immediate_transactions(self):
+        db = settings.DATABASES["default"]
+        if "sqlite3" in db["ENGINE"]:
+            self.assertEqual(
+                db["OPTIONS"].get("transaction_mode"), "IMMEDIATE",
+                "SQLite must BEGIN IMMEDIATE so concurrent writes serialise on busy_timeout "
+                "instead of erroring on a read->write lock upgrade.",
+            )
 
 
 class NumberingTests(TestCase):

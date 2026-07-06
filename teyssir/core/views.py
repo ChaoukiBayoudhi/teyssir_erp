@@ -17,5 +17,6 @@ def health(request):
             "terminal": settings.TERMINAL if settings.ROLE == "till" else None,
             "db": connection.vendor,
             "currency": settings.CURRENCY,
-        }
+        },
+        status=200 if db_ok else 503,   # so monitors/probes see the failure in the HTTP status
     )

@@ -2,8 +2,8 @@
 # End-to-end sync demo (spec §4.4): a hub + a till (C1) over real HTTP, both on SQLite.
 # Till pulls the catalogue, sells offline, pushes the sale back; we verify the hub received it.
 set -e
-cd /Users/chaoukibayoudhi/Documents/My_society/teyssir_erp
-PY=/Users/chaoukibayoudhi/Documents/My_society/teyssir_erp/.venv/bin/python
+cd "$(cd "$(dirname "$0")/.." && pwd)"      # project root (portable, no hardcoded path)
+PY="$(pwd)/.venv/bin/python"
 
 HUB="env TEYSSIR_ROLE=hub TEYSSIR_DB=sqlite TEYSSIR_SQLITE_NAME=demo_hub.sqlite3 TEYSSIR_SYNC_KEY=demo-key"
 TILL="env TEYSSIR_ROLE=till TEYSSIR_TERMINAL=C1 TEYSSIR_DB=sqlite TEYSSIR_SQLITE_NAME=demo_c1.sqlite3 \
