@@ -1,5 +1,5 @@
 <#
-    Teyssir — Windows installer
+    Teyssir - Windows installer
     ----------------------------
     Run from an *elevated* PowerShell (Run as Administrator) inside the project folder:
 
@@ -66,36 +66,38 @@ if (-not (Test-Path ".env")) {
     $secret = New-Key 50
     if (-not $SyncKey) { $SyncKey = New-Key 40 }
     $pcName = [System.Net.Dns]::GetHostName()
+    # Built as an array of lines (no here-strings: PowerShell 5.1 mis-parses here-strings in
+    # files with Unix line endings, which is what a GitHub ZIP download contains).
     if ($Role -eq "hub") {
-        $envText = @"
-TEYSSIR_ROLE=hub
-TEYSSIR_STORE_CODE=$StoreCode
-TEYSSIR_DB=sqlite
-TEYSSIR_SYNC_KEY=$SyncKey
-DEBUG=0
-SECRET_KEY=$secret
-TEYSSIR_ALLOWED_HOSTS=localhost,127.0.0.1,$pcName,teyssir-hub.local
-TEYSSIR_CSRF_TRUSTED_ORIGINS=http://$pcName:8000,http://teyssir-hub.local:8000
-"@
+        $envLines = @(
+            "TEYSSIR_ROLE=hub",
+            "TEYSSIR_STORE_CODE=$StoreCode",
+            "TEYSSIR_DB=sqlite",
+            "TEYSSIR_SYNC_KEY=$SyncKey",
+            "DEBUG=0",
+            "SECRET_KEY=$secret",
+            ("TEYSSIR_ALLOWED_HOSTS=localhost,127.0.0.1," + $pcName + ",teyssir-hub.local"),
+            ("TEYSSIR_CSRF_TRUSTED_ORIGINS=http://" + $pcName + ":8000,http://teyssir-hub.local:8000")
+        )
     }
     else {
-        $envText = @"
-TEYSSIR_ROLE=till
-TEYSSIR_TERMINAL=$Terminal
-TEYSSIR_STORE_CODE=$StoreCode
-TEYSSIR_HUB_URL=$HubUrl
-TEYSSIR_SYNC_KEY=$SyncKey
-DEBUG=0
-SECRET_KEY=$secret
-TEYSSIR_ALLOWED_HOSTS=localhost,127.0.0.1
-"@
+        $envLines = @(
+            "TEYSSIR_ROLE=till",
+            "TEYSSIR_TERMINAL=$Terminal",
+            "TEYSSIR_STORE_CODE=$StoreCode",
+            "TEYSSIR_HUB_URL=$HubUrl",
+            "TEYSSIR_SYNC_KEY=$SyncKey",
+            "DEBUG=0",
+            "SECRET_KEY=$secret",
+            "TEYSSIR_ALLOWED_HOSTS=localhost,127.0.0.1"
+        )
     }
-    # Write WITHOUT a BOM: Windows PowerShell 5.1 `Set-Content -Encoding UTF8` prepends a UTF-8 BOM,
-    # which makes python-dotenv read the first key as "﻿TEYSSIR_ROLE" -> TEYSSIR_ROLE is lost
+    # Write WITHOUT a BOM: PowerShell 5.1 'Set-Content -Encoding UTF8' prepends a UTF-8 BOM,
+    # which makes python-dotenv read the first key as '<BOM>TEYSSIR_ROLE' -> the role is lost
     # and a hub would silently start as a till. UTF8Encoding($false) = no BOM (all PS versions).
     [System.IO.File]::WriteAllText(
         (Join-Path (Get-Location).Path ".env"),
-        ($envText -replace "`r`n", "`n"),
+        (($envLines -join "`n") + "`n"),
         (New-Object System.Text.UTF8Encoding($false)))
     Write-Host ""
     Write-Host "  .env created." -ForegroundColor Green
@@ -104,7 +106,7 @@ TEYSSIR_ALLOWED_HOSTS=localhost,127.0.0.1
     Write-Host ""
 }
 else {
-    Write-Host ".env already exists — left unchanged."
+    Write-Host ".env already exists - left unchanged."
 }
 
 # 5) Database + static ------------------------------------------------------
