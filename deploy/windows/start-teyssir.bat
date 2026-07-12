@@ -26,7 +26,7 @@ echo.
 echo ==============================================================
 echo    Teyssir is running.
 echo    On THIS PC open:      http://localhost:%PORT%
-echo    From another PC:      http://THIS-PC-NAME:%PORT%
+echo    From a till PC use:   http://%COMPUTERNAME%:%PORT%   (or this PC's IP)
 echo.
 echo    Leave this window open. Close it to STOP Teyssir.
 echo ==============================================================
