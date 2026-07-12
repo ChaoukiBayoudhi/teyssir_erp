@@ -210,6 +210,38 @@ class ProductCreateView(APIView):
                         status=status.HTTP_201_CREATED)
 
 
+class PdfToDocxView(APIView):
+    """POST /tools/pdf-to-docx (multipart: file) — convert a PDF to Word (.docx) and return it
+    as a download. Free/offline (pdf2docx); layout, tables and images preserved."""
+
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        import os
+
+        from django.http import HttpResponse
+
+        from teyssir.core.pdfconvert import convert_pdf_to_docx
+
+        upload = request.FILES.get("file")
+        if not upload:
+            return Response({"detail": "file is required"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            docx_bytes = convert_pdf_to_docx(upload.read())
+        except ValueError as exc:                       # not a PDF / too big / empty
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:                               # malformed/encrypted PDF etc.
+            return Response({"detail": "conversion failed — the PDF may be damaged or protected"},
+                            status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+        name = os.path.splitext(os.path.basename(upload.name or "document"))[0] + ".docx"
+        resp = HttpResponse(
+            docx_bytes,
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        resp["Content-Disposition"] = f'attachment; filename="{name}"'
+        return resp
+
+
 class CategoryListView(APIView):
     """GET /catalog/categories — categories for the catalogue filter dropdown."""
 

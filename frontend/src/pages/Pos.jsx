@@ -6,6 +6,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { searchProducts, lookupBarcode, checkout } from "../api";
 import { enqueue, flush, pending } from "../offlineQueue";
+import CameraScanner from "../components/CameraScanner.jsx";
 import LangToggle from "../LangToggle.jsx";
 
 const TIMBRE = 1.0; // facture stamp (server snapshots the authoritative value)
@@ -14,7 +15,7 @@ const fmt = (x) => x.toFixed(2); // 2-dp display (server stores 3-dp)
 
 export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onReceiving,
                               onCustomers, onNewBook, onQuotation, onPurchaseOrders, onCatalog,
-                              onNewProduct }) {
+                              onNewProduct, onPdfConvert }) {
   const { t } = useTranslation();
   const [terminal, setTerminal] = useState("C1");
   const [menuAnchor, setMenuAnchor] = useState(null);
@@ -26,6 +27,7 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
   const [error, setError] = useState("");
   const [queued, setQueued] = useState(false);
   const [pendingCount, setPendingCount] = useState(pending().length);
+  const [camera, setCamera] = useState(false);
 
   // Replay any queued sales on mount and whenever connectivity returns (spec §4.3).
   useEffect(() => {
@@ -66,6 +68,19 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
         return setResults(hits);
       }
       setResults(await searchProducts(q));
+    } catch (err) {
+      setError(String(err.message || err));
+    }
+  };
+
+  // Camera scan -> same path as the USB reader: barcode lookup, single hit goes into the cart.
+  const onCameraCode = async (code) => {
+    setError("");
+    try {
+      const hits = await lookupBarcode(code);
+      if (hits.length === 1) return addToCart(hits[0]);
+      if (hits.length > 1) return setResults(hits);
+      setError(`${t("unknownBarcode")}: ${code}`);
     } catch (err) {
       setError(String(err.message || err));
     }
@@ -128,6 +143,7 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
               ["inventory", onStockTake],
               ["catalog", onCatalog],
               ["newArticle", onNewProduct],
+              ["pdfToWord", onPdfConvert],
               ["receiving", onReceiving],
               ["purchaseOrders", onPurchaseOrders],
               ["newBook", onNewBook],
@@ -148,12 +164,17 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
         <Grid container spacing={2}>
           <Grid item xs={12} md={7}>
             <Paper sx={{ p: 2 }}>
-              <Box component="form" onSubmit={onSearch}>
-                <TextField
-                  fullWidth autoFocus value={query} onChange={(e) => setQuery(e.target.value)}
-                  placeholder={t("scan")}
-                />
-              </Box>
+              <Stack direction="row" spacing={1} alignItems="flex-start">
+                <Box component="form" onSubmit={onSearch} sx={{ flexGrow: 1 }}>
+                  <TextField
+                    fullWidth autoFocus value={query} onChange={(e) => setQuery(e.target.value)}
+                    placeholder={t("scan")}
+                  />
+                </Box>
+                <Button variant={camera ? "contained" : "outlined"} sx={{ minWidth: 52, height: 56 }}
+                        onClick={() => setCamera((c) => !c)} aria-label={t("scanWithCamera")}>📷</Button>
+              </Stack>
+              {camera && <CameraScanner onDetect={onCameraCode} onClose={() => setCamera(false)} />}
               <List dense>
                 {results.length === 0 && (
                   <Typography color="text.secondary" sx={{ p: 1 }}>{t("noResults")}</Typography>

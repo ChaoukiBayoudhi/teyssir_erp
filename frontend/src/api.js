@@ -65,6 +65,21 @@ export const barcodeLookup = (code) =>
 export const createProduct = (payload) =>
   request("/catalog/register", { method: "POST", body: payload });
 
+// PDF -> Word (.docx). Multipart up, binary blob down.
+export async function convertPdf(file) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const headers = {};
+  if (getToken()) headers["Authorization"] = `Token ${getToken()}`;
+  const res = await fetch(`${BASE}/tools/pdf-to-docx`, { method: "POST", headers, body: fd });
+  if (!res.ok) {
+    let detail = `${res.status}`;
+    try { detail = (await res.json()).detail || detail; } catch { /* non-JSON error body */ }
+    throw new Error(detail);
+  }
+  return res.blob();
+}
+
 export const checkout = (payload) =>
   request("/pos/checkout", { method: "POST", body: payload });
 
