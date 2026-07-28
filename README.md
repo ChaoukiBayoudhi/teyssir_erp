@@ -16,6 +16,7 @@ double-entry accounting &amp; VAT, camera book registration (OCR), federated mul
   · 🏗️ <a href="docs/ARCHITECTURE.md">Architecture</a>
   · 📊 <a href="docs/IMPLEMENTATION-PROGRESS.md">Progress</a>
   · 📖 <a href="docs/BOOK-OCR-ARCHITECTURE.md">Book&nbsp;OCR</a>
+  · 📄 <a href="docs/PDF-CONVERSION.md">PDF→Word</a>
 </p>
 
 ---
@@ -26,8 +27,9 @@ POS (offline queue, barcode, ESC/POS receipts) · inventory (append-only ledger,
 stock-take) · purchasing (supplier → PO → receive → invoice) · returns/credit-notes · customers &amp;
 credit accounts · cash sessions (X/Z) · quotations → sales · **double-entry GL** (chart of accounts,
 journals, trial balance, P&amp;L, balance sheet, **monthly VAT declaration**) · **camera book
-registration + OCR** (ISBN-first; Tesseract &amp; a free offline Vision-LLM; async) · **federated
-sync** (till → store-hub → cloud-hub) with **multi-store consolidation**. 75 automated tests.
+registration + OCR** (ISBN-first; Tesseract &amp; a free offline Vision-LLM; async) · **PDF→Word**
+(async job; fast text path + layout fidelity) · **federated
+sync** (till → store-hub → cloud-hub) with **multi-store consolidation**. 102 automated tests.
 
 ## Deploy for the client (Windows)
 
@@ -45,8 +47,8 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 
 ## Backend modules
 
-- `teyssir/core` — `Money` helpers (store `Decimal(14,3)` millime, display 2 dp, `ROUND_HALF_UP`);
-  sync-ready abstract base models; SQLite WAL/PRAGMA wiring; `/health` endpoint.
+- `teyssir/core` — `Money` helpers (millime-exact arithmetic, display 2 dp); sync-ready abstract
+  base models; **`ConvertJob`** async PDF→Word; SQLite WAL/PRAGMA wiring; `/health` endpoint.
 - `teyssir/accounts` — custom `User` + RBAC capability permissions and a `seed_rbac` command (§10).
 - `teyssir/catalog` — `Product`, `Category`, `TaxRate`, `Barcode`.
 - `teyssir/inventory` — append-only `StockMovement` ledger + `apply_movement` / `recompute_on_hand`.
@@ -79,3 +81,25 @@ Set `TEYSSIR_ROLE=hub` and the `POSTGRES_*` vars, uncomment `psycopg[binary]` in
 |------|----|---------|
 | `hub` ("Teyssir Hub", PC-1) | PostgreSQL | source of truth, sync master, backups, reporting |
 | `till` (C1/C2/C3) | SQLite | offline-capable POS; syncs to the hub |
+
+---
+
+## PDF → Word Conversion
+
+Convert supplier PDFs and catalogues to editable Word (`.docx`) from the PWA (**Menu → PDF → Word**).
+
+| Mode | Use for | Engine |
+|------|---------|--------|
+| **Auto** (default) | Most documents | Picks fast vs layout by text density |
+| **Rapide / fast** | Text invoices, reports | PyMuPDF → python-docx (**much faster**) |
+| **Fidèle / layout** | Graphic / complex layout | Tuned pdf2docx |
+
+**Behaviour**
+
+* Small PDFs (≤2 MB, ≤5 pages) convert **synchronously** (same 200 download as before).
+* Larger files create a **`ConvertJob`**, run in a **background thread** on Windows Hub
+  (`TEYSSIR_CONVERT_EXECUTOR=thread`), and the UI polls until ready — **POS does not freeze**.
+* Scanned image-only PDFs are a poor fit (no OCR in this tool); use Book OCR for covers/ISBN.
+
+Full design, tuning, and troubleshooting: **[docs/PDF-CONVERSION.md](docs/PDF-CONVERSION.md)**.
+Windows Hub tips (Defender exclusions): **[docs/INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md)**.

@@ -540,9 +540,11 @@ erDiagram
 
 ```
 teyssir/
-├─ core/            settings, money type, i18n, audit, base service layer
+├─ core/            settings, money type, i18n, audit, base service layer,
+│                   **ConvertJob** (async PDF→Word; local-only, mirrors ScanJob)
 ├─ accounts/        users, roles, permissions, auth, sessions, 2FA(owner/admin)
-├─ catalog/         products, categories, units, barcodes, images, price lists, tax rates
+├─ catalog/         products, categories, units, barcodes, images, price lists, tax rates,
+│                   **ScanJob** (async book OCR)
 ├─ inventory/       stock ledger, valuation, reorder rules, stock-take, adjustments, transfers
 ├─ purchasing/      suppliers, purchase orders, goods receipts, purchase invoices
 ├─ sales/ (POS)     cart, sale, payment, discount/promo, return/exchange, quotation, reservation
@@ -557,9 +559,24 @@ teyssir/
 ├─ admin_settings/  store identity (matricule fiscal), tax rates, **fiscal_stamp_fee** (default
 │                   1.000 DT, per-doc-type override), terminals/series, devices, backups config
 └─ api/             DRF routers, versioned /api/v1, OpenAPI schema
+                    (incl. `/tools/pdf-to-docx` job + download)
 ```
 Each app exposes a **service layer** (`services.py`) — views call services, services own
 transactions. This keeps modules decoupled and makes a future microservice extraction mechanical.
+
+### Async local jobs (ScanJob & ConvertJob)
+
+Both are **node-local** (never synced). The HTTP contract is identical in spirit:
+
+| Concern | Book OCR | PDF→Word |
+|---------|----------|----------|
+| Model | `catalog.ScanJob` | `core.ConvertJob` |
+| Executor env | `TEYSSIR_SCAN_EXECUTOR` | `TEYSSIR_CONVERT_EXECUTOR` |
+| Backends | `inline` \| `thread` | `inline` \| `thread` (Windows default `thread`) |
+| Enqueue | `enqueue_scan` | `enqueue_convert` |
+| Client | poll until DONE | poll until DONE → FileResponse download |
+
+See [PDF-CONVERSION.md](PDF-CONVERSION.md) and [BOOK-OCR-ARCHITECTURE.md](BOOK-OCR-ARCHITECTURE.md).
 
 ---
 
