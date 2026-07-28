@@ -211,34 +211,187 @@ class ProductCreateView(APIView):
 
 
 class PdfToDocxView(APIView):
-    """POST /tools/pdf-to-docx (multipart: file) — convert a PDF to Word (.docx) and return it
-    as a download. Free/offline (pdf2docx); layout, tables and images preserved."""
+    """POST /tools/pdf-to-docx — convert a PDF to Word (.docx).
+
+    * Tiny text PDFs (≤2 MB, ≤5 pages): run inline and return **200** + FileResponse
+      (backward-compatible with the original sync client / tests).
+    * Larger / slow jobs: create a ``ConvertJob``, enqueue (inline|thread), return
+      **202** ``{job_id, status}`` — client polls ``GET …/<job_id>`` then downloads.
+    """
 
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
         import os
+        import time
 
+        from django.conf import settings
         from django.http import HttpResponse
 
-        from teyssir.core.pdfconvert import convert_pdf_to_docx
+        from teyssir.core.convert_jobs import enqueue_convert
+        from teyssir.core.models import ConvertJob
+        from teyssir.core.pdfconvert import (
+            convert_pdf_to_docx, convert_workspace, profile_pdf, validate_pdf_header,
+        )
 
         upload = request.FILES.get("file")
         if not upload:
             return Response({"detail": "file is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        mode = (request.data.get("mode") or ConvertJob.AUTO).lower()
+        if mode not in (ConvertJob.FAST, ConvertJob.LAYOUT, ConvertJob.AUTO):
+            mode = ConvertJob.AUTO
+        force_async = str(request.data.get("async", "")).lower() in ("1", "true", "yes")
+
+        # Stream to a job workspace via chunks — never upload.read() into a giant buffer first.
+        job = ConvertJob.objects.create(
+            status=ConvertJob.PENDING, mode=mode,
+            original_name=os.path.basename(upload.name or "document.pdf"),
+        )
+        workspace = convert_workspace(job.id)
+        src_abs = os.path.join(workspace, "in.pdf")
+        size = 0
         try:
-            docx_bytes = convert_pdf_to_docx(upload.read())
-        except ValueError as exc:                       # not a PDF / too big / empty
+            with open(src_abs, "wb") as out:
+                for chunk in upload.chunks():
+                    size += len(chunk)
+                    if size > 25 * 1024 * 1024:
+                        raise ValueError("PDF larger than 25 MB")
+                    out.write(chunk)
+            with open(src_abs, "rb") as fh:
+                pdf_bytes = fh.read()
+            validate_pdf_header(pdf_bytes)
+            profile = profile_pdf(pdf_bytes)
+        except ValueError as exc:
+            job.status = ConvertJob.FAILED
+            job.error = str(exc)
+            job.save(update_fields=["status", "error", "updated_at"])
+            self._cleanup_job_files(job)
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception:                               # malformed/encrypted PDF etc.
+        except Exception:
+            job.status = ConvertJob.FAILED
+            job.error = "invalid upload"
+            job.save(update_fields=["status", "error", "updated_at"])
+            self._cleanup_job_files(job)
             return Response({"detail": "conversion failed — the PDF may be damaged or protected"},
                             status=status.HTTP_422_UNPROCESSABLE_ENTITY)
-        name = os.path.splitext(os.path.basename(upload.name or "document"))[0] + ".docx"
-        resp = HttpResponse(
-            docx_bytes,
-            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+        job.input_path = os.path.join("convert", str(job.id), "in.pdf")
+        job.output_path = os.path.join("convert", str(job.id), "out.docx")
+        job.page_count = profile.pages
+        job.save(update_fields=["input_path", "output_path", "page_count", "updated_at"])
+
+        # Sync fast-path for tiny PDFs (unless client forced async).
+        if profile.fits_sync and not force_async:
+            t0 = time.perf_counter()
+            try:
+                docx_bytes, used, _ = convert_pdf_to_docx(pdf_bytes, mode=mode)
+            except Exception:
+                job.status = ConvertJob.FAILED
+                job.error = "conversion failed"
+                job.save(update_fields=["status", "error", "updated_at"])
+                return Response({"detail": "conversion failed — the PDF may be damaged or protected"},
+                                status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+            dst_abs = os.path.join(str(settings.MEDIA_ROOT), job.output_path)
+            with open(dst_abs, "wb") as fh:
+                fh.write(docx_bytes)
+            job.status = ConvertJob.DONE
+            job.mode_used = used
+            job.elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            from django.utils import timezone
+            job.finished_at = timezone.now()
+            job.save()
+            name = os.path.splitext(job.original_name or "document")[0] + ".docx"
+            resp = HttpResponse(
+                docx_bytes,
+                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            resp["Content-Disposition"] = f'attachment; filename="{name}"'
+            resp["X-Convert-Job-Id"] = str(job.id)
+            resp["X-Convert-Mode"] = used
+            return resp
+
+        enqueue_convert(job.id)
+        return Response(
+            {
+                "job_id": str(job.id),
+                "status": "pending",
+                "pages": profile.pages,
+                "mode": mode,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    @staticmethod
+    def _cleanup_job_files(job):
+        import os
+        import shutil
+
+        from django.conf import settings
+
+        try:
+            root = os.path.join(str(settings.MEDIA_ROOT), "convert", str(job.id))
+            shutil.rmtree(root, ignore_errors=True)
+        except Exception:
+            pass
+
+
+class PdfToDocxJobView(APIView):
+    """GET /tools/pdf-to-docx/<job_id> — poll conversion status."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        from teyssir.core.models import ConvertJob
+
+        job = ConvertJob.objects.filter(pk=pk).first()
+        if not job:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        payload = {
+            "job_id": str(job.id),
+            "status": job.status.lower(),
+            "mode": job.mode,
+            "mode_used": job.mode_used,
+            "pages": job.page_count,
+            "elapsed_ms": job.elapsed_ms,
+            "original_name": job.original_name,
+        }
+        if job.status == ConvertJob.DONE:
+            payload["download_url"] = f"/api/v1/tools/pdf-to-docx/{job.id}/download"
+        if job.status == ConvertJob.FAILED:
+            payload["error"] = job.error or "conversion failed"
+        return Response(payload)
+
+
+class PdfToDocxDownloadView(APIView):
+    """GET /tools/pdf-to-docx/<job_id>/download — stream the .docx via FileResponse."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        import os
+
+        from django.conf import settings
+        from django.http import FileResponse
+
+        from teyssir.core.models import ConvertJob
+
+        job = ConvertJob.objects.filter(pk=pk).first()
+        if not job:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        if job.status != ConvertJob.DONE:
+            return Response({"detail": f"job is {job.status.lower()}"},
+                            status=status.HTTP_409_CONFLICT)
+        abs_path = os.path.join(str(settings.MEDIA_ROOT), job.output_path)
+        if not os.path.isfile(abs_path):
+            return Response({"detail": "output missing"}, status=status.HTTP_404_NOT_FOUND)
+        name = os.path.splitext(job.original_name or "document")[0] + ".docx"
+        resp = FileResponse(
+            open(abs_path, "rb"),
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
         resp["Content-Disposition"] = f'attachment; filename="{name}"'
+        resp["X-Convert-Mode"] = job.mode_used or job.mode
         return resp
 
 
@@ -333,10 +486,12 @@ class CustomerViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
 class CheckoutView(APIView):
     """Build a sale from a cart and finalize it (offline-capable, spec §13)."""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [capability("create_sale")]
 
     @transaction.atomic
     def post(self, request):
+        from teyssir.sales.services import DiscountError
+
         ser = CheckoutSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
@@ -345,6 +500,7 @@ class CheckoutView(APIView):
         sale = Sale.objects.create(
             terminal=data["terminal"], status=Sale.DRAFT,
             customer_id=str(customer_id) if customer_id else "",
+            discount=data.get("discount") or 0,
             cash_session=current_session(data["terminal"]),  # attribute to the open shift (§13.3)
             created_by=request.user, origin_terminal=data["terminal"],
         )
@@ -358,7 +514,10 @@ class CheckoutView(APIView):
                 tax_rate=(product.tax_rate.rate_percent if product.tax_rate else 0),
                 origin_terminal=data["terminal"],
             )
-        invoice = finalize_sale(sale, payment_method=data["payment_method"])
+        try:
+            invoice = finalize_sale(sale, payment_method=data["payment_method"])
+        except DiscountError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         if data["payment_method"] == "ACCOUNT" and customer_id:
             charge_account(Customer.objects.get(pk=customer_id), sale.total, "SALE", sale.id)
         _print_receipt(sale)
@@ -366,10 +525,12 @@ class CheckoutView(APIView):
             {
                 "invoice_number": invoice.fiscal_number,
                 "subtotal": str(sale.subtotal),
+                "discount": str(sale.discount),
                 "tax_total": str(sale.tax_total),
                 "timbre": str(sale.timbre_amount_snapshot),
                 "total": str(sale.total),
                 "total_display": display(sale.total),
+                "printed": True,
             },
             status=status.HTTP_201_CREATED,
         )
@@ -570,7 +731,7 @@ class StockTakeView(APIView):
 
 
 class QuotationCreateView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [capability("create_sale")]
 
     def post(self, request):
         ser = QuotationCreateSerializer(data=request.data)
@@ -590,7 +751,7 @@ class QuotationCreateView(APIView):
 
 
 class QuotationConvertView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [capability("create_sale")]
 
     def post(self, request, pk):
         q = Quotation.objects.filter(pk=pk).first()
@@ -603,7 +764,12 @@ class QuotationConvertView(APIView):
             )
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        return Response({"invoice_number": invoice.fiscal_number}, status=status.HTTP_201_CREATED)
+        sale = Sale.objects.filter(invoice=invoice).first() or invoice.sale
+        _print_receipt(sale)
+        return Response(
+            {"invoice_number": invoice.fiscal_number, "total_display": display(sale.total)},
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class ReservationCreateView(APIView):
