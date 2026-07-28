@@ -4,14 +4,17 @@ import {
   ListItemText, IconButton, Stack, Button, Divider, Alert, Select, MenuItem, Menu, Snackbar, Chip,
 } from "@mui/material";
 import { useTranslation } from "react-i18next";
-import { searchProducts, lookupBarcode, checkout } from "../api";
+import { searchProducts, lookupBarcode, checkout, listCustomers } from "../api";
 import { enqueue, flush, pending } from "../offlineQueue";
 import CameraScanner from "../components/CameraScanner.jsx";
 import LangToggle from "../LangToggle.jsx";
 
 const TIMBRE = 1.0; // facture stamp (server snapshots the authoritative value)
-const r3 = (x) => Math.round(x * 1000) / 1000;
-const fmt = (x) => x.toFixed(2); // 2-dp display (server stores 3-dp)
+// Millime-exact helpers mirroring backend money.py (1 DT = 1000 millimes).
+const toMillimes = (x) => Math.round(Number(x) * 1000);
+const fromMillimes = (m) => m / 1000;
+const r3 = (x) => fromMillimes(toMillimes(x));
+const fmt = (x) => Number(x).toFixed(2); // 2-dp display (server stores 3-dp)
 
 export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onReceiving,
                               onCustomers, onNewBook, onQuotation, onPurchaseOrders, onCatalog,
@@ -21,8 +24,11 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
-  const [cart, setCart] = useState([]);
+  const [cart, setCart] = useState([]); // {product, qty, discountPct}
+  const [globalDiscountPct, setGlobalDiscountPct] = useState(0);
   const [method, setMethod] = useState("CASH");
+  const [customers, setCustomers] = useState([]);
+  const [customerId, setCustomerId] = useState("");
   const [done, setDone] = useState(null);
   const [error, setError] = useState("");
   const [queued, setQueued] = useState(false);
@@ -41,18 +47,28 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
     return () => window.removeEventListener("online", replay);
   }, []);
 
+  useEffect(() => {
+    listCustomers().then(setCustomers).catch(() => {});
+  }, []);
+
   const addToCart = (product) => {
     setResults([]);
     setQuery("");
     setCart((c) => {
       const found = c.find((l) => l.product.id === product.id);
-      if (found) return c.map((l) => (l.product.id === product.id ? { ...l, qty: l.qty + 1 } : l));
-      return [...c, { product, qty: 1 }];
+      if (found) {
+        return c.map((l) => (l.product.id === product.id ? { ...l, qty: l.qty + 1 } : l));
+      }
+      return [...c, { product, qty: 1, discountPct: 0 }];
     });
   };
 
   const setQty = (id, qty) =>
     setCart((c) => c.map((l) => (l.product.id === id ? { ...l, qty: Math.max(1, qty) } : l)));
+  const setLineDiscount = (id, pct) =>
+    setCart((c) => c.map((l) => (
+      l.product.id === id ? { ...l, discountPct: Math.min(100, Math.max(0, Number(pct) || 0)) } : l
+    )));
   const removeLine = (id) => setCart((c) => c.filter((l) => l.product.id !== id));
 
   const onSearch = async (e) => {
@@ -86,35 +102,77 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
     }
   };
 
+  // Preview mirrors backend: line discount → header discount → TVA (all before/on HT).
   const totals = useMemo(() => {
-    let subtotal = 0;
-    let tax = 0;
+    let grossM = 0;
+    const lineBases = []; // millimes after line discount
     for (const l of cart) {
       const price = Number(l.product.sale_price);
       const rate = Number(l.product.tax_rate_percent || 0);
-      const base = r3(l.qty * price);
-      subtotal = r3(subtotal + base);
-      tax = r3(tax + r3((base * rate) / 100));
+      const gross = toMillimes(l.qty * price);
+      const lineDisc = Math.round(gross * (Number(l.discountPct) || 0) / 100);
+      const base = gross - lineDisc;
+      lineBases.push({ base, rate, lineDisc });
+      grossM += base;
     }
+    const headerDiscM = Math.round(grossM * (Number(globalDiscountPct) || 0) / 100);
+    let allocated = 0;
+    let subtotalM = 0;
+    let taxM = 0;
+    lineBases.forEach((lb, i) => {
+      let share;
+      if (!headerDiscM || !grossM) share = 0;
+      else if (i === lineBases.length - 1) share = headerDiscM - allocated;
+      else {
+        share = Math.round(headerDiscM * lb.base / grossM);
+        allocated += share;
+      }
+      const adj = lb.base - share;
+      subtotalM += adj;
+      taxM += Math.round(adj * lb.rate / 100);
+    });
     const timbre = cart.length ? TIMBRE : 0;
-    return { subtotal, tax, timbre, total: r3(subtotal + tax + timbre) };
-  }, [cart]);
+    const subtotal = fromMillimes(subtotalM);
+    const tax = fromMillimes(taxM);
+    const discount = fromMillimes(headerDiscM);
+    return {
+      subtotal: r3(subtotal),
+      discount: r3(discount),
+      tax: r3(tax),
+      timbre,
+      total: r3(subtotal + tax + timbre),
+      lineDiscounts: lineBases.map((lb) => fromMillimes(lb.lineDisc)),
+    };
+  }, [cart, globalDiscountPct]);
 
   const pay = async () => {
     setError("");
+    if (method === "ACCOUNT" && !customerId) {
+      setError(t("customerRequired"));
+      return;
+    }
     const payload = {
       terminal,
       payment_method: method,
-      lines: cart.map((l) => ({ product: l.product.id, qty: String(l.qty) })),
+      discount: String(totals.discount),
+      lines: cart.map((l, i) => ({
+        product: l.product.id,
+        qty: String(l.qty),
+        discount: String(r3(totals.lineDiscounts[i] || 0)),
+      })),
     };
+    if (customerId) payload.customer = customerId;
     try {
       const res = await checkout(payload);
       setDone(res);
       setCart([]);
+      setGlobalDiscountPct(0);
+      setCustomerId("");
     } catch (err) {
       if (err.offline) {
         setPendingCount(enqueue(payload)); // node unreachable — hold and replay later
         setCart([]);
+        setGlobalDiscountPct(0);
         setQueued(true);
       } else {
         setError(String(err.message || err));
@@ -200,30 +258,53 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
                   <Box sx={{ flexGrow: 1 }}>
                     <Typography>{l.product.name_fr}</Typography>
                     <Typography variant="caption" color="text.secondary">
-                      {fmt(Number(l.product.sale_price))} DT
+                      {fmt(Number(l.product.sale_price))} DT · TVA {l.product.tax_rate_percent || 0}%
                     </Typography>
                   </Box>
                   <TextField
                     size="small" type="number" label={t("qty")} value={l.qty}
                     onChange={(e) => setQty(l.product.id, parseInt(e.target.value || "1", 10))}
-                    sx={{ width: 84 }} inputProps={{ min: 1 }}
+                    sx={{ width: 72 }} inputProps={{ min: 1 }}
+                  />
+                  <TextField
+                    size="small" type="number" label={t("discPct")} value={l.discountPct}
+                    onChange={(e) => setLineDiscount(l.product.id, e.target.value)}
+                    sx={{ width: 72 }} inputProps={{ min: 0, max: 100 }}
                   />
                   <IconButton onClick={() => removeLine(l.product.id)} aria-label="remove">✕</IconButton>
                 </Stack>
               ))}
 
               <Divider sx={{ my: 2 }} />
+              <TextField
+                size="small" type="number" label={t("globalDiscPct")}
+                value={globalDiscountPct}
+                onChange={(e) => setGlobalDiscountPct(Math.min(100, Math.max(0, Number(e.target.value) || 0)))}
+                sx={{ mb: 1, width: "100%" }} inputProps={{ min: 0, max: 100 }}
+              />
               <Row label={t("subtotal")} value={fmt(totals.subtotal)} />
               <Row label={t("tva")} value={fmt(totals.tax)} />
               <Row label={t("timbre")} value={fmt(totals.timbre)} />
               <Row label={t("total")} value={`${fmt(totals.total)} DT`} bold />
 
-              <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
+              <Stack direction="row" spacing={1} sx={{ mt: 2 }} flexWrap="wrap" useFlexGap>
                 <Select size="small" value={method} onChange={(e) => setMethod(e.target.value)} sx={{ minWidth: 120 }}>
                   <MenuItem value="CASH">{t("cash")}</MenuItem>
                   <MenuItem value="CARD">{t("card")}</MenuItem>
                   <MenuItem value="ACCOUNT">{t("account")}</MenuItem>
                 </Select>
+                {method === "ACCOUNT" && (
+                  <Select
+                    size="small" value={customerId} displayEmpty
+                    onChange={(e) => setCustomerId(e.target.value)}
+                    sx={{ minWidth: 160 }}
+                  >
+                    <MenuItem value="">{t("selectCustomer")}</MenuItem>
+                    {customers.map((c) => (
+                      <MenuItem key={c.id} value={c.id}>{c.name}</MenuItem>
+                    ))}
+                  </Select>
+                )}
                 <Button
                   variant="contained" size="large" fullWidth disabled={!cart.length} onClick={pay}
                 >

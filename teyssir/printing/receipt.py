@@ -7,7 +7,7 @@ from collections import defaultdict
 
 from django.conf import settings
 
-from teyssir.core.money import display
+from teyssir.core.money import display, line_tax, to_money
 
 from .escpos import Escpos
 
@@ -20,29 +20,34 @@ def _rate(rate):
 
 
 def _receipt_model(sale, store_name="Teyssir Library"):
+    """Build the receipt view-model. TVA uses ``line_tax`` (millime HALF_UP) so printed
+    breakdown matches booked ``sale.tax_total`` — never a raw float multiply."""
     invoice = getattr(sale, "invoice", None)
-    by_rate = defaultdict(lambda: [0, 0])  # rate -> [base, tax]
-    for line in sale.lines.select_related("product").all():
+    by_rate = defaultdict(lambda: [to_money(0), to_money(0)])  # rate -> [base, tax]
+    lines = list(sale.lines.select_related("product").all())
+    for line in lines:
         base = line.line_total
         rate = line.tax_rate
-        tax = (base * rate / 100)
-        by_rate[rate][0] += base
-        by_rate[rate][1] += tax
+        tax = line_tax(base, rate)
+        by_rate[rate][0] = to_money(by_rate[rate][0] + base)
+        by_rate[rate][1] = to_money(by_rate[rate][1] + tax)
+    payments = list(sale.payments.all())
     return {
         "store": store_name,
         "matricule_fiscal": getattr(settings, "STORE_MATRICULE_FISCAL", ""),
         "number": invoice.fiscal_number if invoice else "",
         "terminal": sale.terminal,
         "lines": [
-            (line.product.name_fr, line.qty, line.unit_price, line.line_total)
-            for line in sale.lines.select_related("product").all()
+            (line.product.name_fr, line.qty, line.unit_price, line.discount, line.line_total)
+            for line in lines
         ],
+        "discount": sale.discount,
         "by_rate": sorted(by_rate.items()),
         "subtotal": sale.subtotal,
         "tax_total": sale.tax_total,
         "timbre": sale.timbre_amount_snapshot,
         "total": sale.total,
-        "payments": [(p.method, p.amount) for p in sale.payments.all()],
+        "payments": [(p.method, p.amount) for p in payments],
     }
 
 
@@ -57,15 +62,18 @@ def render_sale_receipt(sale, store_name="Teyssir Library"):
     p.line(f"Facture: {m['number']}")
     p.line(f"Caisse:  {m['terminal']}")
     p.rule()
-    for name, qty, unit, total in m["lines"]:
+    for name, qty, unit, disc, total in m["lines"]:
         p.line(name[: p.width])
-        p.row(f"  {qty} x {display(unit)}", f"{display(total)} DT")
+        left = f"  {qty} x {display(unit)}"
+        if disc:
+            left += f" -{display(disc)}"
+        p.row(left, f"{display(total)} DT")
     p.rule()
-    p.row("Sous-total", f"{display(m['subtotal'])} DT")
+    p.row("Sous-total HT", f"{display(m['subtotal'])} DT")
     for rate, (base, tax) in m["by_rate"]:
-        p.row(f"TVA {_rate(rate)}%", f"{display(tax)} DT")
+        p.row(f"TVA {_rate(rate)}% (base {display(base)})", f"{display(tax)} DT")
     p.row("Timbre fiscal", f"{display(m['timbre'])} DT")
-    p.bold(True).size(1, 2).row("TOTAL", f"{display(m['total'])} DT").size(1, 1).bold(False)
+    p.bold(True).size(1, 2).row("TOTAL TTC", f"{display(m['total'])} DT").size(1, 1).bold(False)
     for method, amount in m["payments"]:
         p.row(method, f"{display(amount)} DT")
     p.feed().align("center").line("Merci de votre visite").feed(3).cut().kick()
@@ -84,15 +92,18 @@ def render_text(sale, store_name="Teyssir Library", width=42):
         gap = max(1, width - len(left) - len(right))
         return left + " " * gap + right
 
-    for name, qty, unit, total in m["lines"]:
+    for name, qty, unit, disc, total in m["lines"]:
         out.append(name[:width])
-        out.append(row(f"  {qty} x {display(unit)}", f"{display(total)} DT"))
+        left = f"  {qty} x {display(unit)}"
+        if disc:
+            left += f" -{display(disc)}"
+        out.append(row(left, f"{display(total)} DT"))
     out.append("-" * width)
-    out.append(row("Sous-total", f"{display(m['subtotal'])} DT"))
+    out.append(row("Sous-total HT", f"{display(m['subtotal'])} DT"))
     for rate, (base, tax) in m["by_rate"]:
         out.append(row(f"TVA {_rate(rate)}%", f"{display(tax)} DT"))
     out.append(row("Timbre fiscal", f"{display(m['timbre'])} DT"))
-    out.append(row("TOTAL", f"{display(m['total'])} DT"))
+    out.append(row("TOTAL TTC", f"{display(m['total'])} DT"))
     for method, amount in m["payments"]:
         out.append(row(method, f"{display(amount)} DT"))
     out += ["", "Merci de votre visite".center(width)]

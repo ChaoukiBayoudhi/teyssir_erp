@@ -157,6 +157,22 @@ class SyncTests(TestCase):
         replicated = Book.objects.get(pk=book.pk)
         self.assertEqual(replicated.contributors.first().contributor.name, "Saint-Exupéry")
 
+    def test_master_pull_preserves_local_qty_on_hand(self):
+        """Hub Product snapshot must not clobber the till's stock cache (fold over movements)."""
+        self.product.qty_on_hand = Decimal("42.000")
+        self.product.sale_price = Decimal("0.900")  # hub price change
+        self.product.save(update_fields=["qty_on_hand", "sale_price", "updated_at"])
+        collected = collect_master_changes()
+
+        # Simulate till local stock after offline sales, while hub still has old price/qty in payload
+        Product.objects.filter(pk=self.product.pk).update(
+            qty_on_hand=Decimal("7.000"), sale_price=Decimal("0.850"),
+        )
+        apply_master_changes(collected["records"], config=collected["config"])
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.qty_on_hand, Decimal("7.000"))  # local fold preserved
+        self.assertEqual(self.product.sale_price, Decimal("0.900"))   # hub price applied
+
     def test_fetch_missing_media_downloads_cover_files(self):
         import tempfile
         from io import BytesIO
