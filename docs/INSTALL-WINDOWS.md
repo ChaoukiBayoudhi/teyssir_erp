@@ -217,6 +217,26 @@ Sans configuration, la saisie du livre reste **manuelle** (aucune erreur, juste 
 </details>
 
 <details>
+<summary><b>PDF → Word (rapide, non-bloquant)</b></summary>
+
+Sur le Hub Windows la conversion tourne **en arrière-plan** par défaut
+(`TEYSSIR_CONVERT_EXECUTOR=thread`) pour ne pas geler la caisse. Les petits PDF texte
+passent en mode **Rapide** (PyMuPDF → Word) ; les PDF mixtes utilisent pdf2docx optimisé.
+Optionnel dans `.env` : `TEYSSIR_CONVERT_EXECUTOR=inline` (tests) ou `thread`.
+
+### Notes de performance (IMPORTANT)
+
+* L’UI n’est **plus bloquée** : file d’attente → traitement → téléchargement.
+* Les **gros PDF** tournent en worker thread ; la caisse / API restent disponibles.
+* Stockez `media\` sur un **SSD** local (pas un partage réseau lent).
+* **Antivirus** : excluez du scan temps réel Windows Defender :
+  * `media\tmp`
+  * `media\convert`
+  sinon chaque écriture temporaire peut ajouter des secondes.
+* Guide complet : [PDF-CONVERSION.md](PDF-CONVERSION.md).
+</details>
+
+<details>
 <summary><b>Hub sur PostgreSQL (magasin à fort volume)</b></summary>
 
 Installez PostgreSQL, créez une base, puis dans le `.env` du Hub : `TEYSSIR_DB=postgres` et
