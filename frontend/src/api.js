@@ -65,16 +65,46 @@ export const barcodeLookup = (code) =>
 export const createProduct = (payload) =>
   request("/catalog/register", { method: "POST", body: payload });
 
-// PDF -> Word (.docx). Multipart up, binary blob down.
-export async function convertPdf(file) {
+// PDF -> Word (.docx). Tiny PDFs return the blob immediately (200); larger jobs return
+// 202 {job_id} and must be polled, then downloaded (non-blocking Windows Hub path).
+export async function convertPdf(file, { mode = "auto", forceAsync = false } = {}) {
   const fd = new FormData();
   fd.append("file", file);
+  fd.append("mode", mode);
+  if (forceAsync) fd.append("async", "1");
   const headers = {};
   if (getToken()) headers["Authorization"] = `Token ${getToken()}`;
   const res = await fetch(`${BASE}/tools/pdf-to-docx`, { method: "POST", headers, body: fd });
   if (!res.ok) {
     let detail = `${res.status}`;
-    try { detail = (await res.json()).detail || detail; } catch { /* non-JSON error body */ }
+    try { detail = (await res.json()).detail || detail; } catch { /* non-JSON */ }
+    throw new Error(detail);
+  }
+  if (res.status === 202) {
+    const meta = await res.json();
+    const job = await pollConvertJob(meta.job_id);
+    if (job.status === "failed") throw new Error(job.error || "conversion failed");
+    return downloadConvertJob(job.job_id);
+  }
+  return res.blob();
+}
+
+export async function pollConvertJob(jobId, { interval = 800, tries = 300 } = {}) {
+  for (let i = 0; i < tries; i++) {
+    const job = await request(`/tools/pdf-to-docx/${jobId}`);
+    if (job.status !== "pending" && job.status !== "running") return job;
+    await new Promise((r) => setTimeout(r, interval));
+  }
+  throw new Error("conversion timed out");
+}
+
+export async function downloadConvertJob(jobId) {
+  const headers = {};
+  if (getToken()) headers["Authorization"] = `Token ${getToken()}`;
+  const res = await fetch(`${BASE}/tools/pdf-to-docx/${jobId}/download`, { headers });
+  if (!res.ok) {
+    let detail = `${res.status}`;
+    try { detail = (await res.json()).detail || detail; } catch { /* non-JSON */ }
     throw new Error(detail);
   }
   return res.blob();
