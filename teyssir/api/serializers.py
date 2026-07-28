@@ -99,6 +99,19 @@ class CheckoutSerializer(serializers.Serializer):
         choices=["CASH", "CARD", "ACCOUNT"], default="CASH",
     )
     customer = serializers.UUIDField(required=False, allow_null=True)
+    # Global (ticket) discount in TND HT — applied before TVA, after line discounts.
+    discount = serializers.DecimalField(
+        max_digits=14, decimal_places=3, required=False, default=0,
+    )
+
+    def validate(self, data):
+        if data.get("payment_method") == "ACCOUNT" and not data.get("customer"):
+            raise serializers.ValidationError(
+                {"customer": "customer is required when payment_method is ACCOUNT"}
+            )
+        if not data.get("lines"):
+            raise serializers.ValidationError({"lines": "at least one line is required"})
+        return data
 
 
 class ReturnLineSerializer(serializers.Serializer):

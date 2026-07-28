@@ -62,6 +62,29 @@ class FinalizeSaleTests(TestCase):
         with self.assertRaises(ValueError):
             finalize_sale(sale)
 
+    def test_line_and_header_discount_before_vat(self):
+        sale = self._draft_with_one_line()
+        line = sale.lines.get()
+        line.discount = Decimal("0.255")  # 10% of 2.550
+        line.save(update_fields=["discount"])
+        sale.discount = Decimal("0.255")  # further 10% of remaining, allocated
+        sale.save(update_fields=["discount"])
+        finalize_sale(sale, payment_method="CASH")
+        sale.refresh_from_db()
+        # 2.550 - 0.255 = 2.295; header 0.255 → HT 2.040; TVA 7% = 0.143; timbre 1.000
+        self.assertEqual(sale.subtotal, Decimal("2.040"))
+        self.assertEqual(sale.tax_total, Decimal("0.143"))
+        self.assertEqual(sale.total, Decimal("3.183"))
+
+    def test_discount_cannot_exceed_line(self):
+        from teyssir.sales.services import DiscountError
+        sale = self._draft_with_one_line()
+        line = sale.lines.get()
+        line.discount = Decimal("9.000")
+        line.save(update_fields=["discount"])
+        with self.assertRaises(DiscountError):
+            finalize_sale(sale)
+
 
 class ReturnTests(TestCase):
     def setUp(self):
@@ -94,6 +117,21 @@ class ReturnTests(TestCase):
         self.assertEqual(invoice.fiscal_number, "C1-202606-0001")         # FACTURE series, separate
         self.assertEqual(StockMovement.objects.filter(reason="RETURN").count(), 1)
         self.assertEqual(self.product.movements.filter(reason="RETURN").count(), 1)
+
+    def test_return_rejects_over_qty_and_unknown_product(self):
+        sale = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
+        SaleLine.objects.create(sale=sale, product=self.product, qty=Decimal("2"),
+                                unit_price=Decimal("0.850"), tax_rate=Decimal("7.00"))
+        finalize_sale(sale, when=self.when)
+        other = Product.objects.create(sku="OTHER", name_fr="Autre", sale_price=Decimal("1.000"))
+        with self.assertRaises(ValueError):
+            process_return(original_sale=sale, items=[{
+                "product_id": other.id, "qty": "1", "unit_price": "1.000", "tax_rate": "0",
+            }])
+        with self.assertRaises(ValueError):
+            process_return(original_sale=sale, items=[{
+                "product_id": self.product.id, "qty": "3", "unit_price": "0.850", "tax_rate": "7",
+            }])
 
 
 class CashSessionTests(TestCase):
