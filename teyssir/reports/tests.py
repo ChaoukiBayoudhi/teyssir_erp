@@ -22,7 +22,7 @@ class SalesReportTests(TestCase):
         self.product = Product.objects.create(
             sku="PEN", name_fr="Stylo Bic", tax_rate=tva7, sale_price=Decimal("0.850"),
         )
-        receive_goods(product_id=self.product.id, qty=Decimal("100"), unit_cost=Decimal("0.400"))
+        receive_goods(product_id=self.product.id, qty=100, unit_cost=Decimal("0.400"))
         for q in ("3", "2"):
             sale = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
             SaleLine.objects.create(sale=sale, product=self.product, qty=Decimal(q),
@@ -36,7 +36,7 @@ class SalesReportTests(TestCase):
         self.assertEqual(rep["revenue_ex_tax"], "4.250")    # 2.550 + 1.700
         self.assertEqual(rep["cogs"], "2.000")              # (3+2) * 0.400
         self.assertEqual(rep["gross_profit"], "2.250")      # 4.250 - 2.000
-        self.assertEqual(rep["best_sellers"][0]["qty"], "5.000")
+        self.assertEqual(rep["best_sellers"][0]["qty"], "5")
         self.assertEqual(rep["payment_mix"][0]["method"], "CASH")
 
     def test_endpoint_requires_report_permission(self):
@@ -63,7 +63,7 @@ class ConsolidatedReportTests(TestCase):
         tva7 = TaxRate.objects.create(name="TVA 7%", rate_percent=Decimal("7.00"))
         self.product = Product.objects.create(
             sku="PEN", name_fr="Stylo", tax_rate=tva7, sale_price=Decimal("0.850"))
-        receive_goods(product_id=self.product.id, qty=Decimal("100"), unit_cost=Decimal("0.400"))
+        receive_goods(product_id=self.product.id, qty=100, unit_cost=Decimal("0.400"))
         self.today = datetime.date.today()
 
     def _sale(self, qty):

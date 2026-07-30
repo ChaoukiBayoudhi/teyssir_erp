@@ -19,9 +19,9 @@ class ReceiptTests(TestCase):
         self.product = Product.objects.create(
             sku="PEN", name_fr="Stylo Bic", tax_rate=tva7, sale_price=Decimal("0.850"),
         )
-        apply_movement(product_id=self.product.id, qty=Decimal("100"), reason=StockMovement.RECEIPT)
+        apply_movement(product_id=self.product.id, qty=100, reason=StockMovement.RECEIPT)
         sale = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
-        SaleLine.objects.create(sale=sale, product=self.product, qty=Decimal("3"),
+        SaleLine.objects.create(sale=sale, product=self.product, qty=3,
                                 unit_price=Decimal("0.850"), tax_rate=Decimal("7.00"))
         self.invoice = finalize_sale(sale, payment_method="CASH")
         self.sale = sale
@@ -50,9 +50,9 @@ class ReceiptTests(TestCase):
         prod = Product.objects.create(
             sku="USB", name_fr="Clé USB", tax_rate=tva19, sale_price=Decimal("0.850"),
         )
-        apply_movement(product_id=prod.id, qty=Decimal("10"), reason=StockMovement.RECEIPT)
+        apply_movement(product_id=prod.id, qty=10, reason=StockMovement.RECEIPT)
         sale = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
-        SaleLine.objects.create(sale=sale, product=prod, qty=Decimal("3"),
+        SaleLine.objects.create(sale=sale, product=prod, qty=3,
                                 unit_price=Decimal("0.850"), tax_rate=Decimal("19.00"))
         finalize_sale(sale, payment_method="CASH")
         sale.refresh_from_db()

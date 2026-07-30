@@ -107,7 +107,7 @@ export default function Quotation({ onBack, onLogout }) {
                   <Box sx={{ flexGrow: 1 }}><Typography>{l.product.name_fr}</Typography></Box>
                   <TextField size="small" type="number" label={t("qty")} value={l.qty}
                              onChange={(e) => setQty(l.product.id, parseInt(e.target.value || "1", 10))}
-                             sx={{ width: 80 }} inputProps={{ min: 1 }} />
+                             sx={{ width: 80 }} inputProps={{ min: 1, step: 1 }} />
                   <IconButton onClick={() => remove(l.product.id)} aria-label="remove">✕</IconButton>
                 </Stack>
               ))}

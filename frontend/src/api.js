@@ -170,6 +170,9 @@ export async function scanBook(files, isbn) {
 export async function pollScanJob(jobId, { interval = 2000, tries = 120 } = {}) {
   for (let i = 0; i < tries; i++) {
     const job = await request(`/catalog/books/scan/${jobId}`);
+    if (job.status === "failed") {
+      throw new Error(job.error || "OCR failed");
+    }
     if (job.status !== "pending") return job;
     await new Promise((r) => setTimeout(r, interval));
   }

@@ -2,7 +2,7 @@ from django.conf import settings
 from django.db import models
 
 from teyssir.catalog.models import Product
-from teyssir.core.models import MONEY, QTY, SyncableModel
+from teyssir.core.models import MONEY, SyncableModel
 
 
 class Supplier(SyncableModel):
@@ -37,9 +37,9 @@ class PurchaseOrder(SyncableModel):
 class PurchaseOrderLine(SyncableModel):
     po = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name="lines")
     product = models.ForeignKey(Product, on_delete=models.PROTECT)
-    qty_ordered = models.DecimalField(**QTY)
+    qty_ordered = models.IntegerField()
     unit_cost = models.DecimalField(default=0, **MONEY)
-    qty_received = models.DecimalField(default=0, **QTY)
+    qty_received = models.IntegerField(default=0)
 
 
 class GoodsReceipt(SyncableModel):
@@ -57,7 +57,7 @@ class GoodsReceipt(SyncableModel):
 class GoodsReceiptLine(SyncableModel):
     gr = models.ForeignKey(GoodsReceipt, on_delete=models.CASCADE, related_name="lines")
     product = models.ForeignKey(Product, on_delete=models.PROTECT)
-    qty = models.DecimalField(**QTY)
+    qty = models.IntegerField()
     unit_cost = models.DecimalField(default=0, **MONEY)
 
 

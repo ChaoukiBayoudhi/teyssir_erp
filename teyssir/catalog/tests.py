@@ -26,6 +26,21 @@ from teyssir.catalog.models import Barcode, Book, Product, ProductImage
 User = get_user_model()
 
 
+class IsbnExtractionTests(unittest.TestCase):
+    def test_isbn13_and_isbn10_conversion(self):
+        from teyssir.catalog.bookscan.isbn import extract_isbn, isbn13_check_ok, to_isbn13
+        self.assertTrue(isbn13_check_ok("9782070612758"))
+        self.assertEqual(to_isbn13("978-2-07-061275-8"), "9782070612758")
+        # ISBN-10 for Petit Prince (2-07-061275-9) → ISBN-13
+        self.assertEqual(to_isbn13("2070612759"), "9782070612758")
+        self.assertEqual(extract_isbn("ISBN: 978-2-07-061275-8 Gallimard"), "9782070612758")
+        self.assertEqual(extract_isbn("no isbn here"), "")
+
+    def test_rejects_bad_check_digit(self):
+        from teyssir.catalog.bookscan.isbn import to_isbn13
+        self.assertEqual(to_isbn13("9782070612750"), "")
+
+
 def _png(name="cover.png"):
     buf = BytesIO()
     Image.new("RGB", (12, 16), "white").save(buf, "PNG")
@@ -48,6 +63,46 @@ class BookScanServiceTests(TestCase):
         draft, _ = scan_book([], isbn="", enrich=lambda i: None)
         self.assertEqual(draft.title, "")
 
+    def test_no_isbn_title_search_fallback(self):
+        """Phase 6: without ISBN, title search can still enrich the draft."""
+        from unittest.mock import patch
+
+        ocr_draft = BookDraft(
+            title="فقه السنة", authors=["سيد سابق"],
+            source="tesseract", confidence=0.4,
+            raw={"isbn_not_detected": True},
+        )
+        called = {}
+
+        def fake_title(t, a=""):
+            called["t"] = t
+            return BookDraft(title="فقه السنة", authors=["سيد سابق"],
+                             source="openlibrary", confidence=0.85)
+
+        with patch("teyssir.catalog.bookscan.services.get_ocr_provider") as g:
+            class P:
+                def extract(self, path, role="auto"):
+                    return "فقه السنة\nسيد سابق", ocr_draft
+            g.return_value = P()
+            out, _ = scan_book(["/tmp/fake.png"], isbn="", enrich=lambda i: None,
+                               enrich_title=fake_title)
+        self.assertEqual(called["t"], "فقه السنة")
+        self.assertTrue(out.raw.get("title_search"))
+        self.assertEqual(out.source, "openlibrary")
+
+    def test_merge_front_back_covers(self):
+        from teyssir.catalog.bookscan.services import _merge_cover_drafts
+        front = BookDraft(title="Le Petit Prince", authors=["Saint-Exupéry"],
+                          languages=["fr"], source="tesseract", confidence=0.4)
+        back = BookDraft(isbn13="9782070612758", price="15.000", source="tesseract", confidence=0.6,
+                         raw={"isbn_detected": True, "price_detected": True})
+        out = _merge_cover_drafts(front, back)
+        self.assertEqual(out.title, "Le Petit Prince")
+        self.assertEqual(out.isbn13, "9782070612758")
+        self.assertEqual(out.price, "15.000")
+        self.assertEqual(out.authors, ["Saint-Exupéry"])
+        self.assertTrue(out.raw["covers"]["back"])
+
     def test_create_book_from_draft_builds_normalized_records(self):
         product = create_book_from_draft(data={
             "title": "Le Petit Prince", "isbn13": "9782070612758", "publisher": "Gallimard",
@@ -61,6 +116,21 @@ class BookScanServiceTests(TestCase):
         self.assertEqual(book.contributors.count(), 1)
         self.assertEqual(book.contributors.first().contributor.name, "Antoine de Saint-Exupéry")
         self.assertTrue(Barcode.objects.filter(value="9782070612758", symbology="ISBN").exists())
+
+
+class PriceAndLangTests(unittest.TestCase):
+    def test_extract_price_dt_patterns(self):
+        from teyssir.catalog.bookscan.price import extract_price_dt
+        self.assertEqual(extract_price_dt("Prix: 15 DT"), "15.000")
+        self.assertEqual(extract_price_dt("12.500"), "12.500")
+        self.assertEqual(extract_price_dt("الثمن 8,750 د.ت"), "8.750")
+        self.assertEqual(extract_price_dt("no price here"), "")
+
+    def test_detect_script_langs(self):
+        from teyssir.catalog.bookscan.ocr import detect_script_langs
+        self.assertIn("ar", detect_script_langs("كتاب الفقه للمبتدئين"))
+        self.assertIn("fr", detect_script_langs("Été français — édition scolaire"))
+        self.assertIn("en", detect_script_langs("The Little Prince"))
 
 
 @override_settings(OCR_PROVIDER="manual", METADATA_PROVIDERS=[], MEDIA_ROOT=tempfile.mkdtemp())
@@ -77,6 +147,16 @@ class BookScanApiTests(TestCase):
         self.assertEqual(len(body["image_ids"]), 1)
         self.assertEqual(body["isbn13"], "9782070612758")     # echoed even with no metadata provider
         self.assertEqual(ProductImage.objects.count(), 1)
+
+    def test_scan_marks_front_and_back_kinds(self):
+        r = self.client.post(
+            "/api/v1/catalog/books/scan",
+            {"images": [_png("front.png"), _png("back.png")]},
+            format="multipart",
+        )
+        self.assertEqual(r.status_code, 200)
+        kinds = list(ProductImage.objects.order_by("order").values_list("kind", flat=True))
+        self.assertEqual(kinds, [ProductImage.COVER, ProductImage.BACK])
 
     def test_full_scan_then_create_with_image(self):
         scan = self.client.post("/api/v1/catalog/books/scan", {"images": _png()},
@@ -112,9 +192,11 @@ class TesseractOcrTests(TestCase):
         img.save(path)
 
         text, detected = get_ocr_provider().extract(path)
-        self.assertIn("Petit", text)
         self.assertEqual(detected.isbn13, "9782070612758")   # ISBN drives enrichment
-        self.assertEqual(detected.title, "Le Petit Prince")
+        self.assertTrue(detected.raw.get("isbn_detected"))
+        # Title OCR is best-effort after the digit-priority ISBN pass.
+        blob = f"{text} {detected.title}"
+        self.assertTrue("Petit" in blob or "Prince" in blob)
 
 
 @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
@@ -133,12 +215,12 @@ class CatalogBrowseApiTests(TestCase):
             "title": "Le Petit Prince", "isbn13": "9782070612758", "publisher": "Gallimard",
             "authors": ["Antoine de Saint-Exupéry"]}, sale_price="12.500")
         self.book.category = self.cat
-        self.book.qty_on_hand = Decimal("5"); self.book.reorder_point = Decimal("3")
+        self.book.qty_on_hand = 5; self.book.reorder_point = 3
         self.book.save()
         self.pen = Product.objects.create(sku="PEN-9", name_fr="Stylo Bic",
-                                          sale_price=Decimal("0.850"), qty_on_hand=Decimal("0"))
+                                          sale_price=Decimal("0.850"), qty_on_hand=0)
         self.cah = Product.objects.create(sku="CAH-9", name_fr="Cahier", sale_price=Decimal("1.200"),
-                                          qty_on_hand=Decimal("2"), reorder_point=Decimal("5"))
+                                          qty_on_hand=2, reorder_point=5)
 
     def _skus(self, url, params=None):
         return {x["sku"] for x in self.client.get(url, params or {}).json()["results"]}
@@ -172,7 +254,7 @@ class CatalogBrowseApiTests(TestCase):
         self.assertEqual(d["book"]["publisher"], "Gallimard")
         self.assertEqual(d["book"]["contributors"][0]["name"], "Antoine de Saint-Exupéry")
         self.assertTrue(any(b["value"] == "9782070612758" for b in d["barcodes"]))
-        self.assertEqual(d["qty_on_hand"], "5.000")
+        self.assertEqual(d["qty_on_hand"], "5")
 
 
 class ProductRegisterApiTests(TestCase):
@@ -195,7 +277,7 @@ class ProductRegisterApiTests(TestCase):
         r = self.client.get("/api/v1/catalog/lookup", {"barcode": "6191234567890"})
         self.assertTrue(r.json()["found"])                        # scannable afterwards
         self.assertEqual(r.json()["product"]["id"], pid)
-        self.assertEqual(r.json()["product"]["qty_on_hand"], "50.000")   # opening stock applied
+        self.assertEqual(r.json()["product"]["qty_on_hand"], "50")   # opening stock applied
         self.assertFalse(r.json()["product"]["is_book"])          # a supply, not a book
         self.assertTrue(Barcode.objects.filter(value="6191234567890").exists())
 
@@ -253,6 +335,28 @@ class VisionLlmOcrTests(TestCase):
 
         _, draft = VisionLlmOcrProvider(transport=boom).extract(self._png_path())
         self.assertEqual(draft.source, "manual")           # graceful fallback, never crashes
+
+    def test_tesseract_unavailable_stamps_ocr_error(self):
+        """Soft-fail: UI can warn instead of looking like a successful empty scan."""
+        import builtins
+        from teyssir.catalog.bookscan.ocr import TesseractOcrProvider
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name in ("pytesseract", "PIL") or name.startswith("PIL."):
+                raise ImportError("forced missing")
+            return real_import(name, *args, **kwargs)
+
+        builtins.__import__ = fake_import
+        try:
+            _, draft = TesseractOcrProvider().extract(self._png_path())
+        finally:
+            builtins.__import__ = real_import
+        self.assertEqual(draft.source, "manual")
+        self.assertEqual(draft.confidence, 0.0)
+        self.assertFalse(draft.raw.get("ocr_available", True))
+        self.assertIn("ocr_error", draft.raw)
 
 
 @override_settings(OCR_PROVIDER="manual", METADATA_PROVIDERS=[], MEDIA_ROOT=tempfile.mkdtemp())

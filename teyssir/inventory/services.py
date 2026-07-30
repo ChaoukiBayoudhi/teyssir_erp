@@ -1,13 +1,10 @@
-from decimal import Decimal
-
 from django.db import transaction
 from django.db.models import Sum
 
 from teyssir.catalog.models import Product
+from teyssir.core.qty import to_qty
 
 from .models import StockMovement
-
-QTY_Q = Decimal("0.001")  # quantity storage scale (matches DecimalField decimal_places=3)
 
 
 @transaction.atomic
@@ -17,7 +14,9 @@ def apply_movement(*, product_id, qty, reason, unit_cost=0, ref_type="", ref_id=
 
     Locks the product row so the cached `qty_on_hand` update is consistent within this node.
     Cross-till oversell (negative on-hand) is allowed and reconciled at the hub (spec §4.4).
+    Quantities are whole pieces (integers); fractional values are rejected.
     """
+    qty = to_qty(qty, allow_negative=True)
     product = Product.objects.select_for_update().get(pk=product_id)
     movement = StockMovement.objects.create(
         product=product,
@@ -28,7 +27,7 @@ def apply_movement(*, product_id, qty, reason, unit_cost=0, ref_type="", ref_id=
         ref_id=ref_id,
         origin_terminal=origin_terminal,
     )
-    product.qty_on_hand = (product.qty_on_hand or 0) + qty
+    product.qty_on_hand = int(product.qty_on_hand or 0) + qty
     product.save(update_fields=["qty_on_hand"])
     return movement
 
@@ -36,7 +35,7 @@ def apply_movement(*, product_id, qty, reason, unit_cost=0, ref_type="", ref_id=
 def recompute_on_hand(product_id):
     """Re-derive on-hand from the ledger (hub reconciliation / drift check, spec §7.3)."""
     total = StockMovement.objects.filter(product_id=product_id).aggregate(s=Sum("qty"))["s"] or 0
-    total = Decimal(total).quantize(QTY_Q)  # keep the fold at the stored 3-dp scale
+    total = int(total)
     Product.objects.filter(pk=product_id).update(qty_on_hand=total)
     return total
 
@@ -49,8 +48,9 @@ def post_stocktake(items, terminal=""):
     movements = []
     for it in items:
         product = Product.objects.select_for_update().get(pk=it["product_id"])
-        counted = Decimal(str(it["counted_qty"])).quantize(QTY_Q)
-        variance = (counted - (product.qty_on_hand or Decimal("0"))).quantize(QTY_Q)
+        counted = to_qty(it["counted_qty"], allow_negative=False, label="counted_qty")
+        on_hand = int(product.qty_on_hand or 0)
+        variance = counted - on_hand
         if variance != 0:
             movements.append(apply_movement(
                 product_id=product.id, qty=variance, reason=StockMovement.STOCKTAKE,

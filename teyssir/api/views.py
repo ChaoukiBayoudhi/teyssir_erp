@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 
 from teyssir.catalog.models import Barcode, Product, TaxRate
 from teyssir.core.money import display
+from teyssir.core.qty import format_qty
 from teyssir.customers.models import Customer
 from teyssir.customers.services import balance, charge_account, post_payment, statement
 from teyssir.inventory.services import post_stocktake
@@ -79,8 +80,8 @@ def _catalog_row(request, p, primary):
     reorder = p.reorder_point or 0
     return {
         "id": str(p.id), "sku": p.sku, "name_fr": p.name_fr, "name_ar": p.name_ar,
-        "sale_price": str(p.sale_price), "qty_on_hand": str(p.qty_on_hand),
-        "reorder_point": str(reorder), "is_book": p.is_book,
+        "sale_price": str(p.sale_price), "qty_on_hand": format_qty(p.qty_on_hand),
+        "reorder_point": format_qty(reorder), "is_book": p.is_book,
         "category": p.category.name_fr if p.category_id else "",
         "out_of_stock": p.qty_on_hand <= 0,
         "low_stock": bool(reorder) and 0 < p.qty_on_hand <= reorder,
@@ -178,7 +179,7 @@ class BarcodeLookupView(APIView):
         p = bc.product
         return Response({"found": True, "barcode": code, "product": {
             "id": str(p.id), "sku": p.sku, "name_fr": p.name_fr, "name_ar": p.name_ar,
-            "sale_price": str(p.sale_price), "qty_on_hand": str(p.qty_on_hand),
+            "sale_price": str(p.sale_price), "qty_on_hand": format_qty(p.qty_on_hand),
             "is_book": p.is_book, "active": p.active,
         }})
 
@@ -426,8 +427,8 @@ class ProductDetailView(APIView):
             "category": p.category.name_fr if p.category_id else "",
             "is_book": p.is_book, "isbn": p.isbn, "active": p.active,
             "sale_price": str(p.sale_price), "cost_avg": str(p.cost_avg),
-            "qty_on_hand": str(p.qty_on_hand), "reorder_point": str(p.reorder_point),
-            "reorder_qty": str(p.reorder_qty),
+            "qty_on_hand": format_qty(p.qty_on_hand), "reorder_point": format_qty(p.reorder_point),
+            "reorder_qty": format_qty(p.reorder_qty),
             "tax_rate_percent": str(p.tax_rate.rate_percent) if p.tax_rate_id else "0",
             "barcodes": list(p.barcodes.values("value", "symbology")),
             "images": [_image_payload(request, i)
@@ -475,11 +476,20 @@ class CustomerViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
 
     @action(detail=True, methods=["post"])
     def payment(self, request, pk=None):
+        from teyssir.customers.services import AccountAmountError
+
         customer = self.get_object()
         amount = request.data.get("amount")
         if amount in (None, ""):
             return Response({"detail": "amount required"}, status=status.HTTP_400_BAD_REQUEST)
-        post_payment(customer, amount, note=request.data.get("note", ""))
+        allow_overpay = str(request.data.get("allow_overpay", "")).lower() in ("1", "true", "yes")
+        try:
+            post_payment(
+                customer, amount, note=request.data.get("note", ""),
+                allow_overpay=allow_overpay,
+            )
+        except AccountAmountError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response({"balance": str(balance(customer))}, status=status.HTTP_201_CREATED)
 
 
@@ -520,17 +530,19 @@ class CheckoutView(APIView):
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         if data["payment_method"] == "ACCOUNT" and customer_id:
             charge_account(Customer.objects.get(pk=customer_id), sale.total, "SALE", sale.id)
-        _print_receipt(sale)
+        printed = _print_receipt(sale)
         return Response(
             {
                 "invoice_number": invoice.fiscal_number,
+                "sale_id": str(sale.id),
                 "subtotal": str(sale.subtotal),
                 "discount": str(sale.discount),
                 "tax_total": str(sale.tax_total),
                 "timbre": str(sale.timbre_amount_snapshot),
                 "total": str(sale.total),
                 "total_display": display(sale.total),
-                "printed": True,
+                "printed": printed,
+                "receipt_url": f"/api/v1/pos/sales/{sale.id}/receipt",
             },
             status=status.HTTP_201_CREATED,
         )
@@ -877,7 +889,10 @@ class BookScanView(APIView):
         isbn = (request.data.get("isbn") or "").strip()
         images = [
             ProductImage.objects.create(
-                image=f, kind=ProductImage.COVER if i == 0 else ProductImage.OTHER, order=i)
+                image=f,
+                kind=(ProductImage.COVER if i == 0 else
+                      ProductImage.BACK if i == 1 else ProductImage.OTHER),
+                order=i)
             for i, f in enumerate(files)
         ]
         job = ScanJob.objects.create(isbn=isbn, image_ids=[str(img.id) for img in images])
@@ -959,13 +974,48 @@ class ProductImageView(APIView):
 
 
 def _print_receipt(sale):
-    """Best-effort: print the receipt on the local node's printer; never block a sale."""
+    """Best-effort: print the receipt on the local node's printer; never block a sale.
+
+    Returns True if bytes were sent to a backend, False on any failure.
+    """
     try:
         from teyssir.printing.devices import send
         from teyssir.printing.receipt import render_sale_receipt
-        send(render_sale_receipt(sale))
+        return send(render_sale_receipt(sale)) > 0
     except Exception:
-        pass
+        return False
+
+
+class SaleReceiptView(APIView):
+    """GET /pos/sales/<id>/receipt — plain-text receipt (preview / reprint / save as .txt).
+
+    Thermal ESC/POS is sent automatically at checkout; this endpoint lets the cashier
+    preview or download the same content without hardware.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        from django.http import HttpResponse
+
+        from teyssir.printing.receipt import render_text
+        from teyssir.sales.models import Sale
+
+        sale = Sale.objects.filter(pk=pk, status=Sale.FINALIZED).first()
+        if not sale:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        fmt = (request.query_params.get("format") or "text").lower()
+        text = render_text(sale)
+        if fmt == "json":
+            return Response({"sale_id": str(sale.id), "text": text,
+                             "invoice": getattr(getattr(sale, "invoice", None), "fiscal_number", "")})
+        # Re-print to the thermal device on demand
+        if request.query_params.get("print") == "1":
+            _print_receipt(sale)
+        name = f"receipt-{getattr(getattr(sale, 'invoice', None), 'fiscal_number', pk)}.txt"
+        resp = HttpResponse(text, content_type="text/plain; charset=utf-8")
+        resp["Content-Disposition"] = f'inline; filename="{name}"'
+        return resp
 
 
 @api_view(["GET"])

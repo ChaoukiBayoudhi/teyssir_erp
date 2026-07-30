@@ -15,12 +15,12 @@ class WeightedAverageCostTests(TestCase):
     def test_weighted_average_cost_rolls_correctly(self):
         p = Product.objects.create(sku="X", name_fr="X", cost_avg=Decimal("0"), qty_on_hand=Decimal("0"))
 
-        r1 = receive_goods(product_id=p.id, qty=Decimal("10"), unit_cost=Decimal("0.400"))
+        r1 = receive_goods(product_id=p.id, qty=10, unit_cost=Decimal("0.400"))
         self.assertEqual(r1["cost_avg"], Decimal("0.400"))
         self.assertEqual(r1["qty_on_hand"], Decimal("10.000"))
 
         # 10 @ 0.400 + 10 @ 0.600 -> avg 0.500, qty 20
-        r2 = receive_goods(product_id=p.id, qty=Decimal("10"), unit_cost=Decimal("0.600"))
+        r2 = receive_goods(product_id=p.id, qty=10, unit_cost=Decimal("0.600"))
         self.assertEqual(r2["cost_avg"], Decimal("0.500"))
         self.assertEqual(r2["qty_on_hand"], Decimal("20.000"))
 
@@ -43,7 +43,7 @@ class PurchaseWorkflowTests(TestCase):
         gr = receive_po(po=po)                       # receive the whole PO
         self.product.refresh_from_db()
         po.refresh_from_db()
-        self.assertEqual(self.product.qty_on_hand, Decimal("10.000"))
+        self.assertEqual(self.product.qty_on_hand, 10)
         self.assertEqual(self.product.cost_avg, Decimal("0.400"))
         self.assertEqual(po.status, PurchaseOrder.RECEIVED)
         self.assertEqual(po.lines.first().qty_received, Decimal("10.000"))
@@ -73,7 +73,7 @@ class PurchaseWorkflowTests(TestCase):
         self.assertEqual(r2.status_code, 200)
         self.assertEqual(r2.json()["status"], PurchaseOrder.RECEIVED)
         product.refresh_from_db()
-        self.assertEqual(product.qty_on_hand, Decimal("10.000"))
+        self.assertEqual(product.qty_on_hand, 10)
         self.assertEqual(product.cost_avg, Decimal("0.400"))
 
         r3 = api.post("/api/v1/purchasing/invoices", {
@@ -94,6 +94,6 @@ class PurchaseWorkflowTests(TestCase):
         )
         self.product.refresh_from_db()
         self.assertEqual(self.product.cost_avg, Decimal("0.500"))
-        self.assertEqual(self.product.qty_on_hand, Decimal("20.000"))
+        self.assertEqual(self.product.qty_on_hand, 20)
         self.assertEqual(result["lines"][0]["cost_avg"], "0.500")
 

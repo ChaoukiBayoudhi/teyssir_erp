@@ -10,9 +10,10 @@ import uuid
 
 from django.db import models
 
-# Reusable column kwargs: TND money is stored at 3 dp (millime); quantities at 3 dp.
+# Reusable column kwargs: TND money is stored at 3 dp (millime).
+# Quantities are whole pieces (IntegerField on models) — QTY kept only for docs/legacy imports.
 MONEY = dict(max_digits=14, decimal_places=3)
-QTY = dict(max_digits=14, decimal_places=3)
+QTY = dict(max_digits=14, decimal_places=0)  # legacy; prefer models.IntegerField for qty columns
 
 
 class UUIDModel(models.Model):

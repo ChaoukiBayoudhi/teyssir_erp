@@ -43,6 +43,30 @@ class MoneyTests(SimpleTestCase):
         self.assertTrue(money.is_allowed_vat_rate(13))
         self.assertFalse(money.is_allowed_vat_rate(20))
 
+    def test_require_non_negative_rejects_negatives(self):
+        self.assertEqual(money.require_non_negative_money("12.500"), Decimal("12.500"))
+        with self.assertRaises(ValueError):
+            money.require_non_negative_money("-1.000", label="sale_price")
+
+
+class QtyTests(SimpleTestCase):
+    def test_integer_qty_roundtrip(self):
+        from teyssir.core import qty
+        self.assertEqual(qty.to_qty("3"), 3)
+        self.assertEqual(qty.to_qty(3), 3)
+        self.assertEqual(qty.to_qty("3.000"), 3)
+        self.assertEqual(qty.format_qty("12.000"), "12")
+        self.assertEqual(qty.format_qty(-1), "-1")
+
+    def test_rejects_fractional_qty(self):
+        from teyssir.core import qty
+        with self.assertRaises(qty.QtyError):
+            qty.to_qty("1.5")
+        with self.assertRaises(qty.QtyError):
+            qty.to_qty(2.3)
+        with self.assertRaises(qty.QtyError):
+            qty.to_qty("-1")
+
 
 def _pdf_bytes(text="Hello Teyssir", pages=1):
     import fitz

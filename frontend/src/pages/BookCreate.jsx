@@ -1,13 +1,12 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AppBar, Toolbar, Typography, Button, Box, Grid, Paper, TextField, Stack, Alert, Snackbar,
-  Chip, IconButton, LinearProgress, Select, MenuItem,
+  Chip, LinearProgress, Select, MenuItem, FormControl, InputLabel, Stepper, Step, StepLabel,
 } from "@mui/material";
 import { useTranslation } from "react-i18next";
-import { scanBook, pollScanJob, createBook } from "../api";
+import { scanBook, pollScanJob, createBook, listCategories, listTaxRates } from "../api";
 import LangToggle from "../LangToggle.jsx";
 
-// Try the browser-native barcode detector for an ISBN (EAN-13). Best-effort, feature-detected.
 async function detectIsbn(file) {
   if (!("BarcodeDetector" in window)) return "";
   try {
@@ -15,57 +14,104 @@ async function detectIsbn(file) {
     const bmp = await createImageBitmap(file);
     const codes = await det.detect(bmp);
     const ean = codes.find((c) => /^97[89]\d{10}$/.test(c.rawValue));
-    return ean ? ean.rawValue : (codes[0]?.rawValue || "");
+    return ean ? ean.rawValue : "";
   } catch {
     return "";
   }
 }
 
+/** Prefer ISBN from back cover (last images), then front. */
+async function detectIsbnFromImages(files) {
+  for (let i = files.length - 1; i >= 0; i--) {
+    const code = await detectIsbn(files[i]);
+    if (code) return code;
+  }
+  return "";
+}
+
 const EMPTY = {
   isbn13: "", title: "", subtitle: "", authors: "", translators: "", publisher: "",
   series: "", edition: "", pub_year: "", pages: "", languages: "", subject: "",
-  description: "", sale_price: "",
+  description: "", sale_price: "", category: "", tax_rate: "",
 };
 
 export default function BookCreate({ onBack, onLogout }) {
   const { t } = useTranslation();
   const videoRef = useRef(null);
   const fileRef = useRef(null);
+  const streamRef = useRef(null);
   const [stream, setStream] = useState(null);
-  const [images, setImages] = useState([]);          // File[]
-  const [previews, setPreviews] = useState([]);       // object URLs
+  const [images, setImages] = useState([]);       // [front?, back?]
+  const [previews, setPreviews] = useState([]);
+  const [captureStep, setCaptureStep] = useState("front"); // front | back | ready
   const [busy, setBusy] = useState(false);
+  const [busyLabel, setBusyLabel] = useState("");
   const [draft, setDraft] = useState(null);
   const [form, setForm] = useState(EMPTY);
   const [done, setDone] = useState(false);
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
   const [cameras, setCameras] = useState([]);
   const [cameraId, setCameraId] = useState(localStorage.getItem("teyssir_camera") || "");
+  const [cats, setCats] = useState([]);
+  const [taxes, setTaxes] = useState([]);
 
-  const addImage = (file) => {
-    setImages((a) => [...a, file]);
-    setPreviews((a) => [...a, URL.createObjectURL(file)]);
+  const stopCamera = () => {
+    const s = streamRef.current || stream;
+    if (s) s.getTracks().forEach((tk) => tk.stop());
+    streamRef.current = null;
+    setStream(null);
+    if (videoRef.current) videoRef.current.srcObject = null;
+  };
+
+  useEffect(() => {
+    listCategories().then(setCats).catch(() => {});
+    listTaxRates().then((r) => {
+      setTaxes(r);
+      const tva7 = r.find((x) => Number(x.rate_percent) === 7);
+      const d = tva7 || r.find((x) => x.is_default);
+      if (d) setForm((f) => ({ ...f, tax_rate: f.tax_rate || d.id }));
+    }).catch(() => {});
+    return () => { stopCamera(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const addCapture = (file, slot) => {
+    setImages((prev) => {
+      const next = [...prev];
+      while (next.length <= slot) next.push(null);
+      next[slot] = file;
+      return next;
+    });
+    setPreviews((prev) => {
+      const next = [...prev];
+      while (next.length <= slot) next.push(null);
+      if (next[slot]) URL.revokeObjectURL(next[slot]);
+      next[slot] = URL.createObjectURL(file);
+      return next;
+    });
   };
 
   const listCameras = async () => {
     try {
       const devs = await navigator.mediaDevices.enumerateDevices();
-      setCameras(devs.filter((d) => d.kind === "videoinput"));   // labels appear after permission
-    } catch { /* enumeration unsupported */ }
+      setCameras(devs.filter((d) => d.kind === "videoinput"));
+    } catch { /* unsupported */ }
   };
 
   const startCamera = async (deviceId) => {
     setError("");
     try {
-      if (stream) stream.getTracks().forEach((tk) => tk.stop());  // release before switching
+      stopCamera();
       const video = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: "environment" };
       const s = await navigator.mediaDevices.getUserMedia({ video });
+      streamRef.current = s;
       setStream(s);
       if (videoRef.current) videoRef.current.srcObject = s;
       if (deviceId) { setCameraId(deviceId); localStorage.setItem("teyssir_camera", deviceId); }
       await listCameras();
     } catch {
-      setError("Caméra indisponible — utilisez « Photos »");
+      setError(t("cameraUnavailable"));
     }
   };
 
@@ -76,23 +122,75 @@ export default function BookCreate({ onBack, onLogout }) {
     canvas.width = v.videoWidth || 720;
     canvas.height = v.videoHeight || 960;
     canvas.getContext("2d").drawImage(v, 0, 0, canvas.width, canvas.height);
-    canvas.toBlob((blob) => addImage(new File([blob], `cover-${Date.now()}.jpg`, { type: "image/jpeg" })), "image/jpeg", 0.85);
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const slot = captureStep === "back" ? 1 : 0;
+      const name = captureStep === "back" ? `back-${Date.now()}.jpg` : `front-${Date.now()}.jpg`;
+      addCapture(new File([blob], name, { type: "image/jpeg" }), slot);
+      // CRITICAL: release camera immediately after capture
+      stopCamera();
+      if (captureStep === "front") {
+        setCaptureStep("back");
+        setInfo(t("captureBackHint"));
+      } else {
+        setCaptureStep("ready");
+        setInfo(t("capturesReady"));
+      }
+    }, "image/jpeg", 0.9);
   };
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
+  const resetCaptures = () => {
+    previews.forEach((u) => u && URL.revokeObjectURL(u));
+    setImages([]);
+    setPreviews([]);
+    setCaptureStep("front");
+    setInfo("");
+    setDraft(null);
+    stopCamera();
+  };
+
   const analyze = async () => {
-    if (!images.length) return;
+    const files = images.filter(Boolean);
+    if (!files.length) return;
     setBusy(true);
+    setBusyLabel(t("analyzingBook"));
     setError("");
+    setInfo("");
     try {
-      const isbn = await detectIsbn(images[0]);
-      let d = await scanBook(images, isbn);
-      if (d.status === "pending") d = await pollScanJob(d.job_id);   // async OCR backend
+      setBusyLabel(t("detectingIsbn"));
+      const isbn = await detectIsbnFromImages(files);
+      setBusyLabel(t("runningOcr"));
+      let d = await scanBook(files, isbn);
+      if (d.status === "pending") {
+        setBusyLabel(t("waitingOcr"));
+        d = await pollScanJob(d.job_id);
+      }
+      if (d.status === "failed") {
+        throw new Error(d.error || t("ocrFailed"));
+      }
       setDraft(d);
-      setForm({
+
+      const resolvedIsbn = d.isbn13 || isbn || "";
+      const isbnMissing = !resolvedIsbn || d.raw?.isbn_not_detected;
+      if (isbnMissing && d.title) {
+        setError(`${t("isbnNotDetected")}\n${t("noIsbnTitleAssist")}`);
+      } else if (isbnMissing) {
+        setError(`${t("isbnNotDetected")}\n${t("isbnManualHint")}`);
+      } else if (d.raw?.metadata_miss && !d.title) {
+        setError(t("metadataMiss"));
+      } else if (d.source === "manual" || d.raw?.ocr_available === false) {
+        setError(t("ocrUnavailable"));
+      } else if (d.raw?.title_search) {
+        setInfo(t("titleSearchHit"));
+      }
+
+      const livre = cats.find((c) => /livre|book|كتاب|manuel/i.test(c.name_fr || ""));
+      const tva7 = taxes.find((x) => Number(x.rate_percent) === 7);
+      setForm((prev) => ({
         ...EMPTY,
-        isbn13: d.isbn13 || isbn || "",
+        isbn13: resolvedIsbn,
         title: d.title || "",
         subtitle: d.subtitle || "",
         authors: (d.authors || []).join(", "),
@@ -106,16 +204,20 @@ export default function BookCreate({ onBack, onLogout }) {
         subject: d.subject || "",
         description: d.description || "",
         sale_price: d.price || "",
-      });
+        category: prev.category || livre?.id || "",
+        tax_rate: prev.tax_rate || tva7?.id || "",
+      }));
     } catch (err) {
       setError(String(err.message || err));
     } finally {
       setBusy(false);
+      setBusyLabel("");
     }
   };
 
   const save = async () => {
     setBusy(true);
+    setBusyLabel(t("saving"));
     setError("");
     try {
       await createBook({
@@ -125,25 +227,34 @@ export default function BookCreate({ onBack, onLogout }) {
         languages: form.languages ? form.languages.split(",").map((s) => s.trim()).filter(Boolean) : [],
         pub_year: form.pub_year ? Number(form.pub_year) : null,
         pages: form.pages ? Number(form.pages) : null,
+        category: form.category || null,
+        tax_rate: form.tax_rate || null,
         source: draft?.source || "manual",
         confidence: draft?.confidence || 0,
         raw: draft?.raw || {},
         image_ids: draft?.image_ids || [],
       });
       setDone(true);
-      setImages([]); setPreviews([]); setDraft(null); setForm(EMPTY);
-      if (stream) { stream.getTracks().forEach((tk) => tk.stop()); setStream(null); }
+      resetCaptures();
+      setForm((f) => ({ ...EMPTY, tax_rate: f.tax_rate, category: f.category }));
     } catch (err) {
       setError(String(err.message || err));
     } finally {
       setBusy(false);
+      setBusyLabel("");
     }
   };
 
   const F = (label, key, props = {}) => (
     <TextField size="small" fullWidth label={label} value={form[key]}
-               onChange={(e) => set(key, e.target.value)} {...props} />
+               onChange={(e) => set(key, e.target.value)}
+               inputProps={{ dir: "auto", ...(props.inputProps || {}) }}
+               {...props} />
   );
+
+  const stepIndex = captureStep === "front" ? 0 : captureStep === "back" ? 1 : 2;
+  const captureLabel = captureStep === "back" ? t("captureBack") : t("captureFront");
+  const readyFiles = images.filter(Boolean).length;
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "#f5f5f5" }}>
@@ -156,17 +267,43 @@ export default function BookCreate({ onBack, onLogout }) {
         </Toolbar>
       </AppBar>
 
-      {busy && <LinearProgress />}
+      {busy && (
+        <Box>
+          <LinearProgress />
+          {busyLabel && (
+            <Typography variant="caption" color="text.secondary" sx={{ px: 2 }}>
+              {busyLabel}
+            </Typography>
+          )}
+        </Box>
+      )}
       <Box sx={{ p: 2 }}>
-        {error && <Alert severity="warning" sx={{ mb: 2 }}>{error}</Alert>}
+        {error && (
+          <Alert severity="warning" sx={{ mb: 2, whiteSpace: "pre-line" }}>{error}</Alert>
+        )}
+        {info && !error && (
+          <Alert severity="info" sx={{ mb: 2 }} onClose={() => setInfo("")}>{info}</Alert>
+        )}
         <Grid container spacing={2}>
-          {/* Capture column */}
           <Grid item xs={12} md={5}>
             <Paper sx={{ p: 2 }}>
-              <Typography color="text.secondary" sx={{ mb: 1 }}>{t("scanHint")}</Typography>
-              <Box sx={{ bgcolor: "#000", borderRadius: 1, overflow: "hidden", mb: 1, minHeight: 180 }}>
-                <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", display: stream ? "block" : "none" }} />
-              </Box>
+              <Stepper activeStep={Math.min(stepIndex, 2)} alternativeLabel sx={{ mb: 2 }}>
+                <Step completed={Boolean(images[0])}><StepLabel>{t("stepFront")}</StepLabel></Step>
+                <Step completed={Boolean(images[1])}><StepLabel>{t("stepBack")}</StepLabel></Step>
+                <Step completed={Boolean(draft)}><StepLabel>{t("stepAnalyze")}</StepLabel></Step>
+              </Stepper>
+
+              <Typography color="text.secondary" sx={{ mb: 1 }}>
+                {captureStep === "front" && t("captureFrontHint")}
+                {captureStep === "back" && t("captureBackHint")}
+                {captureStep === "ready" && t("capturesReady")}
+              </Typography>
+
+              {stream && (
+                <Box sx={{ bgcolor: "#000", borderRadius: 1, overflow: "hidden", mb: 1, minHeight: 180 }}>
+                  <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", display: "block" }} />
+                </Box>
+              )}
               {stream && cameras.length > 1 && (
                 <Select size="small" fullWidth sx={{ mb: 1 }}
                         value={cameraId || cameras[0]?.deviceId || ""}
@@ -177,19 +314,40 @@ export default function BookCreate({ onBack, onLogout }) {
                 </Select>
               )}
               <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                {!stream
-                  ? <Button variant="outlined" onClick={() => startCamera(cameraId || undefined)}>{t("startCamera")}</Button>
-                  : <Button variant="contained" onClick={capture}>{t("capture")}</Button>}
+                {!stream ? (
+                  <Button variant="outlined" onClick={() => startCamera(cameraId || undefined)}
+                          disabled={captureStep === "ready" && readyFiles >= 2}>
+                    {captureStep === "back" ? t("startCameraBack") : t("startCamera")}
+                  </Button>
+                ) : (
+                  <Button variant="contained" onClick={capture}>{captureLabel}</Button>
+                )}
                 <Button variant="outlined" onClick={() => fileRef.current?.click()}>{t("choosePhotos")}</Button>
                 <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple hidden
-                       onChange={(e) => [...e.target.files].forEach(addImage)} />
-                <Button variant="contained" color="secondary" disabled={!images.length || busy} onClick={analyze}>
+                       onChange={(e) => {
+                         const files = [...e.target.files];
+                         files.forEach((f, i) => addCapture(f, Math.min(i, 1)));
+                         stopCamera();
+                         if (files.length >= 2) setCaptureStep("ready");
+                         else if (files.length === 1) setCaptureStep("back");
+                         e.target.value = "";
+                       }} />
+                <Button variant="contained" color="secondary"
+                        disabled={!readyFiles || busy} onClick={analyze}>
                   {t("analyze")}
                 </Button>
+                {readyFiles > 0 && (
+                  <Button color="inherit" onClick={resetCaptures}>{t("resetCaptures")}</Button>
+                )}
               </Stack>
               <Stack direction="row" spacing={1} sx={{ mt: 2, overflowX: "auto" }}>
-                {previews.map((src, i) => (
-                  <img key={i} src={src} alt="" style={{ height: 84, borderRadius: 6 }} />
+                {previews.map((src, i) => src && (
+                  <Box key={i} sx={{ textAlign: "center" }}>
+                    <img src={src} alt="" style={{ height: 84, borderRadius: 6, display: "1px solid #ccc" }} />
+                    <Typography variant="caption" display="block">
+                      {i === 0 ? t("stepFront") : t("stepBack")}
+                    </Typography>
+                  </Box>
                 ))}
                 {(draft?.images || []).map((im) => (
                   <img key={im.id} src={im.url} alt="" style={{ height: 84, borderRadius: 6 }} />
@@ -198,7 +356,6 @@ export default function BookCreate({ onBack, onLogout }) {
             </Paper>
           </Grid>
 
-          {/* Review column */}
           <Grid item xs={12} md={7}>
             <Paper sx={{ p: 2 }}>
               <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
@@ -210,14 +367,37 @@ export default function BookCreate({ onBack, onLogout }) {
               </Stack>
               <Grid container spacing={1.5}>
                 <Grid item xs={12} sm={6}>{F("ISBN", "isbn13")}</Grid>
-                <Grid item xs={12} sm={6}>{F(t("priceF") + " (DT)", "sale_price", { type: "number" })}</Grid>
+                <Grid item xs={12} sm={6}>{F(t("priceF") + " (DT)", "sale_price", {
+                  type: "number", inputProps: { min: 0, step: "0.001" },
+                })}</Grid>
+                <Grid item xs={12} sm={6}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>{t("category")}</InputLabel>
+                    <Select label={t("category")} value={form.category}
+                            onChange={(e) => set("category", e.target.value)}>
+                      <MenuItem value="">{t("none")}</MenuItem>
+                      {cats.map((c) => <MenuItem key={c.id} value={c.id}>{c.name_fr}</MenuItem>)}
+                    </Select>
+                  </FormControl>
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>{t("taxRate")}</InputLabel>
+                    <Select label={t("taxRate")} value={form.tax_rate}
+                            onChange={(e) => set("tax_rate", e.target.value)}>
+                      {taxes.map((x) => (
+                        <MenuItem key={x.id} value={x.id}>{x.name} ({x.rate_percent}%)</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
                 <Grid item xs={12}>{F(t("bookTitle"), "title")}</Grid>
                 <Grid item xs={12}>{F(t("subtitleF"), "subtitle")}</Grid>
                 <Grid item xs={12} sm={6}>{F(t("authorsF"), "authors")}</Grid>
                 <Grid item xs={12} sm={6}>{F(t("translatorsF"), "translators")}</Grid>
                 <Grid item xs={12} sm={6}>{F(t("publisherF"), "publisher")}</Grid>
                 <Grid item xs={6} sm={3}>{F(t("yearF"), "pub_year", { type: "number" })}</Grid>
-                <Grid item xs={6} sm={3}>{F(t("pagesF"), "pages", { type: "number" })}</Grid>
+                <Grid item xs={6} sm={3}>{F(t("pagesF"), "pages", { type: "number", inputProps: { step: 1 } })}</Grid>
                 <Grid item xs={12} sm={6}>{F(t("languagesF"), "languages")}</Grid>
                 <Grid item xs={12} sm={6}>{F(t("subjectF"), "subject")}</Grid>
                 <Grid item xs={12}>{F(t("descriptionF"), "description", { multiline: true, rows: 2 })}</Grid>

@@ -55,6 +55,30 @@ class AccountLedgerTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["balance"], "50.000")
 
+    def test_rejects_negative_or_zero_payment(self):
+        from teyssir.customers.services import AccountAmountError
+        with self.assertRaises(AccountAmountError):
+            post_payment(self.customer, Decimal("-10.000"))
+        with self.assertRaises(AccountAmountError):
+            post_payment(self.customer, Decimal("0"))
+        user = User.objects.create_user("c2", password="pw-strong-123")
+        api = APIClient()
+        api.force_authenticate(user)
+        r = api.post(f"/api/v1/customers/{self.customer.id}/payment/", {"amount": "-2222"}, format="json")
+        self.assertEqual(r.status_code, 400)
+
+    def test_rejects_payment_exceeding_balance(self):
+        """Root cause of Solde -2222: règlement larger than owed (or on zero balance)."""
+        from teyssir.customers.services import AccountAmountError
+        # balance 0 — any payment would go negative
+        with self.assertRaises(AccountAmountError):
+            post_payment(self.customer, Decimal("2222.000"))
+        charge_account(self.customer, Decimal("50.000"), "SALE", "z")
+        with self.assertRaises(AccountAmountError):
+            post_payment(self.customer, Decimal("50.001"))
+        post_payment(self.customer, Decimal("50.000"))  # exact OK
+        self.assertEqual(balance(self.customer), Decimal("0.000"))
+
 
 class CustomerSyncTests(TestCase):
     def setUp(self):

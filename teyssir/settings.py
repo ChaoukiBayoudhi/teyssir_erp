@@ -207,7 +207,9 @@ if os.environ.get("TEYSSIR_S3_BUCKET"):
 # Book registration / OCR providers (replaceable; docs/BOOK-OCR-ARCHITECTURE.md)
 OCR_PROVIDER = os.environ.get("TEYSSIR_OCR_PROVIDER", "tesseract")          # tesseract|manual|vision
 METADATA_PROVIDERS = [
-    p for p in os.environ.get("TEYSSIR_METADATA_PROVIDERS", "openlibrary").split(",") if p
+    p for p in os.environ.get(
+        "TEYSSIR_METADATA_PROVIDERS", "openlibrary,googlebooks"
+    ).split(",") if p
 ]
 # Vision-LLM OCR (OCR_PROVIDER=vision): free, offline, local — Ollama + a vision model.
 OLLAMA_URL = os.environ.get("TEYSSIR_OLLAMA_URL", "http://localhost:11434")
