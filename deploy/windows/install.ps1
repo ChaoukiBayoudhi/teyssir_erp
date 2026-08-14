@@ -9,8 +9,8 @@
 
     It creates the Python environment, installs dependencies, builds the app (if Node is
     present and not already built), writes a .env with random secrets, sets up the database,
-    and creates the first administrator. Local Ollama (optional AI) is installed when possible;
-    a failure there never aborts the ERP install.
+    and creates the first administrator. Hub installs PostgreSQL when possible (SQLite fallback).
+    Local Ollama (optional AI) is installed when possible; a failure there never aborts the ERP install.
 #>
 [CmdletBinding()]
 param(
@@ -21,7 +21,9 @@ param(
     [string]$SyncKey = "",
     [switch]$SkipBuild,
     [switch]$SkipLlm,
-    [string]$LlmModel = "mistral"
+    [string]$LlmModel = "mistral",
+    [switch]$SkipPostgres,
+    [string]$PostgresSuperPassword = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -85,17 +87,24 @@ function Set-DotEnvValue([string]$Path, [string]$Key, [string]$Value) {
         (($out -join "`n") + "`n"),
         (New-Object System.Text.UTF8Encoding($false)))
 }
+$pgPass = $null
 if (-not (Test-Path ".env")) {
     $secret = New-Key 50
     if (-not $SyncKey) { $SyncKey = New-Key 40 }
     $pcName = [System.Net.Dns]::GetHostName()
+    $pgPass = New-Key 28
     # Built as an array of lines (no here-strings: PowerShell 5.1 mis-parses here-strings in
     # files with Unix line endings, which is what a GitHub ZIP download contains).
     if ($Role -eq "hub") {
         $envLines = @(
             "TEYSSIR_ROLE=hub",
             "TEYSSIR_STORE_CODE=$StoreCode",
-            "TEYSSIR_DB=sqlite",
+            "TEYSSIR_DB=postgres",
+            "POSTGRES_DB=teyssir",
+            "POSTGRES_USER=teyssir",
+            "POSTGRES_PASSWORD=$pgPass",
+            "POSTGRES_HOST=127.0.0.1",
+            "POSTGRES_PORT=5432",
             "TEYSSIR_SYNC_KEY=$SyncKey",
             "DEBUG=0",
             "SECRET_KEY=$secret",
@@ -110,6 +119,7 @@ if (-not (Test-Path ".env")) {
             "TEYSSIR_STORE_CODE=$StoreCode",
             "TEYSSIR_HUB_URL=$HubUrl",
             "TEYSSIR_SYNC_KEY=$SyncKey",
+            "TEYSSIR_DB=sqlite",
             "DEBUG=0",
             "SECRET_KEY=$secret",
             "TEYSSIR_ALLOWED_HOSTS=localhost,127.0.0.1"
@@ -132,9 +142,49 @@ else {
     Write-Host ".env already exists - left unchanged."
 }
 
+# 4b) PostgreSQL (HUB only) — optional, never fails the ERP install ----------
+$global:TeyssirPostgresReady = $false
+$envPath = Join-Path $Root ".env"
+if ($Role -eq "hub" -and -not $SkipPostgres) {
+    Write-Host "Setting up PostgreSQL for the hub ..."
+    $pgScript = Join-Path $PSScriptRoot "Install-Postgres.ps1"
+    $pgPassForDb = $pgPass
+    if (-not $pgPassForDb -and (Test-Path $envPath)) {
+        $line = (Get-Content $envPath) | Where-Object { $_ -match '^\s*POSTGRES_PASSWORD=' } | Select-Object -First 1
+        if ($line) { $pgPassForDb = $line.Split("=", 2)[1] }
+    }
+    if (-not $pgPassForDb) { $pgPassForDb = New-Key 28 }
+    $admin = $PostgresSuperPassword
+    if (-not $admin) { $admin = $env:POSTGRES_ADMIN_PASSWORD }
+    try {
+        & $pgScript -Db teyssir -User teyssir -Password $pgPassForDb -SuperPassword $admin
+    }
+    catch {
+        Write-Warning ("PostgreSQL setup skipped: " + $_.Exception.Message)
+    }
+    if ($global:TeyssirPostgresReady) {
+        Set-DotEnvValue $envPath "TEYSSIR_DB" "postgres"
+        Set-DotEnvValue $envPath "POSTGRES_DB" "teyssir"
+        Set-DotEnvValue $envPath "POSTGRES_USER" "teyssir"
+        Set-DotEnvValue $envPath "POSTGRES_PASSWORD" $pgPassForDb
+        Set-DotEnvValue $envPath "POSTGRES_HOST" "127.0.0.1"
+        Set-DotEnvValue $envPath "POSTGRES_PORT" "5432"
+        Write-Host "  Hub database: PostgreSQL (teyssir)." -ForegroundColor Green
+    }
+    else {
+        Set-DotEnvValue $envPath "TEYSSIR_DB" "sqlite"
+        Write-Warning "PostgreSQL not ready — hub will use SQLite (teyssir_hub.sqlite3). See docs/POSTGRESQL-SETUP.md"
+    }
+}
+elseif ($Role -eq "till") {
+    Write-Host "Till node: SQLite (offline). PostgreSQL is not installed on tills."
+}
+
 # 5) Database + static ------------------------------------------------------
 Write-Host "Setting up the database ..."
 & .\.venv\Scripts\python.exe manage.py migrate --noinput
+& .\.venv\Scripts\python.exe manage.py seed_rbac
+& .\.venv\Scripts\python.exe manage.py seed_fiscal
 & .\.venv\Scripts\python.exe manage.py collectstatic --noinput | Out-Null
 
 # 6) Local LLM (Ollama) — optional, never fails the ERP install -------------
@@ -178,4 +228,15 @@ if ($global:TeyssirLlmReady) {
 }
 else {
     Write-Host "Local AI:            not active (ERP works without it). See docs/LOCAL-AI.md"
+}
+if ($Role -eq "hub") {
+    if ($global:TeyssirPostgresReady) {
+        Write-Host "Hub database:        PostgreSQL  (teyssir @ 127.0.0.1:5432)"
+    }
+    else {
+        Write-Host "Hub database:        SQLite fallback  (see docs/POSTGRESQL-SETUP.md)"
+    }
+}
+else {
+    Write-Host "Till database:       SQLite  (offline)"
 }
