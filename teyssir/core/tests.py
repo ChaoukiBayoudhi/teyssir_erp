@@ -49,6 +49,27 @@ class MoneyTests(SimpleTestCase):
             money.require_non_negative_money("-1.000", label="sale_price")
 
 
+class DatabaseConfigTests(SimpleTestCase):
+    def test_hub_defaults_to_postgres(self):
+        from teyssir.core.db import database_config
+        cfg = database_config(role="hub", backend="postgres", base_dir="/tmp",
+                              environ={"POSTGRES_PASSWORD": "s3cret", "POSTGRES_DB": "teyssir"})
+        self.assertEqual(cfg["ENGINE"], "django.db.backends.postgresql")
+        self.assertEqual(cfg["NAME"], "teyssir")
+        self.assertEqual(cfg["USER"], "teyssir")
+        self.assertEqual(cfg["PASSWORD"], "s3cret")
+        self.assertEqual(cfg["OPTIONS"]["client_encoding"], "UTF8")
+        self.assertGreaterEqual(cfg["CONN_MAX_AGE"], 0)
+        self.assertTrue(cfg["CONN_HEALTH_CHECKS"])
+
+    def test_till_stays_on_sqlite(self):
+        from pathlib import Path
+        from teyssir.core.db import database_config
+        cfg = database_config(role="till", backend="sqlite", base_dir="/tmp", terminal="C2")
+        self.assertEqual(cfg["ENGINE"], "django.db.backends.sqlite3")
+        self.assertEqual(Path(cfg["NAME"]).name, "teyssir_C2.sqlite3")
+
+
 class QtyTests(SimpleTestCase):
     def test_integer_qty_roundtrip(self):
         from teyssir.core import qty

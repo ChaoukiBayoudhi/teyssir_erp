@@ -18,8 +18,8 @@ pytesseract>=0.3            # offline OCR; needs the `tesseract` binary + ara/fr
 # --- Cloud tier only (Phase 6): S3/MinIO object storage for media (set TEYSSIR_S3_BUCKET) ---
 # django-storages>=1.14 ; boto3>=1.34        # free; MinIO is free/self-hosted S3-compatible storage
 
-# --- Hub (PostgreSQL) only; tills run on the built-in SQLite, no driver needed ---
-# psycopg[binary]>=3.2
+# --- Hub (PostgreSQL) — tills stay on SQLite; the binary wheel is unused there ---
+psycopg[binary]>=3.2
 
 # --- Later phases (NOT required to run the Phase-0 skeleton) ---
 # channels>=4 ; channels-redis>=4        # WebSocket stock alerts (§16)
