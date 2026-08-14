@@ -138,6 +138,41 @@ try {
     else {
         Write-Llm "Ollama API did not respond on $OllamaUrl — ERP continues without AI." "Yellow"
     }
+
+    if ($script:LlmReady -and -not $SkipPull -and $Model) {
+        Write-Llm ("Ensuring model '$Model' (ollama pull) ...") "Yellow"
+        try {
+            & (Get-OllamaExe) pull $Model
+            if ($LASTEXITCODE -eq 0) {
+                $script:ModelReady = $true
+                Write-Llm "Model $Model is available." "Green"
+            }
+            else {
+                Write-Llm ("ollama pull $Model exited " + $LASTEXITCODE + " — continuing without it.") "Yellow"
+            }
+        }
+        catch {
+            Write-Llm ("Model pull skipped: " + $_.Exception.Message) "Yellow"
+        }
+        if ($PullVision -and $VisionModel) {
+            Write-Llm ("Optional vision model '$VisionModel' ...") "Yellow"
+            try { & (Get-OllamaExe) pull $VisionModel } catch { Write-Llm $_.Exception.Message "Yellow" }
+        }
+        if ($script:ModelReady) {
+            try {
+                $body = @{ model = $Model; prompt = "Reply with the single word: pong"; stream = $false } | ConvertTo-Json
+                $gen = Invoke-RestMethod -Uri ($OllamaUrl.TrimEnd("/") + "/api/generate") `
+                    -Method Post -Body $body -ContentType "application/json" -TimeoutSec 120
+                $snippet = [string]$gen.response
+                if ($snippet) {
+                    Write-Llm ("Probe response: " + $snippet.Trim().Substring(0, [Math]::Min(80, $snippet.Trim().Length))) "Green"
+                }
+            }
+            catch {
+                Write-Llm ("Model probe skipped: " + $_.Exception.Message) "Yellow"
+            }
+        }
+    }
 }
 catch {
     Write-Llm ("LLM setup skipped: " + $_.Exception.Message) "Yellow"

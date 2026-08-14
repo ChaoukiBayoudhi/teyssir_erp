@@ -73,3 +73,18 @@ class PdfToDocxTests(TestCase):
     def test_requires_a_file(self):
         r = self._client().post("/api/v1/tools/pdf-to-docx", {}, format="multipart")
         self.assertEqual(r.status_code, 400)
+
+
+class LocalLlmTests(SimpleTestCase):
+    def test_disabled_generate_is_empty(self):
+        from teyssir.core.llm import generate, status
+        self.assertFalse(status()["enabled"])
+        self.assertEqual(generate("hello"), "")
+
+    @override_settings(USE_LLM=True, LLM_PROVIDER="ollama", LLM_MODEL="mistral",
+                       OLLAMA_URL="http://127.0.0.1:9")
+    def test_enabled_but_down_returns_empty(self):
+        from teyssir.core.llm import generate, ollama_reachable, status
+        self.assertTrue(status()["enabled"])
+        self.assertFalse(ollama_reachable(timeout=0.2))
+        self.assertEqual(generate("ping", timeout=1), "")
