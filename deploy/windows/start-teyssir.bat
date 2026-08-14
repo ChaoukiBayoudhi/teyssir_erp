@@ -1,13 +1,17 @@
 @echo off
-REM ===========================================================
-REM  Start the Teyssir server (hub or till, per the .env file).
-REM  Keep this window OPEN while the shop is using Teyssir.
-REM ===========================================================
+REM Start Teyssir in this window IF the Windows service is not already running.
 setlocal
 cd /d "%~dp0\..\.."
 
-REM Port the app is served on. Change here if 8000 is already in use.
 set PORT=8000
+
+sc query TeyssirBackend | findstr /I "RUNNING" >nul 2>&1
+if not errorlevel 1 (
+  echo Teyssir Backend service is already running.
+  echo Opening http://localhost:%PORT%
+  start "" powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%~dp0open-teyssir.ps1"
+  goto :eof
+)
 
 if not exist ".venv\Scripts\waitress-serve.exe" (
   echo [ERROR] Teyssir is not installed yet.
@@ -24,10 +28,9 @@ if errorlevel 1 ( echo [ERROR] Database update failed. & pause & exit /b 1 )
 
 echo.
 echo ==============================================================
-echo    Teyssir is running.
+echo    Teyssir is running in this window.
 echo    On THIS PC open:      http://localhost:%PORT%
-echo    From a till PC use:   http://%COMPUTERNAME%:%PORT%   (or this PC's IP)
-echo.
+echo    Prefer the Windows service: Install-WindowsService.ps1
 echo    Leave this window open. Close it to STOP Teyssir.
 echo ==============================================================
 echo.
