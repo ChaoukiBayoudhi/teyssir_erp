@@ -16,6 +16,7 @@ double-entry accounting &amp; VAT, camera book registration (OCR), federated mul
   · 🏗️ <a href="docs/ARCHITECTURE.md">Architecture</a>
   · 📊 <a href="docs/IMPLEMENTATION-PROGRESS.md">Progress</a>
   · 📖 <a href="docs/BOOK-OCR-ARCHITECTURE.md">Book&nbsp;OCR</a>
+  · 🤖 <a href="docs/LOCAL-AI.md">Local&nbsp;AI</a>
   · 📄 <a href="docs/PDF-CONVERSION.md">PDF→Word</a>
 </p>
 
@@ -103,3 +104,21 @@ Convert supplier PDFs and catalogues to editable Word (`.docx`) from the PWA (**
 
 Full design, tuning, and troubleshooting: **[docs/PDF-CONVERSION.md](docs/PDF-CONVERSION.md)**.
 Windows Hub tips (Defender exclusions): **[docs/INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md)**.
+
+---
+
+## Local AI (offline)
+
+Teyssir can run a **local LLM via Ollama** on the shop PC. No cloud API key is required.
+The Windows installer installs Ollama when possible, starts `http://localhost:11434`, and
+pulls a default model (`mistral`, configurable: `llama3`, `gemma`, …).
+
+If Ollama or the model cannot be installed, **the ERP still runs** (Tesseract / manual book entry).
+
+| Setting | Meaning |
+|---------|---------|
+| `USE_LLM=true` | Enable text LLM helpers |
+| `LLM_PROVIDER=ollama` | Runtime |
+| `LLM_MODEL=mistral` | Default chat/generate model |
+
+Guide: **[docs/LOCAL-AI.md](docs/LOCAL-AI.md)**.
