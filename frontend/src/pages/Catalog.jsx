@@ -115,7 +115,7 @@ export default function Catalog({ onBack, onLogout, onNewProduct }) {
                     </TableCell>
                     <TableCell>
                       <Typography variant="body2" fontWeight={600}>{r.name_fr}</Typography>
-                      <Typography variant="caption" color="text.secondary">{r.sku}</Typography>
+                      <Typography variant="caption" color="text.secondary">{r.reference || r.sku}</Typography>
                     </TableCell>
                     <TableCell>{r.category}</TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: "tabular-nums" }}>{r.sale_price}</TableCell>
@@ -164,6 +164,9 @@ export default function Catalog({ onBack, onLogout, onNewProduct }) {
                 )}
                 <Grid item xs={detail.images?.length > 0 ? 8 : 12}>
                   <Info label={t("sku")} value={detail.sku} />
+                  {detail.reference && <Info label={t("reference")} value={detail.reference} />}
+                  {detail.brand && <Info label={t("brand")} value={detail.brand} />}
+                  {detail.color && <Info label={t("color")} value={detail.color} />}
                   <Info label={t("category")} value={detail.category} />
                   <Info label={t("price")} value={`${detail.sale_price} · TVA ${detail.tax_rate_percent}%`} />
                   <Info label={t("stock")} value={`${fmtQty(detail.qty_on_hand)} (${t("lowStock")} ≤ ${fmtQty(detail.reorder_point)})`} />

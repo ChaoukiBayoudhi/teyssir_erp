@@ -64,7 +64,8 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
   };
 
   const setQty = (id, qty) =>
-    setCart((c) => c.map((l) => (l.product.id === id ? { ...l, qty: Math.max(1, qty) } : l)));
+    setCart((c) => c.map((l) => (l.product.id === id
+      ? { ...l, qty: Math.max(1, Math.trunc(Number(qty) || 1)) } : l)));
   const setLineDiscount = (id, pct) =>
     setCart((c) => c.map((l) => (
       l.product.id === id ? { ...l, discountPct: Math.min(100, Math.max(0, Number(pct) || 0)) } : l
@@ -77,11 +78,10 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
     const q = query.trim();
     if (!q) return;
     try {
-      if (/^\d{6,}$/.test(q)) {
+      if (!/\s/.test(q)) {
         const hits = await lookupBarcode(q);
         if (hits.length === 1) return addToCart(hits[0]);
-        if (hits.length === 0) return setResults(await searchProducts(q));
-        return setResults(hits);
+        if (hits.length > 1) return setResults(hits);
       }
       setResults(await searchProducts(q));
     } catch (err) {
@@ -259,7 +259,7 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
                   <ListItemButton key={p.id} onClick={() => addToCart(p)}>
                     <ListItemText
                       primary={p.name_fr}
-                      secondary={`${p.sku} · ${fmt(Number(p.sale_price))} DT · TVA ${p.tax_rate_percent}%`}
+                      secondary={`${p.reference || p.sku} · ${fmt(Number(p.sale_price))} DT · TVA ${p.tax_rate_percent}%`}
                     />
                   </ListItemButton>
                 ))}

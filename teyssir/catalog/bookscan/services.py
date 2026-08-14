@@ -162,7 +162,7 @@ def create_book_from_draft(*, data, image_ids=(), sale_price="0", origin_termina
     category_id = data.get("category") or _default_book_category_id()
     product = Product.objects.create(
         sku=sku, name_fr=data.get("title", ""), name_ar=data.get("title_ar", ""),
-        is_book=True, isbn=isbn13,
+        product_type=Product.BOOK, is_book=True, isbn=isbn13,
         sale_price=require_non_negative_money(sale_price or 0, label="sale_price"),
         tax_rate_id=tax_rate_id or None,
         category_id=category_id or None,

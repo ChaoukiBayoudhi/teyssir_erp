@@ -65,12 +65,19 @@ class ProductViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.
         barcode = self.request.query_params.get("barcode")
         search = self.request.query_params.get("search")
         if barcode:
-            ids = Barcode.objects.filter(value=barcode).values_list("product_id", flat=True)
-            return qs.filter(id__in=list(ids))
+            code = barcode.strip()
+            ids = Barcode.objects.filter(value=code).values_list("product_id", flat=True)
+            return qs.filter(
+                Q(id__in=list(ids)) | Q(sku__iexact=code) | Q(reference__iexact=code)
+                | Q(isbn=code)
+            ).distinct()
         if search:
+            q = search.strip()
+            bc_ids = Barcode.objects.filter(value__icontains=q).values_list("product_id", flat=True)
             qs = qs.filter(
-                Q(name_fr__icontains=search) | Q(name_ar__icontains=search) | Q(sku__icontains=search)
-            )
+                Q(name_fr__icontains=q) | Q(name_ar__icontains=q) | Q(sku__icontains=q)
+                | Q(reference__icontains=q) | Q(isbn__icontains=q) | Q(id__in=list(bc_ids))
+            ).distinct()
         return qs.order_by("name_fr")[:50]
 
 
@@ -79,9 +86,11 @@ def _catalog_row(request, p, primary):
     img = primary.get(p.id)
     reorder = p.reorder_point or 0
     return {
-        "id": str(p.id), "sku": p.sku, "name_fr": p.name_fr, "name_ar": p.name_ar,
-        "sale_price": str(p.sale_price), "qty_on_hand": format_qty(p.qty_on_hand),
+        "id": str(p.id), "sku": p.sku, "reference": p.reference, "name_fr": p.name_fr,
+        "name_ar": p.name_ar, "sale_price": str(p.sale_price),
+        "qty_on_hand": format_qty(p.qty_on_hand),
         "reorder_point": format_qty(reorder), "is_book": p.is_book,
+        "product_type": p.product_type, "color": p.color, "brand": p.brand,
         "category": p.category.name_fr if p.category_id else "",
         "out_of_stock": p.qty_on_hand <= 0,
         "low_stock": bool(reorder) and 0 < p.qty_on_hand <= reorder,
@@ -115,7 +124,7 @@ class CatalogSearchView(APIView):
                               .values_list("book__product_id", flat=True))
             qs = qs.filter(
                 Q(name_fr__icontains=q) | Q(name_ar__icontains=q) | Q(sku__icontains=q)
-                | Q(isbn__icontains=q) | Q(internal_code__icontains=q)
+                | Q(reference__icontains=q) | Q(isbn__icontains=q) | Q(internal_code__icontains=q)
                 | Q(book__isbn13__icontains=q) | Q(book__publisher__icontains=q)
                 | Q(book__subtitle__icontains=q)
                 | Q(id__in=barcode_ids) | Q(id__in=author_ids)
@@ -125,9 +134,9 @@ class CatalogSearchView(APIView):
             qs = qs.filter(category_id=request.query_params["category"])
         typ = request.query_params.get("type")
         if typ == "book":
-            qs = qs.filter(is_book=True)
-        elif typ == "supply":
-            qs = qs.filter(is_book=False)
+            qs = qs.filter(Q(is_book=True) | Q(product_type=Product.BOOK))
+        elif typ in ("supply", "furniture"):
+            qs = qs.filter(is_book=False, product_type=Product.FURNITURE)
         stock = request.query_params.get("stock")
         if stock == "in":
             qs = qs.filter(qty_on_hand__gt=0)
@@ -171,16 +180,20 @@ class BarcodeLookupView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        code = (request.query_params.get("barcode") or "").strip()
-        bc = (Barcode.objects.filter(value=code).select_related("product").first()
-              if code else None)
-        if not bc:
+        code = (request.query_params.get("barcode") or request.query_params.get("q") or "").strip()
+        if not code:
             return Response({"found": False, "barcode": code})
-        p = bc.product
+        bc = Barcode.objects.filter(value=code).select_related("product").first()
+        p = bc.product if bc else Product.objects.filter(
+            Q(sku__iexact=code) | Q(reference__iexact=code) | Q(isbn=code), active=True
+        ).first()
+        if not p:
+            return Response({"found": False, "barcode": code})
         return Response({"found": True, "barcode": code, "product": {
-            "id": str(p.id), "sku": p.sku, "name_fr": p.name_fr, "name_ar": p.name_ar,
+            "id": str(p.id), "sku": p.sku, "reference": p.reference,
+            "name_fr": p.name_fr, "name_ar": p.name_ar,
             "sale_price": str(p.sale_price), "qty_on_hand": format_qty(p.qty_on_hand),
-            "is_book": p.is_book, "active": p.active,
+            "is_book": p.is_book, "product_type": p.product_type, "active": p.active,
         }})
 
 
@@ -200,14 +213,23 @@ class ProductCreateView(APIView):
             p = create_product(
                 name_fr=d["name_fr"], name_ar=d.get("name_ar", ""),
                 category_id=d.get("category") or None, tax_rate_id=d.get("tax_rate") or None,
-                sale_price=d.get("sale_price", "0"), is_book=bool(d.get("is_book")),
+                sale_price=d.get("sale_price", "0"),
+                is_book=bool(d.get("is_book")),
+                product_type=d.get("product_type", ""),
+                reference=d.get("reference", "") or d.get("sku", ""),
+                color=d.get("color", ""), brand=d.get("brand", ""),
                 barcode=d.get("barcode", ""), symbology=d.get("symbology", ""),
                 initial_qty=d.get("initial_qty", "0"), cost=d.get("cost", "0"),
-                reorder_point=d.get("reorder_point", "0"), origin_terminal=settings.TERMINAL,
+                reorder_point=d.get("reorder_point", "0"),
+                isbn=d.get("isbn", ""),
+                origin_terminal=settings.TERMINAL,
             )
-        except ValueError as exc:                       # duplicate barcode
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-        return Response({"id": str(p.id), "sku": p.sku, "name": p.name_fr},
+        except ValueError as exc:
+            msg = str(exc)
+            code = status.HTTP_409_CONFLICT if "déjà" in msg or "existe déjà" in msg else status.HTTP_400_BAD_REQUEST
+            return Response({"detail": msg}, status=code)
+        return Response({"id": str(p.id), "sku": p.sku, "reference": p.reference,
+                         "name": p.name_fr, "product_type": p.product_type},
                         status=status.HTTP_201_CREATED)
 
 
@@ -422,10 +444,12 @@ class ProductDetailView(APIView):
             return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
 
         data = {
-            "id": str(p.id), "sku": p.sku, "internal_code": p.internal_code,
+            "id": str(p.id), "sku": p.sku, "reference": p.reference,
+            "internal_code": p.internal_code,
             "name_fr": p.name_fr, "name_ar": p.name_ar,
             "category": p.category.name_fr if p.category_id else "",
-            "is_book": p.is_book, "isbn": p.isbn, "active": p.active,
+            "is_book": p.is_book, "product_type": p.product_type,
+            "isbn": p.isbn, "color": p.color, "brand": p.brand, "active": p.active,
             "sale_price": str(p.sale_price), "cost_avg": str(p.cost_avg),
             "qty_on_hand": format_qty(p.qty_on_hand), "reorder_point": format_qty(p.reorder_point),
             "reorder_qty": format_qty(p.reorder_qty),
