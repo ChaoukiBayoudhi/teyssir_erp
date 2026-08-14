@@ -95,6 +95,16 @@ function Invoke-PsqlAdmin([string]$Sql) {
     return $out
 }
 
+function Test-AppLogin {
+    $psql = Get-PsqlExe
+    if (-not $psql -or -not $Password) { return $false }
+    $env:PGPASSWORD = $Password
+    & $psql -U $User -h $HostName -p $Port -d $Db -v ON_ERROR_STOP=1 -c "SELECT 1" 2>&1 | Out-Null
+    $ok = ($LASTEXITCODE -eq 0)
+    Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
+    return $ok
+}
+
 function New-TeyssirDatabase {
     if (-not $Password) { throw "POSTGRES_PASSWORD is empty" }
     $safePass = $Password.Replace("'", "''")
@@ -121,15 +131,27 @@ END
 }
 
 try {
-    if (-not (Install-PostgresSilent)) { return }
-    Start-PostgresService | Out-Null
-    if ($script:GeneratedSuper -and -not $SuperPassword) { $SuperPassword = $script:GeneratedSuper }
-    if (-not $SuperPassword) {
-        Write-Pg "No superuser password (pass -SuperPassword or POSTGRES_ADMIN_PASSWORD). Cannot create the app role." "Yellow"
-        return
+    if (Test-AppLogin) {
+        Write-Pg "Existing database is reachable as $User — skipping create (re-run safe)." "Green"
+        $script:Ready = $true
     }
-    New-TeyssirDatabase
-    $script:Ready = $true
+    else {
+        if (-not (Install-PostgresSilent)) { return }
+        Start-PostgresService | Out-Null
+        if ($script:GeneratedSuper -and -not $SuperPassword) { $SuperPassword = $script:GeneratedSuper }
+        if (-not $SuperPassword) {
+            Write-Pg "No superuser password (pass -SuperPassword or POSTGRES_ADMIN_PASSWORD). Cannot create the app role." "Yellow"
+            Write-Pg "If PostgreSQL is already installed, re-run with POSTGRES_ADMIN_PASSWORD set, or use -SkipPostgres for SQLite." "Yellow"
+            return
+        }
+        New-TeyssirDatabase
+        if (Test-AppLogin) {
+            $script:Ready = $true
+        }
+        else {
+            Write-Pg "Role/database created but login as $User failed — hub will use SQLite." "Yellow"
+        }
+    }
 }
 catch {
     Write-Pg ("PostgreSQL setup skipped: " + $_.Exception.Message) "Yellow"
