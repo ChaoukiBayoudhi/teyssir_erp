@@ -1,23 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 import {
   AppBar, Toolbar, Typography, Button, Box, Paper, TextField, Stack, Alert, Snackbar, MenuItem,
-  Select, InputLabel, FormControl, ToggleButton, ToggleButtonGroup, Chip, Grid,
+  Select, InputLabel, FormControl, ToggleButton, ToggleButtonGroup, Grid,
 } from "@mui/material";
 import { useTranslation } from "react-i18next";
 import { barcodeLookup, createProduct, listCategories, listTaxRates } from "../api";
 import LangToggle from "../LangToggle.jsx";
 import { fmtQty } from "../format.js";
 
-const EMPTY = { name_fr: "", name_ar: "", category: "", tax_rate: "", sale_price: "",
-                initial_qty: "", reorder_point: "" };
+const EMPTY = {
+  name_fr: "", name_ar: "", category: "", tax_rate: "", sale_price: "",
+  initial_qty: "", reorder_point: "", reference: "", color: "", brand: "",
+  isbn: "", authors: "",
+};
 
-export default function ProductCreate({ onBack, onLogout }) {
+export default function ProductCreate({ onBack, onLogout, onNewBook }) {
   const { t } = useTranslation();
   const barcodeRef = useRef(null);
   const videoRef = useRef(null);
+  const streamRef = useRef(null);
   const [barcode, setBarcode] = useState("");
-  const [existing, setExisting] = useState(null);      // product already using this barcode
-  const [isBook, setIsBook] = useState(false);
+  const [existing, setExisting] = useState(null);
+  const [productType, setProductType] = useState("furniture"); // furniture | book
   const [form, setForm] = useState(EMPTY);
   const [cats, setCats] = useState([]);
   const [taxes, setTaxes] = useState([]);
@@ -26,10 +30,18 @@ export default function ProductCreate({ onBack, onLogout }) {
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
 
+  const isBook = productType === "book";
+
   useEffect(() => {
     listCategories().then(setCats).catch(() => {});
-    listTaxRates().then((r) => { setTaxes(r); const d = r.find((x) => x.is_default); if (d) setForm((f) => ({ ...f, tax_rate: d.id })); }).catch(() => {});
+    listTaxRates().then((r) => {
+      setTaxes(r);
+      const d = r.find((x) => x.is_default);
+      if (d) setForm((f) => ({ ...f, tax_rate: d.id }));
+    }).catch(() => {});
     barcodeRef.current?.focus();
+    return () => stopScan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -39,17 +51,18 @@ export default function ProductCreate({ onBack, onLogout }) {
     if (!code) return;
     try {
       const r = await barcodeLookup(code);
-      if (r.found) setExisting(r.product);   // duplicate — show it instead of creating
+      if (r.found) setExisting(r.product);
     } catch (e) { setError(String(e.message || e)); }
   };
 
   const onBarcodeKey = (e) => {
-    if (e.key === "Enter") { e.preventDefault(); lookup(barcode.trim()); }   // USB scanner sends Enter
+    if (e.key === "Enter") { e.preventDefault(); lookup(barcode.trim()); }
   };
 
   const stopScan = () => {
-    const s = videoRef.current?.srcObject;
+    const s = streamRef.current || videoRef.current?.srcObject;
     if (s) s.getTracks().forEach((tk) => tk.stop());
+    streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
     setScanning(false);
   };
@@ -58,14 +71,23 @@ export default function ProductCreate({ onBack, onLogout }) {
     setError("");
     if (!("BarcodeDetector" in window)) { setError(t("scannerUnsupported")); return; }
     try {
+      stopScan();
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-      videoRef.current.srcObject = stream; setScanning(true);
+      streamRef.current = stream;
+      videoRef.current.srcObject = stream;
+      setScanning(true);
       const detector = new window.BarcodeDetector();
       const tick = async () => {
         if (!videoRef.current?.srcObject) return;
         try {
           const codes = await detector.detect(videoRef.current);
-          if (codes.length) { const code = codes[0].rawValue; stopScan(); setBarcode(code); lookup(code); return; }
+          if (codes.length) {
+            const code = codes[0].rawValue;
+            stopScan();
+            setBarcode(code);
+            lookup(code);
+            return;
+          }
         } catch { /* frame not ready */ }
         requestAnimationFrame(tick);
       };
@@ -76,21 +98,29 @@ export default function ProductCreate({ onBack, onLogout }) {
   const save = async () => {
     setError("");
     if (!form.name_fr.trim()) { setError(t("nameRequired")); return; }
+    if (!isBook && !form.reference.trim()) { setError(t("referenceRequired")); return; }
     setBusy(true);
     try {
       await createProduct({
         name_fr: form.name_fr, name_ar: form.name_ar, category: form.category,
-        tax_rate: form.tax_rate, sale_price: form.sale_price || "0", is_book: isBook,
+        tax_rate: form.tax_rate, sale_price: form.sale_price || "0",
+        product_type: productType, is_book: isBook,
+        reference: form.reference.trim(), color: form.color, brand: form.brand,
+        isbn: form.isbn.trim(),
         barcode: barcode.trim(), initial_qty: form.initial_qty || "0",
         reorder_point: form.reorder_point || "0",
       });
       setToast(t("registered"));
-      setForm((f) => ({ ...EMPTY, tax_rate: f.tax_rate })); setBarcode(""); setExisting(null);
-      barcodeRef.current?.focus();     // ready for the next scan (continuous entry)
+      setForm((f) => ({ ...EMPTY, tax_rate: f.tax_rate }));
+      setBarcode(""); setExisting(null);
+      barcodeRef.current?.focus();
     } catch (e) {
       setError(String(e.message || e).replace(/^\d+:\s*/, ""));
     } finally { setBusy(false); }
   };
+
+  const furnitureReady = Boolean(form.name_fr.trim() && form.reference.trim());
+  const bookReady = Boolean(form.name_fr.trim());
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "#f5f5f5" }}>
@@ -107,9 +137,19 @@ export default function ProductCreate({ onBack, onLogout }) {
         {error && <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setError("")}>{error}</Alert>}
 
         <Paper sx={{ p: 2, mb: 2 }}>
-          <Typography color="text.secondary" sx={{ mb: 1 }}>{t("scanBarcodePrompt")}</Typography>
+          <ToggleButtonGroup exclusive size="small" value={productType} sx={{ mb: 2 }}
+                             onChange={(_, v) => { if (v) { setProductType(v); setExisting(null); stopScan(); } }}>
+            <ToggleButton value="furniture">{t("furniture")}</ToggleButton>
+            <ToggleButton value="book">{t("books")}</ToggleButton>
+          </ToggleButtonGroup>
+
+          <Typography color="text.secondary" sx={{ mb: 1 }}>
+            {isBook ? t("scanIsbnPrompt") : t("scanFurniturePrompt")}
+          </Typography>
           <Stack direction="row" spacing={1}>
-            <TextField inputRef={barcodeRef} fullWidth size="small" label={t("barcodeLabel")} value={barcode}
+            <TextField inputRef={barcodeRef} fullWidth size="small"
+                       label={isBook ? t("isbnOrBarcode") : t("barcodeOptional")}
+                       value={barcode}
                        onChange={(e) => setBarcode(e.target.value)} onKeyDown={onBarcodeKey}
                        onBlur={() => barcode && lookup(barcode.trim())} autoFocus />
             {!scanning
@@ -129,14 +169,32 @@ export default function ProductCreate({ onBack, onLogout }) {
 
         {!existing && (
           <Paper sx={{ p: 2 }}>
-            <ToggleButtonGroup exclusive size="small" value={isBook ? "book" : "supply"} sx={{ mb: 2 }}
-                               onChange={(_, v) => v && setIsBook(v === "book")}>
-              <ToggleButton value="supply">{t("supplies")}</ToggleButton>
-              <ToggleButton value="book">{t("books")}</ToggleButton>
-            </ToggleButtonGroup>
-
             <Stack spacing={2}>
-              <TextField label={t("articleName")} value={form.name_fr} onChange={(e) => set("name_fr", e.target.value)} required fullWidth />
+              {isBook ? (
+                <>
+                  {onNewBook && (
+                    <Button variant="outlined" onClick={onNewBook}>{t("ocrBookCamera")}</Button>
+                  )}
+                  <TextField label="ISBN" value={form.isbn} onChange={(e) => set("isbn", e.target.value)} fullWidth />
+                  <TextField label={t("bookTitle")} value={form.name_fr} onChange={(e) => set("name_fr", e.target.value)} required fullWidth />
+                  <TextField label={t("authorsF")} value={form.authors} onChange={(e) => set("authors", e.target.value)} fullWidth />
+                </>
+              ) : (
+                <>
+                  <TextField label={t("reference")} value={form.reference} required fullWidth
+                             onChange={(e) => set("reference", e.target.value)}
+                             helperText={t("referenceHint")} />
+                  <TextField label={t("articleName")} value={form.name_fr} onChange={(e) => set("name_fr", e.target.value)} required fullWidth />
+                  <Grid container spacing={2}>
+                    <Grid item xs={6}>
+                      <TextField label={t("color")} value={form.color} onChange={(e) => set("color", e.target.value)} fullWidth />
+                    </Grid>
+                    <Grid item xs={6}>
+                      <TextField label={t("brand")} value={form.brand} onChange={(e) => set("brand", e.target.value)} fullWidth />
+                    </Grid>
+                  </Grid>
+                </>
+              )}
               <TextField label={t("nameArLabel")} value={form.name_ar} onChange={(e) => set("name_ar", e.target.value)} fullWidth
                          inputProps={{ dir: "rtl" }} />
               <Grid container spacing={2}>
@@ -157,11 +215,12 @@ export default function ProductCreate({ onBack, onLogout }) {
                     </Select>
                   </FormControl>
                 </Grid>
-                <Grid item xs={4}><TextField label={t("price")} type="number" value={form.sale_price} onChange={(e) => set("sale_price", e.target.value)} fullWidth inputProps={{ min: 0, step: "0.001" }} /></Grid>
+                <Grid item xs={4}><TextField label={`${t("price")} (DT)`} type="number" value={form.sale_price} onChange={(e) => set("sale_price", e.target.value)} fullWidth inputProps={{ min: 0, step: "0.001" }} /></Grid>
                 <Grid item xs={4}><TextField label={t("initialQty")} type="number" value={form.initial_qty} onChange={(e) => set("initial_qty", e.target.value)} fullWidth inputProps={{ min: 0, step: 1 }} /></Grid>
                 <Grid item xs={4}><TextField label={t("reorderPoint")} type="number" value={form.reorder_point} onChange={(e) => set("reorder_point", e.target.value)} fullWidth inputProps={{ min: 0, step: 1 }} /></Grid>
               </Grid>
-              <Button variant="contained" size="large" disabled={busy || !form.name_fr.trim()} onClick={save}>
+              <Button variant="contained" size="large"
+                      disabled={busy || (isBook ? !bookReady : !furnitureReady)} onClick={save}>
                 {t("register")}
               </Button>
             </Stack>

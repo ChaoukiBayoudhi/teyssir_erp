@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q, UniqueConstraint
 
 from teyssir.core.models import MONEY, SyncableModel, TimeStampedModel, UUIDModel
 
@@ -27,12 +28,24 @@ class Category(SyncableModel):
 
 
 class Product(SyncableModel):
+    """Books are identified by ISBN; furniture/supplies by a unique *reference* (numeric or
+    alphanumeric, e.g. 1001 / SAC-001). ``sku`` stays the technical unique key and equals the
+    reference for furniture (backward compatible with POS search)."""
+
+    BOOK = "book"
+    FURNITURE = "furniture"
+    PRODUCT_TYPES = [(BOOK, "Book"), (FURNITURE, "Furniture")]
+
     sku = models.CharField(max_length=48, unique=True)
+    # Furniture identifier. Blank on books (ISBN is the key). Unique among non-empty values.
+    reference = models.CharField(max_length=48, blank=True, default="", db_index=True)
     internal_code = models.CharField(max_length=48, blank=True, default="")
     name_fr = models.CharField(max_length=200)
     name_ar = models.CharField(max_length=200, blank=True, default="")
     category = models.ForeignKey(Category, null=True, blank=True, on_delete=models.SET_NULL)
     tax_rate = models.ForeignKey(TaxRate, null=True, blank=True, on_delete=models.SET_NULL)
+    color = models.CharField(max_length=64, blank=True, default="")
+    brand = models.CharField(max_length=80, blank=True, default="")
 
     cost_avg = models.DecimalField(default=0, **MONEY)        # weighted average cost (§14.2)
     sale_price = models.DecimalField(default=0, **MONEY)
@@ -40,10 +53,31 @@ class Product(SyncableModel):
     reorder_point = models.IntegerField(default=0)
     reorder_qty = models.IntegerField(default=0)
 
+    product_type = models.CharField(max_length=16, choices=PRODUCT_TYPES, default=FURNITURE, db_index=True)
     is_book = models.BooleanField(default=False)
     isbn = models.CharField(max_length=13, blank=True, default="")
     allow_negative = models.BooleanField(default=False)
     active = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(
+                fields=["reference"],
+                condition=~Q(reference=""),
+                name="catalog_product_reference_uniq",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.product_type == self.BOOK or self.is_book or (self.isbn or "").strip():
+            self.product_type = self.BOOK
+            self.is_book = True
+        else:
+            self.product_type = self.FURNITURE
+            self.is_book = False
+            if not (self.reference or "").strip():
+                self.reference = self.sku or ""
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.sku} — {self.name_fr}"

@@ -71,7 +71,8 @@ export default function App() {
           <Catalog onBack={() => setView("pos")} onLogout={logout}
                    onNewProduct={() => setView("newProduct")} />
         ) : view === "newProduct" ? (
-          <ProductCreate onBack={() => setView("pos")} onLogout={logout} />
+          <ProductCreate onBack={() => setView("pos")} onLogout={logout}
+                         onNewBook={() => setView("book")} />
         ) : view === "pdfConvert" ? (
           <PdfConvert onBack={() => setView("pos")} onLogout={logout} />
         ) : (
