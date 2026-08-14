@@ -143,7 +143,9 @@ Write-Host "==== Installation complete ====" -ForegroundColor Green
 Write-Host "Start Teyssir with:  deploy\windows\start-teyssir.bat"
 Write-Host "Then open:           http://localhost:8000"
 if ($global:TeyssirLlmReady) {
-    Write-Host ("Local AI:            Ollama ready at http://127.0.0.1:11434")
+    $modelNote = $LlmModel
+    if ($global:TeyssirLlmModelReady) { $modelNote = "$LlmModel (downloaded)" }
+    Write-Host ("Local AI:            Ollama ready · " + $modelNote)
 }
 else {
     Write-Host "Local AI:            not active (ERP works without it). See docs/LOCAL-AI.md"
