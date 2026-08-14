@@ -18,7 +18,7 @@ double-entry accounting &amp; VAT, camera book registration (OCR), federated mul
   · 📖 <a href="docs/BOOK-OCR-ARCHITECTURE.md">Book&nbsp;OCR</a>
   · 🤖 <a href="docs/LOCAL-AI.md">Local&nbsp;AI</a>
   · 🗄️ <a href="docs/POSTGRESQL-SETUP.md">PostgreSQL</a>
-  · 📄 <a href="docs/PDF-CONVERSION.md">PDF→Word</a>
+  · 🧪 <a href="docs/INSTALLATION-QA.md">Install&nbsp;QA</a>
 </p>
 
 ---
@@ -31,7 +31,7 @@ credit accounts · cash sessions (X/Z) · quotations → sales · **double-entry
 journals, trial balance, P&amp;L, balance sheet, **monthly VAT declaration**) · **camera book
 registration + OCR** (ISBN-first; Tesseract &amp; a free offline Vision-LLM; async) · **PDF→Word**
 (async job; fast text path + layout fidelity) · **federated
-sync** (till → store-hub → cloud-hub) with **multi-store consolidation**. 102 automated tests.
+sync** (till → store-hub → cloud-hub) with **multi-store consolidation**. 125 automated tests.
 
 ## Deploy for the client (Windows)
 
@@ -42,8 +42,10 @@ Full guide: **[docs/INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md)** · kit: [depl
 Set-ExecutionPolicy -Scope Process Bypass -Force
 .\deploy\windows\install.ps1 -Role hub          # note the printed SYNC KEY
 .\deploy\windows\install.ps1 -Role till -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey <hub-key>
-.\deploy\windows\start-teyssir.bat              # open http://localhost:8000
+.\deploy\windows\start-teyssir.bat              # then open http://localhost:8000
 ```
+
+Hub install (elevated PowerShell recommended) auto-detects/installs **Python 3.12** if missing, creates `.venv`, installs PostgreSQL when possible (SQLite fallback), seeds RBAC/fiscal data, and tries **Ollama**. Tills never install PostgreSQL. The script is **safe to re-run**. Full QA notes: [docs/INSTALLATION-QA.md](docs/INSTALLATION-QA.md).
 
 ---
 

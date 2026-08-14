@@ -6,7 +6,7 @@ Scripts to install and run Teyssir on the client's Windows PCs (1 Hub + up to 3 
 
 | File | Purpose |
 |------|---------|
-| `install.ps1` | One-shot installer: Python venv, deps, build, `.env` (random secrets), DB, admin user, optional Ollama. |
+| `install.ps1` | One-shot installer (idempotent): Python (winget if missing), venv, deps, PWA build, `.env`, Hub PostgreSQL or SQLite, migrate + seed, optional Ollama, first admin. |
 | `Install-Postgres.ps1` | Silent PostgreSQL install + `teyssir` database (hub only; SQLite fallback). |
 | `Install-LocalLlm.ps1` | Silent Ollama install, API check, model pull (called by `install.ps1`; never fails the ERP). |
 | `start-teyssir.bat` | Start the server (hub or till, per `.env`) on `http://localhost:8000`. |

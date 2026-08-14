@@ -13,11 +13,12 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 
 What it does:
 
-1. Detects `psql --version`, or silently installs PostgreSQL 16 (winget).
+1. Detects `psql`, or silently installs PostgreSQL 16 (winget).
 2. Starts the Windows service.
-3. Creates role `teyssir` and database `teyssir` (UTF-8).
-4. Writes credentials to `.env` (never hardcoded in the repo).
-5. Runs `migrate`, `seed_rbac`, `seed_fiscal`.
+3. **If** login as `teyssir` already works, skips create (safe re-run).
+4. Otherwise creates role `teyssir` and database `teyssir` (UTF-8).
+5. Writes credentials to `.env` (never hardcoded in the repo).
+6. Runs `migrate`, `seed_rbac`, `seed_fiscal`. If Django cannot open PostgreSQL, **falls back to SQLite** and continues.
 
 Flags:
 

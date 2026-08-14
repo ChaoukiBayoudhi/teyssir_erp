@@ -4,8 +4,9 @@ Teyssir can use a **local large language model** for book OCR (vision) and futur
 Nothing is sent to the cloud: inference runs on the shop PC via [Ollama](https://ollama.com).
 
 The Windows installer (`deploy/windows/install.ps1`) tries to install Ollama, start it, and
-download a default text model. **If that step fails, Teyssir still installs and runs**
-(POS, stock, books, PDF→Word). AI is optional.
+download a default **text** model (`mistral`). It does **not** pull the large vision model
+unless you run `Install-LocalLlm.ps1 -PullVision`. **If Ollama setup fails, Teyssir still
+installs and runs** (POS, stock, books, PDF→Word). AI is optional.
 
 ## Architecture
 
