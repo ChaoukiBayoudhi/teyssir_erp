@@ -253,11 +253,27 @@ Optionnel dans `.env` : `TEYSSIR_CONVERT_EXECUTOR=inline` (tests) ou `thread`.
 </details>
 
 <details>
+<summary><b>PostgreSQL Setup (Automatic) — Hub</b></summary>
+
+Sur le **PC Hub**, `install.ps1 -Role hub` installe PostgreSQL si besoin, crée l'utilisateur et
+la base **teyssir** (UTF-8), et écrit le mot de passe dans `.env` (`POSTGRES_*`).
+
+- Les **caisses** restent en **SQLite** (hors-ligne) — PostgreSQL n'y est pas installé.
+- Si l'install PostgreSQL échoue, le Hub **bascule sur SQLite** et Teyssir démarre quand même.
+- Superutilisateur déjà installé :  
+  `$env:POSTGRES_ADMIN_PASSWORD = "…" ; .\deploy\windows\install.ps1 -Role hub`
+- Option : `-SkipPostgres` pour forcer SQLite sur le Hub.
+- Guide : [POSTGRESQL-SETUP.md](POSTGRESQL-SETUP.md).
+
+</details>
+
+<details>
 <summary><b>Hub sur PostgreSQL (magasin à fort volume)</b></summary>
 
 Installez PostgreSQL, créez une base, puis dans le `.env` du Hub : `TEYSSIR_DB=postgres` et
 renseignez `POSTGRES_DB / POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_HOST / POSTGRES_PORT`.
 Relancez `deploy\windows\start-teyssir.bat` (il applique les migrations).
+Détail manuel : [POSTGRESQL-SETUP.md](POSTGRESQL-SETUP.md).
 </details>
 
 <details>
