@@ -9,7 +9,8 @@
 
     It creates the Python environment, installs dependencies, builds the app (if Node is
     present and not already built), writes a .env with random secrets, sets up the database,
-    and creates the first administrator.
+    and creates the first administrator. Local Ollama (optional AI) is installed when possible;
+    a failure there never aborts the ERP install.
 #>
 [CmdletBinding()]
 param(
@@ -18,7 +19,9 @@ param(
     [string]$StoreCode = "",
     [string]$HubUrl = "http://teyssir-hub.local:8000",
     [string]$SyncKey = "",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$SkipLlm,
+    [string]$LlmModel = "mistral"
 )
 
 $ErrorActionPreference = "Stop"
@@ -114,7 +117,23 @@ Write-Host "Setting up the database ..."
 & .\.venv\Scripts\python.exe manage.py migrate --noinput
 & .\.venv\Scripts\python.exe manage.py collectstatic --noinput | Out-Null
 
-# 6) First administrator ----------------------------------------------------
+# 6) Local LLM (Ollama) — optional, never fails the ERP install -------------
+$global:TeyssirLlmReady = $false
+if (-not $SkipLlm) {
+    Write-Host "Setting up local LLM (Ollama) ..."
+    $llmScript = Join-Path $PSScriptRoot "Install-LocalLlm.ps1"
+    try {
+        & $llmScript -Model $LlmModel
+    }
+    catch {
+        Write-Warning ("Local LLM setup skipped: " + $_.Exception.Message)
+    }
+}
+else {
+    Write-Host "Skipping local LLM (-SkipLlm)."
+}
+
+# 7) First administrator ----------------------------------------------------
 Write-Host ""
 Write-Host "Create the first administrator account (owner):" -ForegroundColor Green
 & .\.venv\Scripts\python.exe manage.py createsuperuser
@@ -123,3 +142,9 @@ Write-Host ""
 Write-Host "==== Installation complete ====" -ForegroundColor Green
 Write-Host "Start Teyssir with:  deploy\windows\start-teyssir.bat"
 Write-Host "Then open:           http://localhost:8000"
+if ($global:TeyssirLlmReady) {
+    Write-Host ("Local AI:            Ollama ready at http://127.0.0.1:11434")
+}
+else {
+    Write-Host "Local AI:            not active (ERP works without it). See docs/LOCAL-AI.md"
+}
