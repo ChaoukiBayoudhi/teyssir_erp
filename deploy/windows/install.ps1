@@ -65,6 +65,26 @@ function New-Key([int]$n) {
     $chars = [char[]]((48..57) + (65..90) + (97..122))
     -join (1..$n | ForEach-Object { $chars | Get-Random })
 }
+function Set-DotEnvValue([string]$Path, [string]$Key, [string]$Value) {
+    $lines = @()
+    if (Test-Path $Path) {
+        $lines = [System.IO.File]::ReadAllLines($Path)
+    }
+    $found = $false
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($line in $lines) {
+        if ($line -match ("^\s*" + [regex]::Escape($Key) + "=")) {
+            $out.Add("$Key=$Value") | Out-Null
+            $found = $true
+        }
+        else { $out.Add($line) | Out-Null }
+    }
+    if (-not $found) { $out.Add("$Key=$Value") | Out-Null }
+    [System.IO.File]::WriteAllText(
+        $Path,
+        (($out -join "`n") + "`n"),
+        (New-Object System.Text.UTF8Encoding($false)))
+}
 if (-not (Test-Path ".env")) {
     $secret = New-Key 50
     if (-not $SyncKey) { $SyncKey = New-Key 40 }
@@ -131,6 +151,15 @@ if (-not $SkipLlm) {
 }
 else {
     Write-Host "Skipping local LLM (-SkipLlm)."
+}
+
+$envPath = Join-Path $Root ".env"
+if (Test-Path $envPath) {
+    $useLlm = if ($global:TeyssirLlmReady) { "true" } else { "false" }
+    Set-DotEnvValue $envPath "USE_LLM" $useLlm
+    Set-DotEnvValue $envPath "LLM_PROVIDER" "ollama"
+    Set-DotEnvValue $envPath "LLM_MODEL" $LlmModel
+    Set-DotEnvValue $envPath "TEYSSIR_OLLAMA_URL" "http://127.0.0.1:11434"
 }
 
 # 7) First administrator ----------------------------------------------------

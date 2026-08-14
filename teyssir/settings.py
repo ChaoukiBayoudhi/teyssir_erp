@@ -212,9 +212,15 @@ METADATA_PROVIDERS = [
     ).split(",") if p
 ]
 # Vision-LLM OCR (OCR_PROVIDER=vision): free, offline, local — Ollama + a vision model.
-OLLAMA_URL = os.environ.get("TEYSSIR_OLLAMA_URL", "http://localhost:11434")
+OLLAMA_URL = os.environ.get("TEYSSIR_OLLAMA_URL", os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"))
 VISION_MODEL = os.environ.get("TEYSSIR_VISION_MODEL", "qwen2.5vl:3b")
 VISION_TIMEOUT = int(os.environ.get("TEYSSIR_VISION_TIMEOUT", "120"))
+# Optional text LLM (Ollama). ERP must run when this is false or Ollama is down.
+USE_LLM = os.environ.get("USE_LLM", os.environ.get("TEYSSIR_USE_LLM", "false")).strip().lower() in (
+    "1", "true", "yes", "on",
+)
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", os.environ.get("TEYSSIR_LLM_PROVIDER", "ollama"))
+LLM_MODEL = os.environ.get("LLM_MODEL", os.environ.get("TEYSSIR_LLM_MODEL", "mistral"))
 # Scan execution: inline (sync, default) | thread (background, so slow OCR doesn't block the request)
 SCAN_EXECUTOR = os.environ.get("TEYSSIR_SCAN_EXECUTOR", "inline")
 # PDF→Word: thread by default on Windows Hub (long converts must not block waitress); inline elsewhere/tests.
