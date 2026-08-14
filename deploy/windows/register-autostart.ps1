@@ -1,6 +1,5 @@
 <#
-    Register Teyssir to start automatically, and (on tills) to sync on a schedule.
-    Run in an elevated PowerShell:
+    Register till→hub sync (and a logon fallback if the Windows service is absent).
 
         .\deploy\windows\register-autostart.ps1 -Role hub
         .\deploy\windows\register-autostart.ps1 -Role till -SyncMinutes 5
@@ -14,14 +13,18 @@ $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $start = Join-Path $Root "deploy\windows\start-teyssir.bat"
 $sync = Join-Path $Root "deploy\windows\sync-now.bat"
 
-# Auto-start the Teyssir server when the user logs in.
-$action = New-ScheduledTaskAction -Execute $start
-$trigger = New-ScheduledTaskTrigger -AtLogOn
-Register-ScheduledTask -TaskName "Teyssir Server" -Action $action -Trigger $trigger `
-    -RunLevel Highest -Force | Out-Null
-Write-Host "Registered scheduled task 'Teyssir Server' (auto-start at logon)." -ForegroundColor Green
+$svc = Get-Service -Name "TeyssirBackend" -ErrorAction SilentlyContinue
+if ($svc) {
+    Write-Host "Windows service 'TeyssirBackend' is installed — skipping scheduled task 'Teyssir Server' (no duplicate)." -ForegroundColor Green
+}
+else {
+    $action = New-ScheduledTaskAction -Execute $start
+    $trigger = New-ScheduledTaskTrigger -AtLogOn
+    Register-ScheduledTask -TaskName "Teyssir Server" -Action $action -Trigger $trigger `
+        -RunLevel Highest -Force | Out-Null
+    Write-Host "Registered scheduled task 'Teyssir Server' (logon fallback; prefer Install-WindowsService.ps1)." -ForegroundColor Green
+}
 
-# On tills, reconcile with the hub every few minutes.
 if ($Role -eq "till") {
     $sAction = New-ScheduledTaskAction -Execute $sync
     $sTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
@@ -30,4 +33,4 @@ if ($Role -eq "till") {
     Write-Host "Registered scheduled task 'Teyssir Sync' (every $SyncMinutes minutes)." -ForegroundColor Green
 }
 
-Write-Host "Done. Manage these under Windows 'Task Scheduler'."
+Write-Host "Done."
