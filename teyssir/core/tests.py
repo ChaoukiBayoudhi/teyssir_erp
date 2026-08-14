@@ -88,3 +88,14 @@ class LocalLlmTests(SimpleTestCase):
         self.assertTrue(status()["enabled"])
         self.assertFalse(ollama_reachable(timeout=0.2))
         self.assertEqual(generate("ping", timeout=1), "")
+
+
+class HealthLlmTests(TestCase):
+    def test_health_reports_llm_config_without_failing(self):
+        r = self.client.get("/health/")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["status"], "ok")
+        self.assertIn("llm", body)
+        self.assertIn("enabled", body["llm"])
+        self.assertIn("model", body["llm"])
