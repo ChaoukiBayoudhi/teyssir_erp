@@ -16,6 +16,7 @@ double-entry accounting &amp; VAT, camera book registration (OCR), federated mul
   · 🏗️ <a href="docs/ARCHITECTURE.md">Architecture</a>
   · 📊 <a href="docs/IMPLEMENTATION-PROGRESS.md">Progress</a>
   · 📖 <a href="docs/BOOK-OCR-ARCHITECTURE.md">Book&nbsp;OCR</a>
+  · 🤖 <a href="docs/LOCAL-AI.md">Local&nbsp;AI</a>
 </p>
 
 ---
@@ -79,3 +80,21 @@ Set `TEYSSIR_ROLE=hub` and the `POSTGRES_*` vars, uncomment `psycopg[binary]` in
 |------|----|---------|
 | `hub` ("Teyssir Hub", PC-1) | PostgreSQL | source of truth, sync master, backups, reporting |
 | `till` (C1/C2/C3) | SQLite | offline-capable POS; syncs to the hub |
+
+---
+
+## Local AI (offline)
+
+Teyssir can run a **local LLM via Ollama** on the shop PC. No cloud API key is required.
+The Windows installer installs Ollama when possible, starts `http://localhost:11434`, and
+pulls a default model (`mistral`, configurable: `llama3`, `gemma`, …).
+
+If Ollama or the model cannot be installed, **the ERP still runs** (Tesseract / manual book entry).
+
+| Setting | Meaning |
+|---------|---------|
+| `USE_LLM=true` | Enable text LLM helpers |
+| `LLM_PROVIDER=ollama` | Runtime |
+| `LLM_MODEL=mistral` | Default chat/generate model |
+
+Guide: **[docs/LOCAL-AI.md](docs/LOCAL-AI.md)**.

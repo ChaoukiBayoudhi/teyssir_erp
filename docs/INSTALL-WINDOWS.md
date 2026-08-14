@@ -194,6 +194,21 @@ livres).
 ## 10. Options avancées (facultatif)
 
 <details>
+<summary><b>AI Setup (Automatic) — Ollama local</b></summary>
+
+L'installateur Windows (`install.ps1`) **essaie** d'installer **Ollama** en silence, de démarrer
+le service (`http://localhost:11434`) et de télécharger le modèle par défaut (**mistral**).
+
+- Aucun cloud : tout tourne sur le PC Hub / caisse.
+- Si Ollama ou le modèle échoue, **Teyssir s'installe quand même** (caisse, stock, livres).
+- Options : `-LlmModel llama3` ou `-SkipLlm`.
+- Vérification : `ollama --version`, `ollama list`,
+  `.\.venv\Scripts\python.exe manage.py check_llm --ping`.
+- Guide : [LOCAL-AI.md](LOCAL-AI.md).
+
+</details>
+
+<details>
 <summary><b>Impression des tickets / factures A4</b></summary>
 
 Teyssir génère les factures A4 (PDF) et les tickets. Pour une imprimante thermique ESC/POS,
@@ -209,8 +224,9 @@ Deux moteurs **gratuits** sont disponibles :
 - **Tesseract** (rapide, hors-ligne) : installez Tesseract pour Windows
   (<https://github.com/UB-Mannheim/tesseract/wiki>) avec les langues **ara + fra + eng**, puis dans
   `.env` : `TEYSSIR_OCR_PROVIDER=tesseract`.
-- **Vision-LLM** (extraction structurée multilingue, hors-ligne) : installez **Ollama**
-  (<https://ollama.com>), puis `ollama pull qwen2.5vl:3b`, et dans `.env` :
+- **Vision-LLM** (extraction structurée multilingue, hors-ligne) : **installé automatiquement**
+  avec Ollama si possible (voir ci-dessous **AI Setup**). Sinon installez
+  [Ollama](https://ollama.com), `ollama pull qwen2.5vl:3b`, puis `.env` :
   `TEYSSIR_OCR_PROVIDER=vision` et `TEYSSIR_SCAN_EXECUTOR=thread`.
 
 Sans configuration, la saisie du livre reste **manuelle** (aucune erreur, juste pas d'auto-remplissage).
