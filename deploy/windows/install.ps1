@@ -364,6 +364,47 @@ if (-not (Invoke-DjangoSetup)) {
     }
 }
 
+# 5b) Tesseract OCR — optional, never fails the ERP install -----------------
+$global:TeyssirTesseractReady = $false
+$tessCandidates = @(
+    "C:\Program Files\Tesseract-OCR\tesseract.exe",
+    "C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"
+)
+$tessCmd = $tessCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $tessCmd) {
+    Write-Host "Installing Tesseract OCR (eng/fra/ara) if possible ..."
+    try {
+        if (Get-Command winget -ErrorAction SilentlyContinue) {
+            winget install --id UB-Mannheim.TesseractOCR -e --accept-package-agreements --accept-source-agreements --disable-interactivity --silent 2>&1 | Out-Host
+        }
+        elseif (Get-Command choco -ErrorAction SilentlyContinue) {
+            choco install tesseract -y --no-progress 2>&1 | Out-Host
+        }
+        else {
+            Write-Warning "winget/choco unavailable — install Tesseract manually (UB Mannheim) with eng+fra+ara."
+        }
+    }
+    catch {
+        Write-Warning ("Tesseract install skipped: " + $_.Exception.Message)
+    }
+    $tessCmd = $tessCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+}
+if ($tessCmd) {
+    $global:TeyssirTesseractReady = $true
+    Write-Host ("Tesseract found: " + $tessCmd) -ForegroundColor Green
+}
+else {
+    Write-Warning "Tesseract not found — book OCR will use manual/vision fallback. See docs/INSTALL-WINDOWS.md (OCR Troubleshooting)."
+}
+if (Test-Path $envPath) {
+    Set-DotEnvValue $envPath "TEYSSIR_OCR_PROVIDER" "tesseract"
+    Set-DotEnvValue $envPath "TEYSSIR_SCAN_EXECUTOR" "thread"
+    if ($tessCmd) {
+        Set-DotEnvValue $envPath "TEYSSIR_TESSERACT_CMD" $tessCmd
+        Set-DotEnvValue $envPath "TESSERACT_CMD" $tessCmd
+    }
+}
+
 # 6) Local LLM (Ollama) — optional, never fails the ERP install -------------
 $global:TeyssirLlmReady = $false
 if (-not $SkipLlm) {
@@ -490,6 +531,12 @@ else {
     Write-Host "Then open:           http://localhost:8000"
 }
 Write-Host "Health check:        http://localhost:8000/health/"
+if ($global:TeyssirTesseractReady) {
+    Write-Host "OCR (Tesseract):     ready — see Menu → Diagnostics"
+}
+else {
+    Write-Host "OCR (Tesseract):     not found (manual entry still works). docs/INSTALL-WINDOWS.md"
+}
 if ($global:TeyssirLlmReady) {
     $modelNote = $LlmModel
     if ($global:TeyssirLlmModelReady) { $modelNote = "$LlmModel (downloaded)" }

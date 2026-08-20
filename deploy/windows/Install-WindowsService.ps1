@@ -163,7 +163,20 @@ try {
     & $nssm set $ServiceName AppExit Default Restart | Out-Null
     & $nssm set $ServiceName AppRestartDelay 5000 | Out-Null
     & $nssm set $ServiceName AppThrottle 5000 | Out-Null
-    & $nssm set $ServiceName AppEnvironmentExtra "PORT=$Port`nPYTHONUNBUFFERED=1" | Out-Null
+    $tessEnv = "C:\Program Files\Tesseract-OCR\tesseract.exe"
+    if (-not (Test-Path $tessEnv)) {
+        $tessEnv = "C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"
+    }
+    if (-not (Test-Path $tessEnv)) { $tessEnv = "tesseract" }
+    $envExtra = @(
+        "PORT=$Port",
+        "PYTHONUNBUFFERED=1",
+        "TEYSSIR_SCAN_EXECUTOR=thread",
+        "TEYSSIR_TESSERACT_CMD=$tessEnv",
+        "TESSERACT_CMD=$tessEnv",
+        "PATH=C:\Program Files\Tesseract-OCR;C:\Program Files (x86)\Tesseract-OCR;%SystemRoot%\system32;%SystemRoot%;%SystemRoot%\System32\Wbem"
+    ) -join "`n"
+    & $nssm set $ServiceName AppEnvironmentExtra $envExtra | Out-Null
 
     sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/5000/restart/5000 | Out-Null
     sc.exe config $ServiceName start= delayed-auto | Out-Null

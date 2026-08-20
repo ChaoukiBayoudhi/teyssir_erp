@@ -209,3 +209,7 @@ class HealthLlmTests(TestCase):
         self.assertIn("llm", body)
         self.assertIn("enabled", body["llm"])
         self.assertIn("model", body["llm"])
+        self.assertIn("tesseract", body)
+        self.assertIn("installed", body["tesseract"])
+        self.assertIn("path", body["tesseract"])
+        self.assertIn("langs", body["tesseract"])

@@ -56,6 +56,24 @@ echo "Installing Python dependencies ..."
 .venv/bin/python -m pip install --upgrade pip >/dev/null
 .venv/bin/pip install -r requirements.txt
 
+# 2b) Tesseract OCR (optional — never abort) --------------------------------
+TESS_CMD=""
+for cand in /opt/homebrew/bin/tesseract /usr/local/bin/tesseract; do
+  if [ -x "$cand" ]; then TESS_CMD="$cand"; break; fi
+done
+if [ -z "$TESS_CMD" ] && command -v brew >/dev/null 2>&1; then
+  echo "Installing Tesseract (brew) ..."
+  brew install tesseract tesseract-lang >/dev/null 2>&1 || echo "WARNING: brew tesseract skipped — OCR may need manual install."
+  for cand in /opt/homebrew/bin/tesseract /usr/local/bin/tesseract; do
+    if [ -x "$cand" ]; then TESS_CMD="$cand"; break; fi
+  done
+fi
+if [ -n "$TESS_CMD" ]; then
+  echo "Tesseract: $TESS_CMD"
+else
+  echo "WARNING: Tesseract not found — book OCR will fall back to manual/vision."
+fi
+
 # 3) Front-end build (only if not already built) ----------------------------
 if [ "$SKIP_BUILD" -eq 0 ] && [ ! -f "frontend/dist/index.html" ]; then
   if command -v npm >/dev/null 2>&1; then
@@ -82,6 +100,9 @@ if [ ! -f ".env" ]; then
 TEYSSIR_ROLE=hub
 TEYSSIR_STORE_CODE=$STORE
 TEYSSIR_DB=sqlite
+TEYSSIR_SCAN_EXECUTOR=thread
+TEYSSIR_OCR_PROVIDER=tesseract
+TEYSSIR_TESSERACT_CMD=${TESS_CMD:-/opt/homebrew/bin/tesseract}
 TEYSSIR_SYNC_KEY=$SYNC_KEY
 DEBUG=0
 SECRET_KEY=$SECRET
@@ -96,6 +117,9 @@ TEYSSIR_STORE_CODE=$STORE
 TEYSSIR_HUB_URL=$HUB_URL
 TEYSSIR_SYNC_KEY=$SYNC_KEY
 TEYSSIR_DB=sqlite
+TEYSSIR_SCAN_EXECUTOR=thread
+TEYSSIR_OCR_PROVIDER=tesseract
+TEYSSIR_TESSERACT_CMD=${TESS_CMD:-/opt/homebrew/bin/tesseract}
 DEBUG=0
 SECRET_KEY=$SECRET
 TEYSSIR_ALLOWED_HOSTS=localhost,127.0.0.1
@@ -108,6 +132,13 @@ EOF
   echo ""
 else
   echo ".env already exists — secrets left unchanged."
+  if [ -n "$TESS_CMD" ]; then
+    if grep -q '^TEYSSIR_TESSERACT_CMD=' .env 2>/dev/null; then
+      sed -i '' "s|^TEYSSIR_TESSERACT_CMD=.*|TEYSSIR_TESSERACT_CMD=$TESS_CMD|" .env
+    else
+      echo "TEYSSIR_TESSERACT_CMD=$TESS_CMD" >> .env
+    fi
+  fi
   if [ "$ROLE" = "till" ]; then
     # Allow re-run to fix terminal / hub / sync key without wiping SECRET_KEY
     if [ -n "$TERMINAL" ]; then

@@ -190,6 +190,34 @@ if os.environ.get("TEYSSIR_S3_BUCKET"):
 
 # Book registration / OCR providers (replaceable; docs/BOOK-OCR-ARCHITECTURE.md)
 OCR_PROVIDER = os.environ.get("TEYSSIR_OCR_PROVIDER", "tesseract")          # tesseract|manual|vision
+# Absolute Tesseract binary (LaunchAgent / NSSM often lack Homebrew / Program Files on PATH).
+def _default_tesseract_cmd() -> str:
+    import sys as _sys
+    if _sys.platform == "darwin":
+        for cand in ("/opt/homebrew/bin/tesseract", "/usr/local/bin/tesseract"):
+            if Path(cand).is_file():
+                return cand
+    elif _sys.platform == "win32":
+        for cand in (
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        ):
+            if Path(cand).is_file():
+                return cand
+    return "tesseract"
+
+
+TESSERACT_CMD = (
+    os.environ.get("TEYSSIR_TESSERACT_CMD")
+    or os.environ.get("TESSERACT_CMD")
+    or _default_tesseract_cmd()
+)
+# Below this OCR mean-confidence (0–100), drafts are flagged for manual review.
+OCR_CONFIDENCE_THRESHOLD = float(os.environ.get("TEYSSIR_OCR_CONFIDENCE_THRESHOLD", "45"))
+# When Tesseract returns a weak/empty draft, try local Ollama vision (qwen2.5vl) once.
+OCR_VISION_FALLBACK = os.environ.get("TEYSSIR_OCR_VISION_FALLBACK", "true").strip().lower() in (
+    "1", "true", "yes", "on",
+)
 METADATA_PROVIDERS = [
     p for p in os.environ.get(
         "TEYSSIR_METADATA_PROVIDERS", "openlibrary,googlebooks"

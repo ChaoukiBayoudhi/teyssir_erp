@@ -28,6 +28,16 @@ SERVE="$ROOT/deploy/macos/serve.py"
 LOG_DIR="$ROOT/logs"
 mkdir -p "$LA" "$LOG_DIR"
 
+TESS_CMD="/opt/homebrew/bin/tesseract"
+for cand in /opt/homebrew/bin/tesseract /usr/local/bin/tesseract; do
+  if [ -x "$cand" ]; then TESS_CMD="$cand"; break; fi
+done
+# Prefer .env override when present
+if [ -f "$ROOT/.env" ]; then
+  env_cmd="$(grep -E '^(TEYSSIR_TESSERACT_CMD|TESSERACT_CMD)=' "$ROOT/.env" | head -1 | cut -d= -f2- || true)"
+  if [ -n "${env_cmd:-}" ] && [ -x "$env_cmd" ]; then TESS_CMD="$env_cmd"; fi
+fi
+
 uid="$(id -u)"
 
 unload_label() {
@@ -87,6 +97,20 @@ cat > "$PLIST" <<EOF
     <string>$PORT</string>
     <key>PYTHONUNBUFFERED</key>
     <string>1</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>$HOME</string>
+    <key>LANG</key>
+    <string>en_US.UTF-8</string>
+    <key>LC_ALL</key>
+    <string>en_US.UTF-8</string>
+    <key>TEYSSIR_SCAN_EXECUTOR</key>
+    <string>thread</string>
+    <key>TEYSSIR_TESSERACT_CMD</key>
+    <string>$TESS_CMD</string>
+    <key>TESSERACT_CMD</key>
+    <string>$TESS_CMD</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

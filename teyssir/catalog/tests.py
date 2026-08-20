@@ -173,9 +173,22 @@ class BookScanApiTests(TestCase):
         self.assertEqual(str(linked.product_id), str(product.id))
         self.assertTrue(linked.is_primary)
 
+    def test_scan_requires_auth(self):
+        anon = APIClient()
+        r = anon.post("/api/v1/catalog/books/scan", {"images": _png()}, format="multipart")
+        self.assertIn(r.status_code, (401, 403))
+
+    def test_poll_scan_job_requires_auth(self):
+        # Create a job as authenticated user, then poll as anonymous
+        from teyssir.catalog.models import ScanJob
+        job = ScanJob.objects.create(status=ScanJob.PENDING)
+        anon = APIClient()
+        r = anon.get(f"/api/v1/catalog/books/scan/{job.id}")
+        self.assertIn(r.status_code, (401, 403))
+
 
 @unittest.skipUnless(_tesseract_ready(), "tesseract engine + fra language data not installed")
-@override_settings(OCR_PROVIDER="tesseract")
+@override_settings(OCR_PROVIDER="tesseract", OCR_VISION_FALLBACK=False)
 class TesseractOcrTests(TestCase):
     def test_extracts_title_and_isbn_from_a_rendered_cover(self):
         from teyssir.catalog.bookscan.ocr import get_ocr_provider
@@ -410,6 +423,59 @@ class VisionLlmOcrTests(TestCase):
         self.assertEqual(draft.confidence, 0.0)
         self.assertFalse(draft.raw.get("ocr_available", True))
         self.assertIn("ocr_error", draft.raw)
+
+    def test_configure_tesseract_finds_binary(self):
+        """Absolute tesseract path is resolved even when cmd was the bare name."""
+        import pytesseract
+        from pathlib import Path
+        from django.test import override_settings
+        from teyssir.catalog.bookscan.ocr import configure_tesseract
+
+        pytesseract.pytesseract.tesseract_cmd = "tesseract"
+        with override_settings(TESSERACT_CMD="tesseract"):
+            cmd = configure_tesseract(pytesseract)
+        self.assertTrue(cmd)
+        self.assertTrue(Path(cmd).is_file())
+        self.assertEqual(pytesseract.pytesseract.tesseract_cmd, cmd)
+
+    def test_configure_tesseract_candidate_when_not_on_path(self):
+        """LaunchAgent-style empty PATH: fall back to known install locations."""
+        import pytesseract
+        from django.test import override_settings
+        from teyssir.catalog.bookscan.ocr import configure_tesseract
+
+        pytesseract.pytesseract.tesseract_cmd = "tesseract"
+        with override_settings(TESSERACT_CMD="tesseract"):
+            with unittest.mock.patch("teyssir.catalog.bookscan.ocr.shutil.which", return_value=None):
+                with unittest.mock.patch(
+                    "teyssir.catalog.bookscan.ocr.Path.is_file",
+                    lambda self: str(self) == "/opt/homebrew/bin/tesseract",
+                ):
+                    cmd = configure_tesseract(pytesseract)
+        self.assertEqual(cmd, "/opt/homebrew/bin/tesseract")
+
+    def test_configure_tesseract_uses_settings_cmd(self):
+        import pytesseract
+        from django.test import override_settings
+        from teyssir.catalog.bookscan.ocr import configure_tesseract
+
+        with override_settings(TESSERACT_CMD="/opt/homebrew/bin/tesseract"):
+            with unittest.mock.patch(
+                "teyssir.catalog.bookscan.ocr.Path.is_file",
+                lambda self: str(self) == "/opt/homebrew/bin/tesseract",
+            ):
+                cmd = configure_tesseract(pytesseract)
+        self.assertEqual(cmd, "/opt/homebrew/bin/tesseract")
+
+    def test_tesseract_langs_only_use_installed_packs(self):
+        from teyssir.catalog.bookscan.ocr import _tesseract_langs_for
+
+        self.assertEqual(
+            _tesseract_langs_for(role="front", available={"eng", "osd"}),
+            "eng",
+        )
+        langs = _tesseract_langs_for(role="front", available={"eng", "fra"})
+        self.assertEqual(langs, "fra+eng")
 
 
 @override_settings(OCR_PROVIDER="manual", METADATA_PROVIDERS=[], MEDIA_ROOT=tempfile.mkdtemp())

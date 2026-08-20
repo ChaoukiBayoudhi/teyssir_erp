@@ -8,13 +8,58 @@ Phase 6: front vs back cover roles, Arabic/French/English language adaptation, p
 import base64
 import json
 import re
+import shutil
 import urllib.request
+from pathlib import Path
 
 from django.conf import settings
 
 from .draft import BookDraft
 from .isbn import extract_isbn, to_isbn13
 from .price import extract_price_dt
+
+# LaunchAgents / Windows services often have a minimal PATH without Homebrew or
+# "Program Files\\Tesseract-OCR". Resolve an absolute binary so OCR works under those.
+_TESSERACT_CANDIDATES = (
+    "/opt/homebrew/bin/tesseract",
+    "/usr/local/bin/tesseract",
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+)
+
+
+def configure_tesseract(pytesseract) -> str | None:
+    """Point pytesseract at a real binary; return its path or None if not found.
+
+    Prefer settings ``TESSERACT_CMD`` / env ``TEYSSIR_TESSERACT_CMD`` so LaunchAgent
+    and Windows services do not depend on a rich PATH.
+    """
+    configured = (getattr(settings, "TESSERACT_CMD", None) or "").strip()
+    if configured and configured != "tesseract" and Path(configured).is_file():
+        pytesseract.pytesseract.tesseract_cmd = configured
+        return configured
+    current = getattr(pytesseract.pytesseract, "tesseract_cmd", None) or "tesseract"
+    if current != "tesseract" and Path(current).is_file():
+        return current
+    found = shutil.which("tesseract")
+    if found:
+        pytesseract.pytesseract.tesseract_cmd = found
+        return found
+    if configured and configured != "tesseract":
+        # Settings pointed at a missing path — still try platform candidates.
+        pass
+    for cand in _TESSERACT_CANDIDATES:
+        if Path(cand).is_file():
+            pytesseract.pytesseract.tesseract_cmd = cand
+            return cand
+    return None
+
+
+def _installed_tess_langs(pytesseract) -> set[str]:
+    try:
+        return set(pytesseract.get_languages(config="") or [])
+    except Exception:
+        return set()
 
 
 class OcrProvider:
@@ -57,21 +102,36 @@ def detect_script_langs(text: str) -> list[str]:
     return out or (["ar"] if ar else ["fr"])
 
 
-def _tesseract_langs_for(text_hint: str = "", role: str = "auto") -> str:
-    """Pick Tesseract traineddata set. Prefer Arabic when script suggests it."""
+def _tesseract_langs_for(text_hint: str = "", role: str = "auto", available: set[str] | None = None) -> str:
+    """Pick Tesseract traineddata set from *installed* packs only (never request missing langs)."""
     langs = detect_script_langs(text_hint)
     if "ar" in langs and ("fr" in langs or "en" in langs):
-        return "ara+fra+eng"
-    if "ar" in langs:
-        return "ara+fra"  # Arabic books often mix FR publisher lines
-    if role == "back":
-        return "fra+eng"  # ISBN/price are Latin digits
-    return "fra+eng+ara"
+        preferred = ["ara", "fra", "eng"]
+    elif "ar" in langs:
+        preferred = ["ara", "fra", "eng"]
+    elif role == "back":
+        preferred = ["fra", "eng"]
+    else:
+        preferred = ["fra", "eng", "ara"]
+
+    installed = available if available is not None else set()
+    if not installed:
+        # Before pytesseract is configured we still return a preference string;
+        # extract() re-calls with the real installed set.
+        return "+".join(preferred)
+
+    chosen = [code for code in preferred if code in installed]
+    if not chosen and "eng" in installed:
+        chosen = ["eng"]
+    if not chosen:
+        # Whatever is installed (skip meta packs)
+        chosen = sorted(c for c in installed if c not in ("osd", "snum"))[:3]
+    return "+".join(chosen) if chosen else "eng"
 
 
 def _preprocess_variants(image_path, role="auto"):
-    """Yield (label, PIL.Image) variants tailored to cover role."""
-    from PIL import Image, ImageEnhance, ImageOps
+    """Yield (label, PIL.Image) variants: original / grayscale / threshold (+ role crops)."""
+    from PIL import Image, ImageEnhance, ImageOps, ImageFilter
 
     img = Image.open(image_path).convert("RGB")
     w, h = img.size
@@ -79,6 +139,12 @@ def _preprocess_variants(image_path, role="auto"):
     crop = img.crop((mx, my, w - mx, h - my)) if w > 40 and h > 40 else img
     # Back covers: barcode/price often in the lower third
     lower = img.crop((0, int(h * 0.55), w, h)) if role == "back" and h > 80 else None
+
+    def _upscale(im):
+        if max(im.size) < 900:
+            scale = 900 / max(im.size)
+            im = im.resize((int(im.width * scale), int(im.height * scale)), Image.Resampling.LANCZOS)
+        return im
 
     def _enhance(im, *, color=False):
         if color:
@@ -89,14 +155,22 @@ def _preprocess_variants(image_path, role="auto"):
             im = ImageOps.grayscale(im)
             im = ImageOps.autocontrast(im)
             im = ImageEnhance.Contrast(im).enhance(1.8)
-        if max(im.size) < 900:
-            scale = 900 / max(im.size)
-            im = im.resize((int(im.width * scale), int(im.height * scale)), Image.Resampling.LANCZOS)
-        return im
+        return _upscale(im)
+
+    def _threshold(im):
+        g = ImageOps.grayscale(im)
+        g = ImageOps.autocontrast(g)
+        g = ImageEnhance.Contrast(g).enhance(2.0)
+        g = g.point(lambda x: 255 if x > 140 else 0)
+        return _upscale(g.filter(ImageFilter.MedianFilter(size=3)))
+
+    # Multi-pass baseline: original → grayscale → binary threshold
+    yield "original", _upscale(ImageOps.autocontrast(crop.copy()))
+    yield "grayscale", _enhance(crop)
+    yield "threshold", _threshold(crop)
 
     if role == "back" and lower is not None:
         yield "lower", _enhance(lower)
-    yield "crop", _enhance(crop)
     yield "full", _enhance(img)
     if role == "front":
         yield "crop_color", _enhance(crop, color=True)
@@ -104,11 +178,61 @@ def _preprocess_variants(image_path, role="auto"):
 
 def _ocr_digits(pytesseract, image) -> str:
     cfg = "--psm 6 -c tessedit_char_whitelist=0123456789Xx-.,"
-    return pytesseract.image_to_string(image, config=cfg) or ""
+    return _safe_image_to_string(pytesseract, image, config=cfg)
 
 
 def _ocr_text(pytesseract, image, langs: str, *, psm: int = 6) -> str:
-    return pytesseract.image_to_string(image, lang=langs, config=f"--psm {psm}") or ""
+    return _safe_image_to_string(pytesseract, image, lang=langs, config=f"--psm {psm}")
+
+
+def _safe_image_to_string(pytesseract, image, **kwargs) -> str:
+    """Call pytesseract; never crash on non-UTF8 stderr (Leptonica binary noise)."""
+    try:
+        return pytesseract.image_to_string(image, **kwargs) or ""
+    except UnicodeDecodeError:
+        # Retry once with eng only — often a missing-lang / temp-path failure
+        kwargs = dict(kwargs)
+        kwargs["lang"] = "eng"
+        try:
+            return pytesseract.image_to_string(image, **kwargs) or ""
+        except Exception:
+            return ""
+    except Exception:
+        # TesseractError etc. — let caller decide; digits/text helpers prefer empty over crash
+        return ""
+
+
+def _mean_ocr_confidence(pytesseract, image, langs: str, *, psm: int = 6) -> float:
+    """Average word confidence (0–100) from image_to_data; 0 if unavailable."""
+    try:
+        data = pytesseract.image_to_data(
+            image, lang=langs, config=f"--psm {psm}", output_type=pytesseract.Output.DICT,
+        )
+        confs = []
+        for c, txt in zip(data.get("conf") or [], data.get("text") or []):
+            try:
+                ci = float(c)
+            except (TypeError, ValueError):
+                continue
+            if ci >= 0 and (txt or "").strip():
+                confs.append(ci)
+        return sum(confs) / len(confs) if confs else 0.0
+    except Exception:
+        return 0.0
+
+
+def _apply_confidence_gate(draft: BookDraft, mean_conf: float) -> BookDraft:
+    """Flag low Tesseract confidence → manual review + keep suggested text."""
+    threshold = float(getattr(settings, "OCR_CONFIDENCE_THRESHOLD", 45) or 45)
+    draft.raw = {**(draft.raw or {}), "ocr_mean_confidence": round(mean_conf, 1)}
+    if mean_conf > 0 and mean_conf < threshold:
+        draft.raw["ocr_low_confidence"] = True
+        draft.raw["suggested_title"] = draft.title or ""
+        draft.raw["suggested_text"] = draft.title or ""
+        if draft.confidence and draft.confidence > 0.25:
+            draft.confidence = min(draft.confidence, 0.3)
+        draft.source = draft.source or "tesseract"
+    return draft
 
 
 def _clean_lines(text: str) -> list[str]:
@@ -198,34 +322,88 @@ class TesseractOcrProvider(OcrProvider):
                                    "ocr_available": False, "isbn_not_detected": True,
                                    "cover_role": role})
             return "", draft
+
+        cmd = configure_tesseract(pytesseract)
+        if not cmd:
+            draft = BookDraft(
+                source="manual", confidence=0.0,
+                raw={
+                    "ocr_error": (
+                        "tesseract binary not found (PATH). "
+                        "Install Tesseract and ensure it is on PATH "
+                        "(macOS: brew install tesseract tesseract-lang; "
+                        "Windows: UB Mannheim installer with fra+eng+ara)."
+                    ),
+                    "ocr_available": False,
+                    "isbn_not_detected": True,
+                    "cover_role": role,
+                },
+            )
+            return "", draft
+
         try:
             digit_blob = ""
             text_blob = ""
             used = []
-            langs = _tesseract_langs_for(role=role)
+            installed = _installed_tess_langs(pytesseract)
+            langs = _tesseract_langs_for(role=role, available=installed)
+            best = None  # (score, label, combined_text, draft, mean_conf)
+
             for label, im in _preprocess_variants(image_path, role=role):
                 used.append(label)
+                pass_digits = ""
+                pass_text = ""
                 if role in ("back", "auto"):
-                    digit_blob += "\n" + _ocr_digits(pytesseract, im)
+                    pass_digits = _ocr_digits(pytesseract, im)
+                    digit_blob += "\n" + pass_digits
                     isbn = extract_isbn(digit_blob)
                     price = extract_price_dt(digit_blob)
                     if isbn or (role == "back" and price):
-                        text_blob = _ocr_text(pytesseract, im, langs)
-                        combined = f"{digit_blob}\n{text_blob}"
+                        pass_text = _ocr_text(pytesseract, im, langs)
+                        combined = f"{digit_blob}\n{pass_text}"
                         draft = _draft_from_text(combined, isbn_hint=isbn, role=role)
                         if not draft.price and price:
                             draft.price = price
+                        mean_conf = _mean_ocr_confidence(pytesseract, im, langs)
+                        draft = _apply_confidence_gate(draft, mean_conf)
                         draft.raw["ocr_pass"] = label
                         draft.raw["ocr_variants"] = used
                         draft.raw["ocr_langs"] = langs
-                        return combined, draft
+                        draft.raw["tesseract_cmd"] = cmd
+                        # Strong ISBN hit: return early
+                        if isbn and (mean_conf >= 40 or draft.confidence >= 0.55):
+                            return combined, draft
+                        score = (2 if isbn else 0) + (1 if price else 0) + mean_conf / 100.0 + (draft.confidence or 0)
+                        if best is None or score > best[0]:
+                            best = (score, label, combined, draft, mean_conf)
                 if role in ("front", "auto"):
                     # Large-text pass for titles (psm 11 sparse / 6 block)
                     psm = 11 if role == "front" else 6
                     chunk = _ocr_text(pytesseract, im, langs, psm=psm)
+                    pass_text = chunk
                     text_blob += "\n" + chunk
+                    mean_conf = _mean_ocr_confidence(pytesseract, im, langs, psm=psm)
+                    combined = f"{digit_blob}\n{text_blob}"
+                    draft = _draft_from_text(combined, role=role)
+                    draft = _apply_confidence_gate(draft, mean_conf)
+                    # Prefer longer title + higher confidence
+                    title_len = len((draft.title or "").strip())
+                    score = mean_conf / 100.0 + (draft.confidence or 0) + min(title_len, 40) / 40.0
+                    if draft.isbn13:
+                        score += 1.5
+                    if best is None or score > best[0]:
+                        best = (score, label, combined, draft, mean_conf)
                     # Refine lang model once we see script
-                    langs = _tesseract_langs_for(text_blob, role=role)
+                    langs = _tesseract_langs_for(text_blob, role=role, available=installed)
+
+            if best is not None:
+                _, label, combined, draft, mean_conf = best
+                draft.raw["ocr_pass"] = label
+                draft.raw["ocr_variants"] = used
+                draft.raw["ocr_langs"] = langs
+                draft.raw["tesseract_cmd"] = cmd
+                draft = _apply_confidence_gate(draft, mean_conf)
+                return combined, draft
 
             if role == "front" and not text_blob.strip():
                 text_blob = _ocr_text(
@@ -240,6 +418,7 @@ class TesseractOcrProvider(OcrProvider):
             draft.raw["ocr_pass"] = "full_fallback"
             draft.raw["ocr_variants"] = used
             draft.raw["ocr_langs"] = langs
+            draft.raw["tesseract_cmd"] = cmd
             return combined, draft
         except Exception as exc:
             draft = BookDraft(source="manual", confidence=0.0,
