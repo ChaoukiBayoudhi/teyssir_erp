@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # ===========================================================
-#  Start the Teyssir server (hub or till, per the .env file).
-#  Keep this Terminal window OPEN while the shop uses Teyssir.
+#  Start Teyssir in this Terminal IF the LaunchAgent is not already running.
 # ===========================================================
 set -euo pipefail
 cd "$(cd "$(dirname "$0")/../.." && pwd)"
 
 PORT="${TEYSSIR_PORT:-8000}"
+
+if curl -sf "http://127.0.0.1:$PORT/health/" >/dev/null 2>&1; then
+  echo "Teyssir is already running on port $PORT."
+  echo "Opening http://localhost:$PORT"
+  exec bash "$(dirname "$0")/open-teyssir.sh"
+fi
 
 if [ ! -x ".venv/bin/waitress-serve" ]; then
   echo "[ERROR] Teyssir is not installed yet."
@@ -20,10 +25,9 @@ echo "Applying database updates ..."
 
 echo ""
 echo "=============================================================="
-echo "   Teyssir is running."
+echo "   Teyssir is running in this Terminal."
 echo "   On THIS Mac open:   http://localhost:$PORT"
-echo "   From another PC:    http://$(scutil --get LocalHostName 2>/dev/null || hostname -s).local:$PORT"
-echo ""
+echo "   Prefer the LaunchAgent: bash deploy/macos/Install-BackendService.sh"
 echo "   Press Ctrl+C to STOP Teyssir."
 echo "=============================================================="
 echo ""
