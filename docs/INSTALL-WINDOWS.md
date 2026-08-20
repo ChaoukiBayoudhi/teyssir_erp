@@ -278,9 +278,11 @@ installez le pilote Windows fourni par le fabricant ; l'impression se fait depui
 
 Deux moteurs **gratuits** sont disponibles :
 
-- **Tesseract** (rapide, hors-ligne) : installez Tesseract pour Windows
-  (<https://github.com/UB-Mannheim/tesseract/wiki>) avec les langues **ara + fra + eng**, puis dans
-  `.env` : `TEYSSIR_OCR_PROVIDER=tesseract`.
+- **Tesseract** (rapide, hors-ligne) : `install.ps1` tente d'installer Tesseract (winget UB-Mannheim)
+  avec **ara + fra + eng** et écrit `TEYSSIR_TESSERACT_CMD` dans `.env`. Sinon installez
+  manuellement (<https://github.com/UB-Mannheim/tesseract/wiki>), puis dans `.env` :
+  `TEYSSIR_OCR_PROVIDER=tesseract` et
+  `TEYSSIR_TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe`.
 - **Vision-LLM** (extraction structurée multilingue, hors-ligne) : Ollama est installé
   automatiquement **si possible**, avec le modèle **texte** `mistral`. Le modèle **vision**
   (`qwen2.5vl:3b`, plus lourd) **n'est pas** téléchargé par défaut. Pour l'activer :
@@ -288,6 +290,19 @@ Deux moteurs **gratuits** sont disponibles :
   `TEYSSIR_OCR_PROVIDER=vision` et `TEYSSIR_SCAN_EXECUTOR=thread`.
 
 Sans configuration, la saisie du livre reste **manuelle** (aucune erreur, juste pas d'auto-remplissage).
+
+### OCR Troubleshooting
+
+| Symptôme | Cause probable | Action |
+|----------|----------------|--------|
+| OCR vide sous le service Windows | PATH minimal (NSSM) sans Tesseract | Vérifiez `TEYSSIR_TESSERACT_CMD` dans `.env` + `AppEnvironmentExtra` du service ; Menu → **Diagnostics** |
+| Langues manquantes (arabe/français) | Packs non installés | Réinstallez UB Mannheim en cochant **ara**, **fra**, **eng** ; `/health/` → `tesseract.langs` |
+| « Image floue, veuillez reprendre » | Flou / faible contraste avant OCR | Reprenez la photo avec plus de lumière, cadrez le titre ; ou « Analyser quand même » |
+| Caméra ne s'ouvre pas | HTTP hors localhost | Utilisez `http://localhost:8000` ou HTTPS ; autorisez la caméra dans le navigateur |
+| Service ne voit pas Tesseract après install | Redémarrage requis | `nssm restart TeyssirBackend` puis rouvrez Diagnostics |
+
+Contrôle rapide : `http://localhost:8000/health/` doit montrer `"tesseract": {"installed": true, ...}`.
+Les admins/owners ont **Menu → Diagnostics** (caméra, OCR, imprimante, DB, LLM).
 </details>
 
 <details>

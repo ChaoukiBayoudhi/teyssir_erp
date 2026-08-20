@@ -99,3 +99,40 @@ class ApiTests(TestCase):
             "lines": [{"product": str(self.product.id), "qty": "1"}],
         }, format="json")
         self.assertEqual(r.status_code, 403)
+
+    def test_diagnostics_requires_configure_system(self):
+        anon = APIClient()
+        self.assertIn(anon.get("/api/v1/diagnostics").status_code, (401, 403))
+        # cashier without configure_system
+        r = self.client.get("/api/v1/diagnostics")
+        self.assertEqual(r.status_code, 403)
+        owner = User.objects.create_superuser("owner", password="pw-strong-123")
+        admin = APIClient()
+        admin.force_authenticate(owner)
+        ok = admin.get("/api/v1/diagnostics?ping=0")
+        self.assertEqual(ok.status_code, 200)
+        body = ok.json()
+        for key in ("db", "tesseract", "ocr", "printer", "llm", "camera"):
+            self.assertIn(key, body)
+
+    def test_reprint_receipt_does_not_create_sale(self):
+        from teyssir.sales.models import Sale
+        body = {
+            "terminal": "C1", "payment_method": "CASH",
+            "lines": [{"product": str(self.product.id), "qty": "1"}],
+        }
+        r = self.client.post("/api/v1/pos/checkout", body, format="json")
+        self.assertEqual(r.status_code, 201)
+        sale_id = r.json()["sale_id"]
+        before = Sale.objects.filter(status=Sale.FINALIZED).count()
+        rr = self.client.get(f"/api/v1/pos/sales/{sale_id}/receipt?print=1&format=json")
+        self.assertEqual(rr.status_code, 200)
+        self.assertTrue(rr.json().get("printed"))
+        self.assertIn("DUPLICATA", rr.json().get("text", ""))
+        self.assertEqual(Sale.objects.filter(status=Sale.FINALIZED).count(), before)
+
+    def test_me_lists_capabilities(self):
+        r = self.client.get("/api/v1/me")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("capabilities", r.json())
+        self.assertIn("create_sale", r.json()["capabilities"])

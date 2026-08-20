@@ -13,7 +13,7 @@ from .views import (
     SaleReceiptView,
     ConsolidatedReportView, SalesReportView, StockTakeView, SupplierViewSet, TaxRateViewSet,
     TrialBalanceView,
-    VatDeclarationView, me,
+    VatDeclarationView, diagnostics, me,
 )
 
 router = DefaultRouter()
@@ -26,6 +26,7 @@ router.register("purchasing/orders", PurchaseOrderViewSet, basename="po")
 urlpatterns = [
     path("auth/token", obtain_auth_token, name="auth-token"),
     path("me", me, name="me"),
+    path("diagnostics", diagnostics, name="diagnostics"),
     path("pos/checkout", CheckoutView.as_view(), name="pos-checkout"),
     path("pos/return", ReturnView.as_view(), name="pos-return"),
     path("pos/sales/<uuid:pk>/receipt", SaleReceiptView.as_view(), name="sale-receipt"),

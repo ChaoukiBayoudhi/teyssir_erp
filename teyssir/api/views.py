@@ -997,16 +997,34 @@ class ProductImageView(APIView):
         return Response(_image_payload(request, ProductImage.objects.get(pk=pk)))
 
 
-def _print_receipt(sale):
+def _print_receipt(sale, *, duplicate=False):
     """Best-effort: print the receipt on the local node's printer; never block a sale.
 
     Returns True if bytes were sent to a backend, False on any failure.
+    Reprints (``duplicate=True``) mark DUPLICATA and skip the drawer kick — same sale, no new fiscal doc.
     """
+    import logging
+    import os
+
+    log = logging.getLogger("teyssir.printing")
+    target = os.environ.get("TEYSSIR_PRINTER", "dummy")
     try:
         from teyssir.printing.devices import send
         from teyssir.printing.receipt import render_sale_receipt
-        return send(render_sale_receipt(sale)) > 0
-    except Exception:
+
+        payload = render_sale_receipt(sale, duplicate=duplicate, kick=not duplicate)
+        n = send(payload)
+        ok = n > 0
+        log.info(
+            "receipt print sale=%s target=%s bytes=%s duplicate=%s ok=%s",
+            getattr(sale, "id", None), target, n, duplicate, ok,
+        )
+        return ok
+    except Exception as exc:
+        log.warning(
+            "receipt print failed sale=%s target=%s duplicate=%s err=%s",
+            getattr(sale, "id", None), target, duplicate, exc,
+        )
         return False
 
 
@@ -1014,7 +1032,8 @@ class SaleReceiptView(APIView):
     """GET /pos/sales/<id>/receipt — plain-text receipt (preview / reprint / save as .txt).
 
     Thermal ESC/POS is sent automatically at checkout; this endpoint lets the cashier
-    preview or download the same content without hardware.
+    preview or download the same content without hardware. ``?print=1`` reprints
+    without creating a new sale (DUPLICATA).
     """
 
     permission_classes = [IsAuthenticated]
@@ -1029,26 +1048,54 @@ class SaleReceiptView(APIView):
         if not sale:
             return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
         fmt = (request.query_params.get("format") or "text").lower()
-        text = render_text(sale)
+        do_print = request.query_params.get("print") == "1"
+        text = render_text(sale, duplicate=do_print)
         if fmt == "json":
-            return Response({"sale_id": str(sale.id), "text": text,
-                             "invoice": getattr(getattr(sale, "invoice", None), "fiscal_number", "")})
-        # Re-print to the thermal device on demand
-        if request.query_params.get("print") == "1":
-            _print_receipt(sale)
+            printed = False
+            if do_print:
+                printed = _print_receipt(sale, duplicate=True)
+            return Response({
+                "sale_id": str(sale.id),
+                "text": text,
+                "invoice": getattr(getattr(sale, "invoice", None), "fiscal_number", ""),
+                "printed": printed if do_print else None,
+            })
+        # Re-print to the thermal device on demand (same sale — no duplicate fiscal doc)
+        printed = False
+        if do_print:
+            printed = _print_receipt(sale, duplicate=True)
         name = f"receipt-{getattr(getattr(sale, 'invoice', None), 'fiscal_number', pk)}.txt"
         resp = HttpResponse(text, content_type="text/plain; charset=utf-8")
         resp["Content-Disposition"] = f'inline; filename="{name}"'
+        if do_print:
+            resp["X-Teyssir-Printed"] = "1" if printed else "0"
         return resp
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def me(request):
+    caps = sorted(
+        p.split(".", 1)[-1]
+        for p in request.user.get_all_permissions()
+        if p.startswith("accounts.")
+    )
     return Response({
         "username": request.user.get_username(),
         "language": getattr(request.user, "preferred_language", "fr"),
         "terminal": request.headers.get("X-Terminal", ""),
         "store_code": settings.STORE_CODE,
         "role": settings.ROLE,
+        "is_superuser": bool(request.user.is_superuser),
+        "capabilities": caps,
     })
+
+
+@api_view(["GET"])
+@permission_classes([capability("configure_system")])
+def diagnostics(request):
+    """GET /api/v1/diagnostics — admin/owner node health for the Diagnostics UI."""
+    from teyssir.core.diagnostics import collect_diagnostics
+
+    ping = request.query_params.get("ping", "1") not in ("0", "false", "no")
+    return Response(collect_diagnostics(ping_llm=ping))

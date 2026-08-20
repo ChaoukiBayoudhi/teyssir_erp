@@ -181,6 +181,18 @@ export async function pollScanJob(jobId, { interval = 2000, tries = 120 } = {}) 
 
 export const createBook = (data) => request("/catalog/books", { method: "POST", body: data });
 
+export const fetchMe = () => request("/me");
+export const fetchDiagnostics = () => request("/diagnostics");
+
+/** Re-print last sale ticket without creating a new sale (server marks DUPLICATA). */
+export async function reprintReceipt(saleId) {
+  const headers = {};
+  if (getToken()) headers.Authorization = `Token ${getToken()}`;
+  const res = await fetch(`${BASE}/pos/sales/${saleId}/receipt?print=1&format=json`, { headers });
+  if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
 export const listCustomers = () => request("/customers/");
 export const createCustomer = (body) =>
   request("/customers/", { method: "POST", body });

@@ -31,7 +31,8 @@ credit accounts · cash sessions (X/Z) · quotations → sales · **double-entry
 journals, trial balance, P&amp;L, balance sheet, **monthly VAT declaration**) · **camera book
 registration + OCR** (ISBN-first; Tesseract &amp; a free offline Vision-LLM; async) · **PDF→Word**
 (async job; fast text path + layout fidelity) · **federated
-sync** (till → store-hub → cloud-hub) with **multi-store consolidation**. 125 automated tests.
+sync** (till → store-hub → cloud-hub) with **multi-store consolidation** · **Diagnostics** (admin:
+Tesseract, OCR, printer, DB, LLM, camera). Automated tests cover OCR/auth/print/health.
 
 ## Deploy for the client (Windows)
 
@@ -64,7 +65,8 @@ Guide: **[docs/INSTALL-MACOS.md](docs/INSTALL-MACOS.md)**.
 ## Backend modules
 
 - `teyssir/core` — `Money` helpers (millime-exact arithmetic, display 2 dp); sync-ready abstract
-  base models; **`ConvertJob`** async PDF→Word; SQLite WAL/PRAGMA wiring; `/health` endpoint.
+  base models; **`ConvertJob`** async PDF→Word; SQLite WAL/PRAGMA wiring; `/health` endpoint
+  (DB + LLM config + Tesseract status); `/api/v1/diagnostics` for owners/admins.
 - `teyssir/accounts` — custom `User` + RBAC capability permissions and a `seed_rbac` command (§10).
 - `teyssir/catalog` — `Product`, `Category`, `TaxRate`, `Barcode`.
 - `teyssir/inventory` — append-only `StockMovement` ledger + `apply_movement` / `recompute_on_hand`.

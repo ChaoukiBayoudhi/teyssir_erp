@@ -184,11 +184,15 @@ Time Machine. Le Hub contient déjà la consolidation de toutes les caisses.
 <details>
 <summary><b>Lecture des livres par photo (OCR) — gratuit</b></summary>
 
-- **Tesseract** (rapide, hors-ligne) : `brew install tesseract tesseract-lang`, puis dans `.env` :
-  `TEYSSIR_OCR_PROVIDER=tesseract`.
+- **Tesseract** (rapide, hors-ligne) : `install.sh` tente `brew install tesseract tesseract-lang`
+  et écrit `TEYSSIR_TESSERACT_CMD` (ex. `/opt/homebrew/bin/tesseract`) dans `.env` + LaunchAgent.
+  Sinon : `brew install tesseract tesseract-lang`, puis `.env` :
+  `TEYSSIR_OCR_PROVIDER=tesseract` et `TEYSSIR_TESSERACT_CMD=/opt/homebrew/bin/tesseract`.
 - **Vision-LLM** (extraction structurée multilingue, hors-ligne) : `brew install ollama`,
   `ollama pull qwen2.5vl:3b`, puis `.env` : `TEYSSIR_OCR_PROVIDER=vision` et
   `TEYSSIR_SCAN_EXECUTOR=thread`.
+- Si OCR est vide sous LaunchAgent : vérifiez `PATH` Homebrew dans le plist et
+  `TEYSSIR_TESSERACT_CMD` ; Menu → **Diagnostics** ; `curl -s http://127.0.0.1:8000/health/ | jq .tesseract`.
 </details>
 
 <details>
@@ -212,6 +216,7 @@ Time Machine. Le Hub contient déjà la consolidation de toutes les caisses.
 | `frontend/dist` manquant | `cd frontend && npm ci && npm run build` (ou `brew install node`). |
 | Port 8000 occupé | Arrêtez l'autre instance : `bash deploy/macos/Install-BackendService.sh --remove` ou fermez le Terminal `start-teyssir.sh`. Ou : `TEYSSIR_PORT=8080`. |
 | LaunchAgent ne répond pas | `tail -50 logs/teyssir-backend-stderr.log` puis `bash deploy/macos/Install-BackendService.sh`. |
+| OCR vide (LaunchAgent) | `TEYSSIR_TESSERACT_CMD` manquant ou PATH sans Homebrew — réinstallez le service ; Menu → Diagnostics. |
 | Clé de sync incorrecte | Le Hub et la caisse doivent avoir **exactement** la même `TEYSSIR_SYNC_KEY`. |
 
 ---
