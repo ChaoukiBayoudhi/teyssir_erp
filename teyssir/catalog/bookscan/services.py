@@ -68,6 +68,7 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
       * image[0] → front cover (title / author / language)
       * image[1] → back cover (ISBN / barcode / price)
       * merge → enrich by ISBN, else title search
+      * optional Vision-LLM upgrade when Tesseract is weak and Ollama is up
     """
     isbn = to_isbn13(isbn) or (isbn or "").strip()
     provider = get_ocr_provider()
@@ -90,6 +91,33 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
 
     ocr_draft = _merge_cover_drafts(front, back) if image_paths else front
     ocr_text = "\n---\n".join(texts)
+
+    # Phone-camera covers often defeat Tesseract; upgrade via local Ollama vision when weak.
+    if image_paths and _should_try_vision(ocr_draft, provider):
+        try:
+            from .ocr import VisionLlmOcrProvider
+
+            v_text, v_front = VisionLlmOcrProvider().extract(image_paths[0], role="front")
+            # Keep Tesseract back-cover ISBN/price; only upgrade bibliographic fields via vision.
+            vision_draft = _merge_cover_drafts(v_front, back if back and back.source != "manual" else None)
+            if not vision_draft.isbn13 and back and back.isbn13:
+                vision_draft.isbn13 = back.isbn13
+            if not vision_draft.price and back and back.price:
+                vision_draft.price = back.price
+            if vision_draft.title or vision_draft.isbn13 or vision_draft.confidence > ocr_draft.confidence:
+                vision_draft.raw = {
+                    **(ocr_draft.raw or {}),
+                    **(vision_draft.raw or {}),
+                    "vision_fallback": True,
+                    "tesseract_title": ocr_draft.title,
+                }
+                ocr_draft = vision_draft
+                if v_text:
+                    ocr_text = f"{ocr_text}\n---\n{v_text}"
+                if not isbn and ocr_draft.isbn13:
+                    isbn = to_isbn13(ocr_draft.isbn13) or ocr_draft.isbn13
+        except Exception as exc:
+            ocr_draft.raw = {**(ocr_draft.raw or {}), "vision_fallback_error": str(exc)[:200]}
 
     draft = enrich(isbn) if isbn else None
     metadata_hit = draft is not None
@@ -128,6 +156,28 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
             draft.raw["manual_assist"] = True
 
     return draft, ocr_text
+
+
+def _should_try_vision(draft, provider) -> bool:
+    """Use local Vision-LLM when primary OCR is empty/weak (phone photos of covers)."""
+    from django.conf import settings
+
+    if getattr(provider, "name", "") != "tesseract":
+        return False
+    if not getattr(settings, "OCR_VISION_FALLBACK", True):
+        return False
+    if draft.isbn13 and (draft.confidence or 0) >= 0.7 and draft.title:
+        return False
+    if (draft.confidence or 0) >= 0.55 and draft.title and len(draft.title) >= 6:
+        return False
+    # Empty / manual / very weak tesseract
+    if draft.raw.get("ocr_available") is False:
+        return True
+    if (draft.confidence or 0) < 0.5:
+        return True
+    if not (draft.title or "").strip():
+        return True
+    return False
 
 
 def _default_book_tax_rate_id():

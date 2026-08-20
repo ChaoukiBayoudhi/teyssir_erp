@@ -73,3 +73,12 @@ class PdfToDocxTests(TestCase):
     def test_requires_a_file(self):
         r = self._client().post("/api/v1/tools/pdf-to-docx", {}, format="multipart")
         self.assertEqual(r.status_code, 400)
+
+class HealthTesseractTests(TestCase):
+    def test_health_reports_tesseract(self):
+        from django.test import Client
+        body = Client().get("/health/").json()
+        self.assertIn("tesseract", body)
+        self.assertIn("installed", body["tesseract"])
+        self.assertIn("path", body["tesseract"])
+        self.assertIn("langs", body["tesseract"])
