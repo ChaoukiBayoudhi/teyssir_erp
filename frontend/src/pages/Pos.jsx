@@ -104,6 +104,17 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
     }
   };
 
+  // OCR title fallback from camera Analyser → product name search.
+  const onCameraQuery = async (q) => {
+    setError("");
+    setQuery(q);
+    try {
+      setResults(await searchProducts(q));
+    } catch (err) {
+      setError(String(err.message || err));
+    }
+  };
+
   // Preview mirrors backend: line discount → header discount → TVA (all before/on HT).
   const totals = useMemo(() => {
     let grossM = 0;
@@ -254,7 +265,13 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
                 <Button variant={camera ? "contained" : "outlined"} sx={{ minWidth: 52, height: 56 }}
                         onClick={() => setCamera((c) => !c)} aria-label={t("scanWithCamera")}>📷</Button>
               </Stack>
-              {camera && <CameraScanner onDetect={onCameraCode} onClose={() => setCamera(false)} />}
+              {camera && (
+                <CameraScanner
+                  onDetect={onCameraCode}
+                  onQuery={onCameraQuery}
+                  onClose={() => setCamera(false)}
+                />
+              )}
               <List dense>
                 {results.length === 0 && (
                   <Typography color="text.secondary" sx={{ p: 1 }}>{t("noResults")}</Typography>
