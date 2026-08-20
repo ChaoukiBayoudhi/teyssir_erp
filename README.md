@@ -48,6 +48,17 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 
 Hub install (elevated PowerShell recommended) auto-detects/installs **Python 3.12** if missing, creates `.venv`, installs PostgreSQL when possible (SQLite fallback), seeds RBAC/fiscal data, and tries **Ollama**. Tills never install PostgreSQL. The script is **safe to re-run**. Full QA notes: [docs/INSTALLATION-QA.md](docs/INSTALLATION-QA.md).
 
+### macOS (MacBook Pro M1)
+
+**Works like a desktop app** on Mac too: LaunchAgent `com.teyssir.backend` at login + **Teyssir ERP.app** on the Desktop.
+
+```bash
+bash deploy/macos/install.sh --role hub
+# Double-click  Teyssir ERP  on the Desktop
+```
+
+Guide: **[docs/INSTALL-MACOS.md](docs/INSTALL-MACOS.md)**.
+
 ---
 
 ## Backend modules

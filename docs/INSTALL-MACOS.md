@@ -83,13 +83,15 @@ SHARED SYNC KEY = 8fK3d9...aZ2
 ^ Use this SAME key on the hub and on every till.
 ```
 ✏️ **Notez cette clé** — chaque caisse en aura besoin. Créez ensuite le **compte administrateur**
-(gérant) quand c'est demandé.
+(gérant) quand c'est demandé (sauté si un admin existe déjà).
 
-Démarrez le serveur :
-```bash
-bash deploy/macos/start-teyssir.sh
-```
-Laissez cette fenêtre **ouverte**, puis ouvrez **<http://localhost:8000>** dans le navigateur.
+Le backend est enregistré comme **LaunchAgent** `com.teyssir.backend` (démarrage à la connexion,
+sans Terminal). Un raccourci **Teyssir ERP.app** est posé sur le Bureau.
+
+Double-cliquez **Teyssir ERP** sur le Bureau → Safari/Chrome ouvre **<http://localhost:8000>**.
+Contrôle : **<http://localhost:8000/health/>** doit répondre `ok`.
+
+> Sans interface graphique pour le service : `bash deploy/macos/start-teyssir.sh` (fenêtre à laisser ouverte).
 
 ---
 
@@ -104,11 +106,8 @@ bash deploy/macos/install.sh --role till --terminal C1 \
 - **`--hub-url`** : adresse du Hub (nom `teyssir-hub.local` ou IP, ex. `http://192.168.1.10:8000`).
 - **`--sync-key`** : **exactement** la clé du Hub (étape 4).
 
-Créez un compte caissier, puis :
-```bash
-bash deploy/macos/start-teyssir.sh
-```
-Ouvrez **<http://localhost:8000>** sur la caisse.
+Créez un compte caissier (sauté si un admin existe déjà). Le raccourci **Teyssir ERP** et le
+LaunchAgent sont créés automatiquement. Double-cliquez l'icône Bureau pour ouvrir la caisse.
 
 ---
 
@@ -128,25 +127,46 @@ Options** → autorisez les connexions entrantes pour `python`/Teyssir.
 
 ---
 
-## 7. Démarrage automatique + synchronisation
+## 7. Auto-start & Desktop Shortcut (Mac)
 
-Pour lancer Teyssir à l'ouverture de session et synchroniser régulièrement :
+Après `install.sh` :
+
+* Le backend tourne comme **LaunchAgent** `com.teyssir.backend` (équivalent du service Windows) :
+  * démarre à **l'ouverture de session** (sans fenêtre Terminal) ;
+  * **KeepAlive** — redémarre s'il quitte ;
+  * journaux dans `logs/teyssir-backend-stdout.log` et `logs/teyssir-backend-stderr.log`.
+* Un app **« Teyssir ERP.app »** sur le Bureau (et `~/Applications`) ouvre le navigateur par défaut
+  sur `http://localhost:8000` dès que `/health/` répond. Icône : `assets/branding/teyssir.icns`.
+
+Vérifier :
 ```bash
-# sur le Hub :
-bash deploy/macos/register-autostart.sh hub
-# sur chaque caisse (sync toutes les 300 s) :
-bash deploy/macos/register-autostart.sh till 300
+launchctl list | grep teyssir
+curl -sf http://127.0.0.1:8000/health/
 ```
-Cela crée des **LaunchAgents** (`com.teyssir.server`, `com.teyssir.sync`). Vérifier :
-`launchctl list | grep teyssir`. Pour tout retirer : `bash deploy/macos/register-autostart.sh --remove`.
+
+Repli manuel (si le LaunchAgent n'a pas pu s'installer) :
+```bash
+bash deploy/macos/start-teyssir.sh
+```
+Ne lancez **pas** le script Terminal en même temps que le LaunchAgent — le port **8000** ne peut
+servir qu'une fois.
+
+Options : `--skip-service`, `--skip-shortcut`.
+
+Désinstaller agent + raccourcis (sans supprimer les données) :
+```bash
+bash deploy/macos/uninstall.sh
+```
+
+Sur les caisses, `com.teyssir.sync` synchronise avec le Hub toutes les 5 min.
 
 ---
 
 ## 8. Utilisation quotidienne
 
-1. Allumez le **Hub** d'abord, puis les caisses (Teyssir démarre seul si l'auto-start est activé).
-2. Ouvrez **<http://localhost:8000>**, connectez-vous.
-3. Dans Chrome : **⋮ ▸ Installer Teyssir** pour un lancement plein écran (icône dans le Dock).
+1. Allumez le **Hub** d'abord, puis les caisses (le LaunchAgent démarre tout seul à la connexion).
+2. Double-cliquez **Teyssir ERP** sur le Bureau.
+3. Connectez-vous. Dans Chrome : **⋮ ▸ Installer Teyssir** pour une PWA plein écran dans le Dock.
 
 ---
 
@@ -190,8 +210,19 @@ Time Machine. Le Hub contient déjà la consolidation de toutes les caisses.
 | La caisse n'atteint pas le Hub | Testez `http://teyssir-hub.local:8000/health/` ; vérifiez IP/nom, pare-feu, et que le Hub tourne. |
 | « Bad Request (400) » | Ajoutez le nom/IP du Mac dans `TEYSSIR_ALLOWED_HOSTS` du `.env`, relancez. |
 | `frontend/dist` manquant | `cd frontend && npm ci && npm run build` (ou `brew install node`). |
-| Port 8000 occupé | Démarrez avec `TEYSSIR_PORT=8080 bash deploy/macos/start-teyssir.sh`. |
+| Port 8000 occupé | Arrêtez l'autre instance : `bash deploy/macos/Install-BackendService.sh --remove` ou fermez le Terminal `start-teyssir.sh`. Ou : `TEYSSIR_PORT=8080`. |
+| LaunchAgent ne répond pas | `tail -50 logs/teyssir-backend-stderr.log` puis `bash deploy/macos/Install-BackendService.sh`. |
 | Clé de sync incorrecte | Le Hub et la caisse doivent avoir **exactement** la même `TEYSSIR_SYNC_KEY`. |
+
+---
+
+## 12. Désinstaller
+
+```bash
+bash deploy/macos/uninstall.sh
+```
+Cela retire le LaunchAgent et les raccourcis Bureau / Applications. **Sauvegardez d'abord**
+`teyssir_hub.sqlite3` (ou `pg_dump`) et `media/`, puis supprimez le dossier du projet si besoin.
 
 ---
 
