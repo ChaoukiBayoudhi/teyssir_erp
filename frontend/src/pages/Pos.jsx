@@ -4,7 +4,7 @@ import {
   ListItemText, IconButton, Stack, Button, Divider, Alert, Select, MenuItem, Menu, Snackbar, Chip,
 } from "@mui/material";
 import { useTranslation } from "react-i18next";
-import { searchProducts, lookupBarcode, checkout, listCustomers } from "../api";
+import { searchProducts, lookupBarcode, checkout, listCustomers, reprintReceipt } from "../api";
 import { enqueue, flush, pending } from "../offlineQueue";
 import CameraScanner from "../components/CameraScanner.jsx";
 import LangToggle from "../LangToggle.jsx";
@@ -18,7 +18,7 @@ const fmt = (x) => Number(x).toFixed(2); // 2-dp display (server stores 3-dp)
 
 export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onReceiving,
                               onCustomers, onNewBook, onQuotation, onPurchaseOrders, onCatalog,
-                              onNewProduct, onPdfConvert }) {
+                              onNewProduct, onPdfConvert, onDiagnostics }) {
   const { t } = useTranslation();
   const [terminal, setTerminal] = useState("C1");
   const [menuAnchor, setMenuAnchor] = useState(null);
@@ -29,8 +29,10 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
   const [method, setMethod] = useState("CASH");
   const [customers, setCustomers] = useState([]);
   const [customerId, setCustomerId] = useState("");
-  const [done, setDone] = useState(null);
   const [error, setError] = useState("");
+  const [done, setDone] = useState(null);
+  const [lastSale, setLastSale] = useState(null); // keep for reprint without new sale
+  const [reprintMsg, setReprintMsg] = useState("");
   const [queued, setQueued] = useState(false);
   const [pendingCount, setPendingCount] = useState(pending().length);
   const [camera, setCamera] = useState(false);
@@ -169,6 +171,7 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
     try {
       const res = await checkout(payload);
       setDone(res);
+      setLastSale(res);
       setCart([]);
       setGlobalDiscountPct(0);
       setCustomerId("");
@@ -226,6 +229,7 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
               ["quotation", onQuotation],
               ["customers", onCustomers],
               ["session", onCash],
+              ...(onDiagnostics ? [["diagnostics", onDiagnostics]] : []),
             ].map(([key, fn]) => (
               <MenuItem key={key} onClick={() => { setMenuAnchor(null); fn && fn(); }}>{t(key)}</MenuItem>
             ))}
@@ -329,6 +333,24 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
                 >
                   {t("pay")}
                 </Button>
+                {lastSale?.sale_id && (
+                  <Button
+                    variant="outlined"
+                    fullWidth
+                    onClick={async () => {
+                      try {
+                        const r = await reprintReceipt(lastSale.sale_id);
+                        setReprintMsg(r.printed ? t("reprintOk") : t("reprintFailed"));
+                        setLastSale({ ...lastSale, printed: Boolean(r.printed) });
+                      } catch (err) {
+                        setReprintMsg(t("reprintFailed"));
+                        setError(String(err.message || err));
+                      }
+                    }}
+                  >
+                    {t("reprintTicket")}
+                  </Button>
+                )}
               </Stack>
             </Paper>
           </Grid>
@@ -336,11 +358,36 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
       </Box>
 
       <Snackbar
-        open={Boolean(done)} autoHideDuration={6000} onClose={() => setDone(null)}
+        open={Boolean(done)} autoHideDuration={8000} onClose={() => setDone(null)}
         anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
       >
-        <Alert severity="success" variant="filled" onClose={() => setDone(null)}>
-          {done && `${t("done")} — ${t("invoice")} ${done.invoice_number} · ${done.total_display} DT${done.printed ? " · ✓" : ""}`}
+        <Alert
+          severity={done && done.printed === false ? "warning" : "success"}
+          variant="filled"
+          onClose={() => setDone(null)}
+          action={lastSale?.sale_id ? (
+            <Button color="inherit" size="small" onClick={async () => {
+              try {
+                const r = await reprintReceipt(lastSale.sale_id);
+                setReprintMsg(r.printed ? t("reprintOk") : t("reprintFailed"));
+              } catch {
+                setReprintMsg(t("reprintFailed"));
+              }
+            }}>
+              {t("reprintTicket")}
+            </Button>
+          ) : null}
+        >
+          {done && `${t("done")} — ${t("invoice")} ${done.invoice_number} · ${done.total_display} DT${done.printed ? " · ✓" : ` · ${t("printFailedHint")}`}`}
+        </Alert>
+      </Snackbar>
+
+      <Snackbar
+        open={Boolean(reprintMsg)} autoHideDuration={4000} onClose={() => setReprintMsg("")}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Alert severity="info" variant="filled" onClose={() => setReprintMsg("")}>
+          {reprintMsg}
         </Alert>
       </Snackbar>
 
