@@ -41,6 +41,19 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 .\deploy\windows\start-teyssir.bat              # open http://localhost:8000
 ```
 
+
+
+### macOS (MacBook Pro M1)
+
+**Works like a desktop app** on Mac too: LaunchAgent `com.teyssir.backend` at login + **Teyssir ERP.app** on the Desktop.
+
+```bash
+bash deploy/macos/install.sh --role hub
+# Double-click  Teyssir ERP  on the Desktop
+```
+
+Guide: **[docs/INSTALL-MACOS.md](docs/INSTALL-MACOS.md)**.
+
 ---
 
 ## Backend modules
