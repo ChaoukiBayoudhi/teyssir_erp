@@ -29,6 +29,66 @@ async function detectIsbnFromImages(files) {
   return "";
 }
 
+/** Client-side blur (Laplacian variance) + contrast check before OCR. */
+async function assessImageQuality(file) {
+  const bmp = await createImageBitmap(file);
+  const w = Math.min(bmp.width, 320);
+  const h = Math.round((bmp.height / bmp.width) * w);
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(bmp, 0, 0, w, h);
+  bmp.close?.();
+  const { data } = ctx.getImageData(0, 0, w, h);
+  const gray = new Float32Array(w * h);
+  let min = 255;
+  let max = 0;
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    const g = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    gray[p] = g;
+    if (g < min) min = g;
+    if (g > max) max = g;
+  }
+  // Laplacian kernel approximation on interior pixels
+  let sum = 0;
+  let sumSq = 0;
+  let n = 0;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      const lap = gray[i - w] + gray[i + w] + gray[i - 1] + gray[i + 1] - 4 * gray[i];
+      sum += lap;
+      sumSq += lap * lap;
+      n++;
+    }
+  }
+  const mean = sum / Math.max(n, 1);
+  const variance = sumSq / Math.max(n, 1) - mean * mean;
+  const contrast = max - min;
+  return {
+    blurScore: variance,
+    contrast,
+    blurry: variance < 80,
+    lowContrast: contrast < 40,
+  };
+}
+
+async function assessCapturesQuality(files) {
+  const results = [];
+  for (const f of files) {
+    try {
+      results.push(await assessImageQuality(f));
+    } catch {
+      results.push({ blurry: false, lowContrast: false });
+    }
+  }
+  return {
+    blurry: results.some((r) => r.blurry),
+    lowContrast: results.some((r) => r.lowContrast),
+  };
+}
+
 const EMPTY = {
   isbn13: "", title: "", subtitle: "", authors: "", translators: "", publisher: "",
   series: "", edition: "", pub_year: "", pages: "", languages: "", subject: "",
@@ -57,12 +117,24 @@ export default function BookCreate({ onBack, onLogout }) {
   const [taxes, setTaxes] = useState([]);
 
   const stopCamera = () => {
-    const s = streamRef.current || stream;
-    if (s) s.getTracks().forEach((tk) => tk.stop());
+    const s = streamRef.current;
+    if (s) {
+      try { s.getTracks().forEach((tk) => { try { tk.stop(); } catch { /* already stopped */ } }); } catch { /* ignore */ }
+    }
     streamRef.current = null;
     setStream(null);
-    if (videoRef.current) videoRef.current.srcObject = null;
+    if (videoRef.current) {
+      try { videoRef.current.srcObject = null; } catch { /* ignore */ }
+    }
   };
+
+  // Attach stream after <video> mounts (getUserMedia often resolves before React paints it).
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+      videoRef.current.play?.().catch(() => {});
+    }
+  }, [stream]);
 
   useEffect(() => {
     listCategories().then(setCats).catch(() => {});
@@ -118,6 +190,10 @@ export default function BookCreate({ onBack, onLogout }) {
   const capture = () => {
     const v = videoRef.current;
     if (!v) return;
+    if (!v.videoWidth || !v.videoHeight) {
+      setError(t("cameraNotReady"));
+      return;
+    }
     const canvas = document.createElement("canvas");
     canvas.width = v.videoWidth || 720;
     canvas.height = v.videoHeight || 960;
@@ -151,14 +227,27 @@ export default function BookCreate({ onBack, onLogout }) {
     stopCamera();
   };
 
-  const analyze = async () => {
+  const analyze = async ({ force = false } = {}) => {
     const files = images.filter(Boolean);
     if (!files.length) return;
+    // Always release the webcam before / during OCR (dock Camera stays open otherwise).
+    stopCamera();
+    setCaptureStep("ready");
     setBusy(true);
     setBusyLabel(t("analyzingBook"));
     setError("");
     setInfo("");
     try {
+      if (!force) {
+        setBusyLabel(t("checkingImageQuality"));
+        const q = await assessCapturesQuality(files);
+        if (q.blurry || q.lowContrast) {
+          setError(t("imageBlurryRetry"));
+          setBusy(false);
+          setBusyLabel("");
+          return;
+        }
+      }
       setBusyLabel(t("detectingIsbn"));
       const isbn = await detectIsbnFromImages(files);
       setBusyLabel(t("runningOcr"));
@@ -174,7 +263,15 @@ export default function BookCreate({ onBack, onLogout }) {
 
       const resolvedIsbn = d.isbn13 || isbn || "";
       const isbnMissing = !resolvedIsbn || d.raw?.isbn_not_detected;
-      if (isbnMissing && d.title) {
+      const ocrErr = d.raw?.ocr_error || d.raw?.back?.ocr_error;
+      const lowConf = d.raw?.ocr_low_confidence || (d.confidence != null && d.confidence < 0.35);
+      if (ocrErr) {
+        setError(`${t("ocrUnavailable")}\n${ocrErr}\n${t("imageBlurryRetry")}`);
+      } else if (lowConf && !d.title && !resolvedIsbn) {
+        setError(t("imageBlurryRetry"));
+      } else if (lowConf) {
+        setInfo(`${t("ocrWeak")}${d.raw?.suggested_title ? ` — ${d.raw.suggested_title}` : ""}`);
+      } else if (isbnMissing && d.title) {
         setError(`${t("isbnNotDetected")}\n${t("noIsbnTitleAssist")}`);
       } else if (isbnMissing) {
         setError(`${t("isbnNotDetected")}\n${t("isbnManualHint")}`);
@@ -182,6 +279,8 @@ export default function BookCreate({ onBack, onLogout }) {
         setError(t("metadataMiss"));
       } else if (d.source === "manual" || d.raw?.ocr_available === false) {
         setError(t("ocrUnavailable"));
+      } else if (!d.title && !resolvedIsbn) {
+        setError(t("ocrEmptyManual"));
       } else if (d.raw?.title_search) {
         setInfo(t("titleSearchHit"));
       }
@@ -191,7 +290,7 @@ export default function BookCreate({ onBack, onLogout }) {
       setForm((prev) => ({
         ...EMPTY,
         isbn13: resolvedIsbn,
-        title: d.title || "",
+        title: d.title || d.raw?.suggested_title || "",
         subtitle: d.subtitle || "",
         authors: (d.authors || []).join(", "),
         translators: (d.translators || []).join(", "),
@@ -208,8 +307,10 @@ export default function BookCreate({ onBack, onLogout }) {
         tax_rate: prev.tax_rate || tva7?.id || "",
       }));
     } catch (err) {
-      setError(String(err.message || err));
+      const msg = String(err.message || err);
+      setError(/ocr|tesseract|empty|fail|échec/i.test(msg) ? `${t("imageBlurryRetry")}\n${msg}` : msg);
     } finally {
+      stopCamera();
       setBusy(false);
       setBusyLabel("");
     }
@@ -320,7 +421,10 @@ export default function BookCreate({ onBack, onLogout }) {
                     {captureStep === "back" ? t("startCameraBack") : t("startCamera")}
                   </Button>
                 ) : (
-                  <Button variant="contained" onClick={capture}>{captureLabel}</Button>
+                  <>
+                    <Button variant="contained" onClick={capture}>{captureLabel}</Button>
+                    <Button variant="outlined" color="error" onClick={stopCamera}>{t("stopCamera")}</Button>
+                  </>
                 )}
                 <Button variant="outlined" onClick={() => fileRef.current?.click()}>{t("choosePhotos")}</Button>
                 <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple hidden
@@ -333,9 +437,15 @@ export default function BookCreate({ onBack, onLogout }) {
                          e.target.value = "";
                        }} />
                 <Button variant="contained" color="secondary"
-                        disabled={!readyFiles || busy} onClick={analyze}>
+                        disabled={!readyFiles || busy} onClick={() => analyze({ force: false })}>
                   {t("analyze")}
                 </Button>
+                {readyFiles > 0 && error && /floue|blur|contraste|Image floue/i.test(error) && (
+                  <Button variant="outlined" color="warning" disabled={busy}
+                          onClick={() => analyze({ force: true })}>
+                    {t("analyzeAnyway")}
+                  </Button>
+                )}
                 {readyFiles > 0 && (
                   <Button color="inherit" onClick={resetCaptures}>{t("resetCaptures")}</Button>
                 )}
