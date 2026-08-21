@@ -229,7 +229,7 @@ VISION_MODEL = os.environ.get("TEYSSIR_VISION_MODEL", "qwen2.5vl:3b")
 # Hard timeout for primary vision provider calls (OCR_PROVIDER=vision).
 VISION_TIMEOUT = int(os.environ.get("TEYSSIR_VISION_TIMEOUT", "45"))
 # Shorter timeout when vision is only a Tesseract fallback (skip if Ollama is slow/down).
-VISION_FALLBACK_TIMEOUT = float(os.environ.get("TEYSSIR_VISION_FALLBACK_TIMEOUT", "12"))
+VISION_FALLBACK_TIMEOUT = float(os.environ.get("TEYSSIR_VISION_FALLBACK_TIMEOUT", "28"))
 # Optional text LLM (Ollama). ERP must run when this is false or Ollama is down.
 USE_LLM = os.environ.get("USE_LLM", os.environ.get("TEYSSIR_USE_LLM", "false")).strip().lower() in (
     "1", "true", "yes", "on",

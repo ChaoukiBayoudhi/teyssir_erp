@@ -112,6 +112,8 @@ cat > "$PLIST" <<EOF
     <string>1</string>
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>DYLD_FALLBACK_LIBRARY_PATH</key>
+    <string>/opt/homebrew/lib:/usr/local/lib</string>
     <key>HOME</key>
     <string>$HOME</string>
     <key>LANG</key>

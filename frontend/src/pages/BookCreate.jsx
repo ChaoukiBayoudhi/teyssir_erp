@@ -24,36 +24,59 @@ async function detectIsbn(file) {
       bmp.close?.();
       return hit;
     }
-    // Small / angled verso barcodes: crop lower band + slight rotations + upscale
+    // Small / angled verso barcodes: bands, corners, rotations, contrast, upscale
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
     const w = bmp.width;
     const h = bmp.height;
     const crops = [
       { sx: 0, sy: Math.floor(h * 0.55), sw: w, sh: Math.floor(h * 0.45) },
+      { sx: 0, sy: Math.floor(h * 0.72), sw: w, sh: Math.floor(h * 0.28) },
       { sx: Math.floor(w * 0.1), sy: Math.floor(h * 0.7), sw: Math.floor(w * 0.8), sh: Math.floor(h * 0.3) },
+      { sx: Math.floor(w * 0.45), sy: Math.floor(h * 0.65), sw: Math.floor(w * 0.55), sh: Math.floor(h * 0.35) },
+      { sx: 0, sy: Math.floor(h * 0.65), sw: Math.floor(w * 0.55), sh: Math.floor(h * 0.35) },
+      { sx: Math.floor(w * 0.45), sy: 0, sw: Math.floor(w * 0.55), sh: Math.floor(h * 0.35) },
+      { sx: 0, sy: 0, sw: Math.floor(w * 0.55), sh: Math.floor(h * 0.35) },
     ];
+    const angles = [-12, 12, -20, 20, 90, 180, 270];
     for (const c of crops) {
       if (c.sw < 20 || c.sh < 20) continue;
-      const scale = Math.max(2, Math.ceil(900 / Math.max(c.sw, c.sh)));
-      canvas.width = c.sw * scale;
-      canvas.height = c.sh * scale;
-      ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(bmp, c.sx, c.sy, c.sw, c.sh, 0, 0, canvas.width, canvas.height);
-      hit = await tryDetect(canvas);
-      if (hit) break;
-      for (const angle of [-12, 12, -20, 20]) {
-        const rot = document.createElement("canvas");
-        const rad = (angle * Math.PI) / 180;
-        const rw = Math.abs(canvas.width * Math.cos(rad)) + Math.abs(canvas.height * Math.sin(rad));
-        const rh = Math.abs(canvas.width * Math.sin(rad)) + Math.abs(canvas.height * Math.cos(rad));
-        rot.width = Math.ceil(rw);
-        rot.height = Math.ceil(rh);
-        const rctx = rot.getContext("2d");
-        rctx.translate(rot.width / 2, rot.height / 2);
-        rctx.rotate(rad);
-        rctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
-        hit = await tryDetect(rot);
+      for (const scale of [2, 3]) {
+        canvas.width = c.sw * scale;
+        canvas.height = c.sh * scale;
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(bmp, c.sx, c.sy, c.sw, c.sh, 0, 0, canvas.width, canvas.height);
+        // Boost contrast for faded ink
+        try {
+          const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const d = id.data;
+          for (let i = 0; i < d.length; i += 4) {
+            const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+            const v = g < 140 ? 0 : 255;
+            d[i] = d[i + 1] = d[i + 2] = v;
+          }
+          ctx.putImageData(id, 0, 0);
+        } catch { /* ignore */ }
+        hit = await tryDetect(canvas);
+        if (hit) break;
+        // Non-binarized upscale too
+        ctx.drawImage(bmp, c.sx, c.sy, c.sw, c.sh, 0, 0, canvas.width, canvas.height);
+        hit = await tryDetect(canvas);
+        if (hit) break;
+        for (const angle of angles) {
+          const rot = document.createElement("canvas");
+          const rad = (angle * Math.PI) / 180;
+          const rw = Math.abs(canvas.width * Math.cos(rad)) + Math.abs(canvas.height * Math.sin(rad));
+          const rh = Math.abs(canvas.width * Math.sin(rad)) + Math.abs(canvas.height * Math.cos(rad));
+          rot.width = Math.ceil(rw) || 1;
+          rot.height = Math.ceil(rh) || 1;
+          const rctx = rot.getContext("2d");
+          rctx.translate(rot.width / 2, rot.height / 2);
+          rctx.rotate(rad);
+          rctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+          hit = await tryDetect(rot);
+          if (hit) break;
+        }
         if (hit) break;
       }
       if (hit) break;
@@ -312,25 +335,34 @@ export default function BookCreate({ onBack, onLogout }) {
       const ocrErr = d.raw?.ocr_error || d.raw?.back?.ocr_error;
       const lowConf = d.raw?.ocr_low_confidence || (d.confidence != null && d.confidence < 0.35);
       const garbageLatin = !!(d.raw?.ocr_garbage_latin || d.raw?.ocr_arabic_likely || d.raw?.ocr_title_unusable);
+      const garbageArabic = !!(d.raw?.ocr_garbage_arabic);
+      const garbageOcr = garbageLatin || garbageArabic;
       const missingAra = !!(d.raw?.tess_missing_ara || (d.raw?.tess_missing_langs || []).includes?.("ara"));
       const weakTitleSearch = d.raw?.title_search_weak || (d.raw?.title_search && isbnMissing);
+      const metaOk = !!(resolvedIsbn && (d.source === "openlibrary" || d.source === "googlebooks" || d.confidence >= 0.8));
       let warn = "";
       let note = "";
       if (ocrErr) {
         warn = `${t("ocrUnavailable")}\n${ocrErr}\n${t("imageBlurryRetry")}`;
-      } else if (garbageLatin || missingAra) {
+      } else if (garbageOcr || missingAra) {
         warn = missingAra ? t("ocrMissingAra") : t("ocrArabicWeak");
         if (d.raw?.rejected_title || d.raw?.suggested_title) {
           note = `${t("ocrGarbageTitleHint")} — ${d.raw.rejected_title || d.raw.suggested_title}`;
         }
+        if (isbnMissing) {
+          note = note ? `${note}\n${t("barcodeCloseupHint")}` : t("barcodeCloseupHint");
+        }
       } else if (lowConf && !d.title && !resolvedIsbn) {
         warn = t("imageBlurryRetry");
-      } else if (lowConf) {
+      } else if (lowConf && !metaOk) {
         note = `${t("ocrWeak")}${d.raw?.suggested_title ? ` — ${d.raw.suggested_title}` : ""}`;
+        if (isbnMissing) {
+          note = `${note}\n${t("barcodeCloseupHint")}`;
+        }
       } else if (isbnMissing && d.title) {
-        warn = `${t("isbnNotDetected")}\n${t("noIsbnTitleAssist")}`;
+        warn = `${t("isbnNotDetected")}\n${t("noIsbnTitleAssist")}\n${t("barcodeCloseupHint")}`;
       } else if (isbnMissing) {
-        warn = `${t("isbnNotDetected")}\n${t("isbnManualHint")}`;
+        warn = `${t("isbnNotDetected")}\n${t("isbnManualHint")}\n${t("barcodeCloseupHint")}`;
       } else if (d.raw?.metadata_miss && !d.title) {
         warn = t("metadataMiss");
       } else if (d.source === "manual" || d.raw?.ocr_available === false) {
@@ -350,11 +382,11 @@ export default function BookCreate({ onBack, onLogout }) {
 
       const livre = cats.find((c) => /livre|book|كتاب|manuel/i.test(c.name_fr || ""));
       const tva7 = taxes.find((x) => Number(x.rate_percent) === 7);
-      // Do not present garbage Latin OCR as a confident title; keep languages=ar when likely Arabic
-      const safeTitle = garbageLatin ? "" : (d.title || d.raw?.suggested_title || "");
-      const safeAuthors = garbageLatin ? "" : (d.authors || []).join(", ");
+      // Do not present garbage OCR as a confident title; keep languages=ar when likely Arabic
+      const safeTitle = garbageOcr ? "" : (d.title || d.raw?.suggested_title || "");
+      const safeAuthors = garbageOcr ? "" : (d.authors || []).join(", ");
       let langList = d.languages || [];
-      if (garbageLatin && !langList.includes("ar")) {
+      if (garbageOcr && !langList.includes("ar")) {
         langList = ["ar"];
       }
       setForm((prev) => ({

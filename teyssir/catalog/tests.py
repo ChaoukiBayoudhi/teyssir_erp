@@ -161,6 +161,28 @@ class PriceAndLangTests(unittest.TestCase):
         self.assertIn("ar", draft.languages)
         self.assertNotIn("en", draft.languages)
 
+    def test_garbage_arabic_title_rejected(self):
+        from teyssir.catalog.bookscan.ocr import (
+            _draft_from_text,
+            is_garbage_arabic_ocr,
+            is_plausible_author,
+            is_usable_ocr_title,
+        )
+        for junk in ("عد ل |||", "الا )(", "عد ل"):
+            self.assertTrue(
+                is_garbage_arabic_ocr(junk, mean_conf=35),
+                msg=f"expected garbage Arabic: {junk!r}",
+            )
+            self.assertFalse(is_usable_ocr_title(junk, mean_conf=35))
+        self.assertFalse(is_plausible_author("الا )(", mean_conf=35))
+        self.assertFalse(is_plausible_author("مسيحي", mean_conf=35))
+        self.assertTrue(is_usable_ocr_title("فقه السنة لسيد سابق", mean_conf=40))
+
+        draft = _draft_from_text("عد ل |||\nالا )(", role="front", mean_conf=35)
+        self.assertEqual(draft.title, "")
+        self.assertTrue(draft.raw.get("ocr_garbage_arabic") or draft.raw.get("ocr_title_unusable"))
+        self.assertEqual(draft.authors, [])
+
     def test_arabic_char_ratio(self):
         from teyssir.catalog.bookscan.ocr import arabic_char_ratio
         self.assertGreater(arabic_char_ratio("فقه السنة سيد سابق"), 0.8)
@@ -198,6 +220,38 @@ class BarcodeIsbnTests(unittest.TestCase):
         path2 = os.path.join(tempfile.mkdtemp(), "verso.png")
         page.save(path2)
         self.assertEqual(decode_isbn_barcode(path2), "9782070612758")
+
+    def test_decode_isbn_corner_and_rotated(self):
+        """Corner placement + 90° rotation still recover EAN-13."""
+        try:
+            import barcode
+            from barcode.writer import ImageWriter
+        except Exception:
+            self.skipTest("pyzbar / python-barcode not available")
+
+        from teyssir.catalog.bookscan.barcode import decode_isbn_barcode
+
+        buf = BytesIO()
+        barcode.get_barcode_class("ean13")("978207061275", writer=ImageWriter()).write(buf)
+        buf.seek(0)
+        bc = Image.open(buf).convert("RGB").resize((180, 80))
+
+        page = Image.new("RGB", (1000, 1400), "white")
+        page.paste(bc, (780, 1280))  # bottom-right corner
+        path = os.path.join(tempfile.mkdtemp(), "corner.png")
+        page.save(path)
+        self.assertEqual(decode_isbn_barcode(path), "9782070612758")
+
+        rotated = page.rotate(90, expand=True, fillcolor="white")
+        path_r = os.path.join(tempfile.mkdtemp(), "rot90.png")
+        rotated.save(path_r)
+        self.assertEqual(decode_isbn_barcode(path_r), "9782070612758")
+
+    def test_extract_isbn_from_digit_blob(self):
+        from teyssir.catalog.bookscan.isbn import extract_isbn, to_isbn13
+        self.assertEqual(extract_isbn("ISBN 978-2-07-061275-8"), "9782070612758")
+        self.assertEqual(to_isbn13("9782070612758"), "9782070612758")
+        self.assertEqual(extract_isbn("noise 12345 more"), "")
 
     def test_barcode_engine_available_flag(self):
         from teyssir.catalog.bookscan.barcode import barcode_engine_available
@@ -298,6 +352,51 @@ class TitleSearchGatingTests(unittest.TestCase):
             raw={"ocr_text_only": True},
         )
         self.assertFalse(_should_try_vision(good, P()))
+
+    def test_should_try_vision_on_garbage_arabic_and_weak_ar(self):
+        from teyssir.catalog.bookscan.services import _should_try_vision
+        class P:
+            name = "tesseract"
+        garbage = BookDraft(
+            title="", source="tesseract", confidence=0.1, languages=["ar"],
+            raw={"ocr_garbage_arabic": True, "ocr_title_unusable": True, "ocr_mean_confidence": 35},
+        )
+        self.assertTrue(_should_try_vision(garbage, P()))
+        weak_ar = BookDraft(
+            title="الكتالاميد السنة الأولى مت الحمليم", source="tesseract",
+            confidence=0.35, languages=["ar"],
+            raw={"ocr_mean_confidence": 35, "ocr_text_only": True},
+        )
+        self.assertTrue(_should_try_vision(weak_ar, P()))
+
+    def test_scan_isbn_metadata_raises_confidence(self):
+        """Barcode/ISBN hint + OpenLibrary must present high confidence, not 35%."""
+        from unittest.mock import patch
+        ocr_draft = BookDraft(
+            title="wrong tess", source="tesseract", confidence=0.35,
+            raw={"isbn_not_detected": True},
+        )
+        meta = BookDraft(
+            title="Le Petit Prince", authors=["Saint-Exupéry"],
+            isbn13="9782070612758", source="openlibrary", confidence=0.9,
+        )
+        with patch("teyssir.catalog.bookscan.services.get_ocr_provider") as g, \
+             patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths",
+                   return_value="9782070612758"), \
+             patch("teyssir.catalog.bookscan.services._should_try_vision", return_value=False):
+            class P:
+                name = "tesseract"
+                def extract(self, path, role="auto"):
+                    return "x", ocr_draft
+            g.return_value = P()
+            out, _ = scan_book(
+                ["/tmp/fake.png"], isbn="", enrich=lambda i: meta,
+                enrich_title=lambda t, a="": None,
+            )
+        self.assertEqual(out.isbn13, "9782070612758")
+        self.assertEqual(out.title, "Le Petit Prince")
+        self.assertGreaterEqual(out.confidence or 0, 0.85)
+        self.assertEqual(out.source, "openlibrary")
 
     def test_weak_title_search_keeps_ocr_authors(self):
         from unittest.mock import patch

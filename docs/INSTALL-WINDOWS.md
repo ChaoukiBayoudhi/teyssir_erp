@@ -321,6 +321,10 @@ Deux moteurs **gratuits** sont disponibles :
   (`qwen2.5vl:3b`, plus lourd) **n'est pas** téléchargé par défaut. Pour l'activer :
   `.\deploy\windows\Install-LocalLlm.ps1 -Model mistral -PullVision`, puis dans `.env` :
   `TEYSSIR_OCR_PROVIDER=vision` et `TEYSSIR_SCAN_EXECUTOR=thread`.
+- **ISBN / code-barres** : `pyzbar` (dans `requirements.txt`) a besoin de **libzbar**.
+  Sur Windows, placez `libzbar-64.dll` sur le `PATH` du service (ou à côté de Python),
+  ou comptez sur la détection client `BarcodeDetector` + OCR chiffres. Sans DLL, le
+  décodage barcode serveur échoue silencieusement (fallback OCR digits).
 
 Sans configuration, la saisie du livre reste **manuelle** (aucune erreur, juste pas d'auto-remplissage).
 
@@ -330,6 +334,7 @@ Sans configuration, la saisie du livre reste **manuelle** (aucune erreur, juste 
 |----------|----------------|--------|
 | OCR vide sous le service Windows | PATH minimal (NSSM) sans Tesseract | Vérifiez `TEYSSIR_TESSERACT_CMD` dans `.env` + `AppEnvironmentExtra` du service ; Menu → **Diagnostics** |
 | Langues manquantes (arabe/français) | Packs non installés | Réinstallez UB Mannheim en cochant **ara**, **fra**, **eng** ; `/health/` → `tesseract.langs` |
+| ISBN vide alors que le verso a un code-barres | libzbar absent / photo trop large | Cadrez le barcode en gros plan ; vérifiez `libzbar` / client BarcodeDetector ; Menu → Diagnostics |
 | « Image floue, veuillez reprendre » | Flou / faible contraste avant OCR | Reprenez la photo avec plus de lumière, cadrez le titre ; ou « Analyser quand même » |
 | Caméra ne s'ouvre pas | HTTP hors localhost | Utilisez `http://localhost:8000` ou HTTPS ; autorisez la caméra dans le navigateur |
 | Service ne voit pas Tesseract après install | Redémarrage requis | `nssm restart TeyssirBackend` puis rouvrez Diagnostics |

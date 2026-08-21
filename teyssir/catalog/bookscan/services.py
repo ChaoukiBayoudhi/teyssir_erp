@@ -9,7 +9,7 @@ from django.db import transaction
 
 from teyssir.core.money import require_non_negative_money
 
-from .barcode import decode_isbn_barcode
+from .barcode import decode_isbn_barcode_or_digits
 from .draft import BookDraft
 from .isbn import to_isbn13
 from .metadata import enrich_by_isbn, enrich_by_title
@@ -53,13 +53,18 @@ def _merge_cover_drafts(front: BookDraft, back: BookDraft | None) -> BookDraft:
         if back.raw.get("isbn_from_barcode"):
             out.raw["isbn_from_barcode"] = True
 
-    # Confidence: boost when we have ISBN or a solid title
-    if out.isbn13:
-        out.confidence = max(front.confidence, (back.confidence if back else 0), 0.7)
-    elif out.title:
-        out.confidence = max(front.confidence, 0.35)
+    from .ocr import is_usable_ocr_title
+
+    # Confidence: barcode ISBN is high-trust; never floor weak tess to a fake 35%
+    if out.isbn13 and (out.raw.get("isbn_from_barcode") or (back and back.raw.get("isbn_from_barcode"))):
+        out.confidence = max(front.confidence or 0, (back.confidence if back else 0) or 0, 0.85)
+        out.raw["isbn_from_barcode"] = True
+    elif out.isbn13:
+        out.confidence = max(front.confidence or 0, (back.confidence if back else 0) or 0, 0.7)
+    elif out.title and is_usable_ocr_title(out.title):
+        out.confidence = max(front.confidence or 0, (back.confidence if back else 0) or 0)
     else:
-        out.confidence = max(front.confidence, (back.confidence if back else 0))
+        out.confidence = max(front.confidence or 0, (back.confidence if back else 0) or 0)
 
     if out.isbn13:
         out.raw["isbn_detected"] = True
@@ -70,13 +75,13 @@ def _merge_cover_drafts(front: BookDraft, back: BookDraft | None) -> BookDraft:
 
 
 def _barcode_isbn_from_paths(image_paths) -> str:
-    """Try barcode decode on all images (prefer last = verso), return first ISBN-13."""
+    """Try barcode (+ digit OCR) on all images (prefer last = verso), return first ISBN-13."""
     if not image_paths:
         return ""
     # Verso last, then earlier shots
     order = list(reversed(range(len(image_paths))))
     for i in order:
-        isbn = decode_isbn_barcode(image_paths[i])
+        isbn = decode_isbn_barcode_or_digits(image_paths[i])
         if isbn:
             return isbn
     return ""
@@ -122,10 +127,13 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
     """
     isbn = to_isbn13(isbn) or (isbn or "").strip()
     provider = get_ocr_provider()
+    client_isbn_hint = bool(isbn)
 
     # ISBN-first: real barcode beats OCR digits and wrong title-only OL hits.
+    barcode_isbn = ""
     if not isbn and image_paths:
-        isbn = _barcode_isbn_from_paths(image_paths)
+        barcode_isbn = _barcode_isbn_from_paths(image_paths)
+        isbn = barcode_isbn
 
     texts, front, back = _extract_pair(provider, image_paths)
     if not isbn and front.isbn13:
@@ -139,6 +147,11 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
         ocr_draft.isbn13 = ocr_draft.isbn13 or isbn
         ocr_draft.raw["isbn_detected"] = True
         ocr_draft.raw.pop("isbn_not_detected", None)
+        if barcode_isbn or client_isbn_hint or ocr_draft.raw.get("isbn_from_barcode"):
+            ocr_draft.raw["isbn_from_barcode"] = True
+            ocr_draft.confidence = max(ocr_draft.confidence or 0, 0.85)
+        if client_isbn_hint:
+            ocr_draft.raw["isbn_client_hint"] = True
 
     # Phone-camera covers often defeat Tesseract; upgrade via local Ollama vision when weak.
     if image_paths and _should_try_vision(ocr_draft, provider):
@@ -160,6 +173,11 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
         # Prefer barcode/OCR ISBN; keep OCR price
         if isbn:
             draft.isbn13 = draft.isbn13 or isbn
+        # Metadata by ISBN is high-trust — reflect that in confidence/source
+        draft.confidence = max(draft.confidence or 0, 0.85)
+        if ocr_draft.raw.get("isbn_from_barcode"):
+            draft.raw = {**(draft.raw or {}), "isbn_from_barcode": True}
+            draft.confidence = max(draft.confidence or 0, 0.9)
 
     # No ISBN: try title/author metadata search (local Tunisian editions) — low confidence
     # Never search OpenLibrary with garbage Latin OCR (locks wrong language / wrong book).
@@ -228,12 +246,28 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
 
 
 def _maybe_vision_upgrade(image_paths, ocr_draft, back):
-    """Run Vision-LLM with a hard timeout; never block the scan for long."""
+    """Run Vision-LLM with a hard timeout; never block the scan for long.
+
+    Arabic / garbage OCR gets a longer timeout (calligraphy covers need it).
+    Also tries the verso frame for ISBN when front vision misses it.
+    """
     from django.conf import settings
 
-    from .ocr import VisionLlmOcrProvider
+    from .ocr import VisionLlmOcrProvider, arabic_char_ratio
 
-    timeout = float(getattr(settings, "VISION_FALLBACK_TIMEOUT", 12) or 12)
+    base_timeout = float(getattr(settings, "VISION_FALLBACK_TIMEOUT", 28) or 28)
+    raw = ocr_draft.raw or {}
+    arabic_hard = bool(
+        raw.get("ocr_garbage_arabic")
+        or raw.get("ocr_garbage_latin")
+        or raw.get("ocr_arabic_likely")
+        or raw.get("tess_missing_ara")
+        or ("ar" in (ocr_draft.languages or []))
+        or arabic_char_ratio(ocr_draft.title or "") >= 0.15
+    )
+    timeout = base_timeout * (1.6 if arabic_hard else 1.0)
+    timeout = min(timeout, float(getattr(settings, "VISION_TIMEOUT", 45) or 45))
+
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
             fut = pool.submit(VisionLlmOcrProvider().extract, image_paths[0], "front")
@@ -249,6 +283,26 @@ def _maybe_vision_upgrade(image_paths, ocr_draft, back):
     except Exception as exc:
         ocr_draft.raw = {**(ocr_draft.raw or {}), "vision_fallback_error": str(exc)[:200]}
         return ocr_draft
+
+    # Optional verso pass for ISBN when front vision has none
+    if not v_front.isbn13 and len(image_paths) > 1:
+        try:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                fut_b = pool.submit(VisionLlmOcrProvider().extract, image_paths[1], "back")
+                try:
+                    _, v_back = fut_b.result(timeout=min(timeout, 20))
+                    if v_back.isbn13:
+                        v_front.isbn13 = v_back.isbn13
+                        v_front.raw = {
+                            **(v_front.raw or {}),
+                            "vision_isbn_from_verso": True,
+                        }
+                    if v_back.price and not v_front.price:
+                        v_front.price = v_back.price
+                except FuturesTimeout:
+                    fut_b.cancel()
+        except Exception:
+            pass
 
     vision_draft = _merge_cover_drafts(v_front, back if back and back.source != "manual" else None)
     if not vision_draft.isbn13 and back and back.isbn13:
@@ -270,18 +324,23 @@ def _maybe_vision_upgrade(image_paths, ocr_draft, back):
 def _should_try_vision(draft, provider) -> bool:
     """Use local Vision-LLM when primary OCR has no *usable* title/ISBN.
 
-    Garbage Latin titles (Arabic covers misread as ``wis! Boot ay``) must NOT
-    block Vision — they are not usable bibliographic text.
+    Garbage Latin/Arabic titles must NOT block Vision — they are not usable
+    bibliographic text. Prefer Vision for Arabic covers when tess conf < 0.5.
     """
     from django.conf import settings
 
-    from .ocr import is_garbage_latin_ocr, is_usable_ocr_title
+    from .ocr import (
+        arabic_char_ratio,
+        is_garbage_arabic_ocr,
+        is_garbage_latin_ocr,
+        is_usable_ocr_title,
+    )
 
     if getattr(provider, "name", "") != "tesseract":
         return False
     if not getattr(settings, "OCR_VISION_FALLBACK", True):
         return False
-    # Real ISBN from barcode / digits → skip vision entirely
+    # Real ISBN from barcode / digits → skip vision entirely (metadata will enrich)
     if draft.isbn13:
         return False
     title = (draft.title or "").strip()
@@ -294,13 +353,25 @@ def _should_try_vision(draft, provider) -> bool:
     # Explicit garbage / Arabic-likely / missing ara → always try vision
     if (
         raw.get("ocr_garbage_latin")
+        or raw.get("ocr_garbage_arabic")
         or raw.get("ocr_arabic_likely")
         or raw.get("ocr_title_unusable")
         or raw.get("tess_missing_ara")
         or (title and is_garbage_latin_ocr(title, mean_conf=mean_conf))
+        or (title and is_garbage_arabic_ocr(title, mean_conf=mean_conf))
     ):
         return True
-    # Usable title already — prefer fast path + optional title search over vision
+    # Arabic script + weak tess confidence → Vision (calligraphy covers)
+    is_ar = (
+        "ar" in (draft.languages or [])
+        or raw.get("arabic_script_detected")
+        or arabic_char_ratio(title) >= 0.15
+    )
+    if is_ar and (draft.confidence or 0) < 0.5:
+        return True
+    if is_ar and mean_conf is not None and mean_conf < 50:
+        return True
+    # Usable Latin/French title — prefer fast path + optional title search over vision
     if is_usable_ocr_title(title, mean_conf=mean_conf):
         return False
     if (draft.confidence or 0) >= 0.55 and is_usable_ocr_title(title, mean_conf=mean_conf):

@@ -146,18 +146,79 @@ def is_garbage_latin_ocr(text: str, *, mean_conf: float | None = None) -> bool:
     return False
 
 
+def is_garbage_arabic_ocr(text: str, *, mean_conf: float | None = None) -> bool:
+    """True when Arabic OCR is unusable (bars, parens, tiny fragments).
+
+    Production examples: ``عد ل |||``, ``الا )(``, short noisy calligraphy fragments.
+    """
+    s = (text or "").strip().replace("\u200e", "").replace("\u200f", "")
+    if not s:
+        return False
+    if arabic_char_ratio(s) < 0.12:
+        return False
+    conf = mean_conf if mean_conf is not None else 35.0
+    ar_letters = sum(1 for c in s if is_arabic_char(c))
+    if ar_letters < 4:
+        return True
+    # Pipe / slash / paren storms from calligraphy misreads
+    if s.count("|") >= 2 or re.search(r"[|\\/]{2,}", s):
+        return True
+    if re.search(r"[)(]{2,}", s) or (s.count("(") + s.count(")") >= 2 and ar_letters <= 8):
+        return True
+    punct = sum(
+        1 for c in s
+        if not (c.isspace() or c.isdigit() or is_arabic_char(c) or c.isalpha())
+    )
+    if punct >= 3 and ar_letters <= 10:
+        return True
+    words = [w for w in re.split(r"\s+", s) if w]
+    ar_words = [w for w in words if any(is_arabic_char(c) for c in w)]
+    # Tiny fragments like "عد ل" at low confidence
+    if len(ar_words) <= 2 and sum(len(w) for w in ar_words) <= 5 and conf <= 50:
+        return True
+    # Mostly 1–2 letter Arabic tokens + noise
+    short_ar = sum(1 for w in ar_words if len([c for c in w if is_arabic_char(c)]) <= 2)
+    if ar_words and short_ar >= max(2, (len(ar_words) + 1) // 2) and conf <= 45:
+        return True
+    return False
+
+
 def is_usable_ocr_title(title: str, *, mean_conf: float | None = None) -> bool:
     """Whether a title is good enough to skip Vision fallback / title-search gating."""
     t = (title or "").strip()
     if len(t) < 4:
         return False
-    if arabic_char_ratio(t) >= 0.15 and len(t) >= 4:
-        return True
+    if is_garbage_arabic_ocr(t, mean_conf=mean_conf):
+        return False
+    if arabic_char_ratio(t) >= 0.15:
+        ar_letters = sum(1 for c in t if is_arabic_char(c))
+        # Real Arabic titles need substance — not 4 noisy glyphs
+        return ar_letters >= 6 and len(t) >= 6
     if is_garbage_latin_ocr(t, mean_conf=mean_conf):
         return False
     # Decent Latin/French title
     letters = sum(1 for c in t if c.isalpha())
     return letters >= 4
+
+
+def is_plausible_author(name: str, *, mean_conf: float | None = None) -> bool:
+    """Reject OCR author noise (``مسيحي`` alone is OK if long enough; ``الا )(`` is not)."""
+    s = (name or "").strip().replace("\u200e", "").replace("\u200f", "")
+    if len(s) < 3:
+        return False
+    if is_garbage_latin_ocr(s, mean_conf=mean_conf):
+        return False
+    if is_garbage_arabic_ocr(s, mean_conf=mean_conf):
+        return False
+    if arabic_char_ratio(s) >= 0.15:
+        ar = sum(1 for c in s if is_arabic_char(c))
+        # Single short token at low conf is often cover ornament misread
+        words = [w for w in re.split(r"\s+", s) if w]
+        if len(words) == 1 and ar <= 5 and (mean_conf or 40) <= 45:
+            return False
+        return ar >= 3
+    letters = sum(1 for c in s if c.isalpha())
+    return letters >= 3
 
 
 def detect_script_langs(text: str, *, mean_conf: float | None = None) -> list[str]:
@@ -271,6 +332,34 @@ def _score_ocr_candidate(
     return score
 
 
+def _deskew_light(im):
+    """Tiny deskew via small rotation search on projection variance (cheap)."""
+    try:
+        import statistics
+
+        g = im.convert("L")
+        best = im
+        best_score = -1.0
+        for angle in (0, -2, 2, -4, 4):
+            rot = g.rotate(angle, expand=True, fillcolor=255) if angle else g
+            # Prefer angles that concentrate ink in fewer horizontal bands
+            w, h = rot.size
+            step = max(1, h // 40)
+            rows = []
+            for y in range(0, h, step):
+                band = list(rot.crop((0, y, w, min(h, y + step))).getdata())
+                rows.append(sum(1 for p in band if p < 128) / max(len(band), 1))
+            if len(rows) < 3:
+                continue
+            score = statistics.pstdev(rows)
+            if score > best_score:
+                best_score = score
+                best = im.rotate(angle, expand=True, fillcolor="white") if angle else im
+        return best
+    except Exception:
+        return im
+
+
 def _preprocess_variants(image_path, role="auto", *, isbn_found=False):
     """Yield (label, PIL.Image) variants: original / grayscale / threshold (+ role crops).
 
@@ -288,8 +377,8 @@ def _preprocess_variants(image_path, role="auto", *, isbn_found=False):
     barcode_band = img.crop((0, int(h * 0.72), w, h)) if role in ("back", "auto") and h > 100 else None
 
     def _upscale(im):
-        if max(im.size) < 900:
-            scale = 900 / max(im.size)
+        if max(im.size) < 1100:
+            scale = 1100 / max(im.size)
             im = im.resize((int(im.width * scale), int(im.height * scale)), Image.Resampling.LANCZOS)
         return im
 
@@ -297,23 +386,28 @@ def _preprocess_variants(image_path, role="auto", *, isbn_found=False):
         if color:
             # Color path preserves Arabic calligraphy better on some covers
             im = ImageOps.autocontrast(im)
-            im = ImageEnhance.Contrast(im).enhance(1.4)
+            im = ImageEnhance.Contrast(im).enhance(1.6)
+            im = ImageEnhance.Sharpness(im).enhance(1.4)
         else:
             im = ImageOps.grayscale(im)
             im = ImageOps.autocontrast(im)
-            im = ImageEnhance.Contrast(im).enhance(1.8)
+            im = ImageEnhance.Contrast(im).enhance(2.0)
+            im = im.filter(ImageFilter.MedianFilter(size=3))
+            im = ImageEnhance.Sharpness(im).enhance(1.5)
         return _upscale(im)
 
     def _threshold(im):
         g = ImageOps.grayscale(im)
         g = ImageOps.autocontrast(g)
-        g = ImageEnhance.Contrast(g).enhance(2.0)
+        g = ImageEnhance.Contrast(g).enhance(2.2)
         g = g.point(lambda x: 255 if x > 140 else 0)
         return _upscale(g.filter(ImageFilter.MedianFilter(size=3)))
 
     # Multi-pass baseline: original → grayscale → binary threshold
     yield "original", _upscale(ImageOps.autocontrast(crop.copy()))
     yield "grayscale", _enhance(crop)
+    if role == "front":
+        yield "deskew", _enhance(_deskew_light(crop))
     if isbn_found:
         # ISBN already known — one price/title pass is enough
         if role == "back" and lower is not None:
@@ -327,15 +421,25 @@ def _preprocess_variants(image_path, role="auto", *, isbn_found=False):
     if role in ("back", "auto") and lower is not None:
         yield "lower", _enhance(lower)
         # Slight rotations of the barcode band (angled phone photos)
-        for angle in (-12, 12, -20, 20):
+        for angle in (-12, 12, -20, 20, 90, 180, 270):
             rotated = lower.rotate(angle, expand=True, fillcolor="white")
             yield f"lower_rot{angle}", _enhance(rotated)
     if barcode_band is not None:
         yield "barcode_band", _threshold(barcode_band)
         yield "barcode_band_up", _enhance(barcode_band)
+        g3 = ImageOps.autocontrast(ImageOps.grayscale(barcode_band))
+        g3 = ImageEnhance.Contrast(g3).enhance(2.5)
+        g3 = g3.resize(
+            (max(1, barcode_band.width * 3), max(1, barcode_band.height * 3)),
+            Image.Resampling.LANCZOS,
+        )
+        yield "barcode_band_x3", g3.convert("RGB")
     yield "full", _enhance(img)
     if role == "front":
         yield "crop_color", _enhance(crop, color=True)
+        # High-contrast calligraphy pass
+        callig = ImageOps.autocontrast(ImageOps.equalize(crop.convert("L"))).convert("RGB")
+        yield "calligraphy", _enhance(callig, color=True)
 
 
 def _ocr_digits(pytesseract, image) -> str:
@@ -384,9 +488,16 @@ def _mean_ocr_confidence(pytesseract, image, langs: str, *, psm: int = 6) -> flo
 
 
 def _apply_confidence_gate(draft: BookDraft, mean_conf: float) -> BookDraft:
-    """Flag low Tesseract confidence → manual review + keep suggested text."""
+    """Flag low Tesseract confidence → manual review + keep suggested text.
+
+    Do not clamp when ISBN came from a real barcode (high-trust path).
+    """
     threshold = float(getattr(settings, "OCR_CONFIDENCE_THRESHOLD", 45) or 45)
     draft.raw = {**(draft.raw or {}), "ocr_mean_confidence": round(mean_conf, 1)}
+    if draft.raw.get("isbn_from_barcode") and draft.isbn13:
+        # Barcode ISBN is definitive — keep high confidence for metadata merge
+        draft.confidence = max(draft.confidence or 0, 0.85)
+        return draft
     if mean_conf > 0 and mean_conf < threshold:
         draft.raw["ocr_low_confidence"] = True
         draft.raw["suggested_title"] = draft.title or ""
@@ -469,7 +580,7 @@ def _draft_from_text(text, *, isbn_hint="", role="auto", mean_conf: float | None
                 for ln in cleaned:
                     if ln == draft.title:
                         continue
-                    if is_garbage_latin_ocr(ln, mean_conf=mean_conf):
+                    if not is_plausible_author(ln, mean_conf=mean_conf):
                         continue
                     if 3 <= len(ln) <= 60:
                         draft.authors = [ln]
@@ -497,10 +608,37 @@ def _draft_from_text(text, *, isbn_hint="", role="auto", mean_conf: float | None
             draft.price = ""
             draft.raw.pop("price_detected", None)
 
+    # Reject garbage Arabic titles (``عد ل |||``) — force Vision / manual
+    if draft.title and is_garbage_arabic_ocr(draft.title, mean_conf=mean_conf):
+        draft.raw["ocr_garbage_arabic"] = True
+        draft.raw["ocr_title_unusable"] = True
+        draft.raw["suggested_title"] = draft.title
+        draft.raw["rejected_title"] = draft.title
+        draft.title = ""
+        if draft.authors:
+            draft.raw["rejected_authors"] = list(draft.authors)
+            draft.authors = []
+        if "ar" not in (draft.languages or []):
+            draft.languages = ["ar", *(draft.languages or [])]
+        draft.raw["ocr_arabic_likely"] = True
+
+    # Drop implausible authors even when title survived
+    if draft.authors:
+        kept = [a for a in draft.authors if is_plausible_author(a, mean_conf=mean_conf)]
+        if len(kept) != len(draft.authors):
+            draft.raw["rejected_authors"] = [
+                a for a in draft.authors if a not in kept
+            ]
+        draft.authors = kept
+
     if draft.isbn13 or draft.price:
         draft.confidence = 0.6 if draft.isbn13 else 0.45
     elif draft.title and is_usable_ocr_title(draft.title, mean_conf=mean_conf):
-        draft.confidence = 0.35
+        # Reflect Tesseract mean when available — never hardcode a fake "35%" floor
+        if mean_conf and mean_conf > 0:
+            draft.confidence = max(0.15, min(0.55, mean_conf / 100.0))
+        else:
+            draft.confidence = 0.25
         draft.raw["ocr_text_only"] = True
     else:
         draft.confidence = 0.1
@@ -561,7 +699,9 @@ class TesseractOcrProvider(OcrProvider):
             # Barcode-first (EAN-13 = ISBN): beats Tesseract on small/angled verso photos.
             barcode_isbn = ""
             if role in ("back", "auto"):
-                barcode_isbn = decode_isbn_barcode(image_path) or ""
+                from .barcode import decode_isbn_barcode_or_digits
+
+                barcode_isbn = decode_isbn_barcode_or_digits(image_path) or ""
                 if barcode_isbn:
                     digit_blob = barcode_isbn
                     used.append("barcode")

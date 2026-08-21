@@ -117,6 +117,16 @@ else
   echo "WARNING: Tesseract not found — book OCR will fall back to manual/vision."
 fi
 
+# 2c) zbar (libzbar) for ISBN barcode decode via pyzbar ---------------------
+if command -v brew >/dev/null 2>&1; then
+  if ! brew list zbar >/dev/null 2>&1; then
+    echo "Installing zbar (Homebrew) for ISBN barcode decode ..."
+    brew install zbar >/dev/null 2>&1 || echo "WARNING: brew zbar skipped — barcode decode may fail (OCR digit fallback still works)."
+  else
+    echo "zbar: OK"
+  fi
+fi
+
 # 3) Front-end build (only if not already built) ----------------------------
 if [ "$SKIP_BUILD" -eq 0 ] && [ ! -f "frontend/dist/index.html" ]; then
   if command -v npm >/dev/null 2>&1; then
