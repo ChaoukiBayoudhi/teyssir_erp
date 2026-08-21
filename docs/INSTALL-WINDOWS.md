@@ -128,6 +128,8 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 - **`-Terminal`** : `C1` pour la 1ʳᵉ caisse, `C2` pour la 2ᵉ, `C3` pour la 3ᵉ — **jamais deux fois le même**.
 - **`-HubUrl`** : l'adresse du Hub (voir §6). Utilisez le **nom** (`teyssir-hub.local`) ou l'**IP** (ex. `http://192.168.1.10:8000`).
 - **`-SyncKey`** : **exactement** la clé affichée par le Hub à l'étape 4.3.
+- **`-Printer tcp:IP:9100`** (optionnel) : imprimante ticket sur le LAN de **cette** caisse — voir §7.
+- **`-DiscoverPrinter`** (optionnel) : scan du /24 sur le port 9100.
 
 Créez un compte utilisateur (caissier) quand c'est demandé (sauté si un admin existe déjà).
 Le raccourci **Teyssir ERP** est créé sur le Bureau ; le service `TeyssirBackend` démarre tout seul.
@@ -163,7 +165,38 @@ navigateur — vous devez voir une réponse « ok ».
 
 ---
 
-## 7. Auto-start & Desktop Shortcut
+## 7. Imprimante ticket thermique (réseau local du magasin)
+
+L'imprimante ESC/POS se configure avec **`TEYSSIR_PRINTER=tcp:IP:9100`**.
+L'IP dépend du **réseau du magasin** (pas celle du PC développeur). Ne laissez pas une
+ancienne IP après un déménagement ou un changement de routeur.
+
+**À l'installation** (recommandé) :
+```powershell
+.\deploy\windows\install.ps1 -Role till -Terminal C1 `
+  -HubUrl http://teyssir-hub.local:8000 -SyncKey <clé> `
+  -Printer tcp:192.168.1.100:9100
+```
+Ou scan automatique du /24 (port 9100) — si rien n'est trouvé → `dummy` + avertissement :
+```powershell
+.\deploy\windows\install.ps1 -Role till -Terminal C1 `
+  -HubUrl http://teyssir-hub.local:8000 -SyncKey <clé> -DiscoverPrinter
+.\deploy\windows\Discover-Printer.ps1
+```
+
+**Après coup** : éditez `.env` (`TEYSSIR_PRINTER=tcp:NOUVELLE-IP:9100`), puis
+relancez le service pour recharger l'environnement NSSM :
+```powershell
+.\deploy\windows\Install-WindowsService.ps1
+# ou : Restart-Service TeyssirBackend  (si AppEnvironmentExtra est déjà à jour)
+```
+
+**Vérifier :** Menu → **Diagnostics** affiche la cible configurée et un test TCP
+(joignable / injoignable). Placeholder dans les exemples : `192.168.1.100` (pas une IP réelle du magasin).
+
+---
+
+## 8. Auto-start & Desktop Shortcut
 
 Après `install.ps1` (PowerShell **administrateur**) :
 
@@ -202,7 +235,7 @@ Options : `-SkipService`, `-SkipShortcut`. Repli manuel :
 
 ---
 
-## 8. Utilisation quotidienne
+## 9. Utilisation quotidienne
 
 1. Allumez le **Hub** en premier, puis les caisses (le service démarre tout seul).
 2. Double-cliquez **Teyssir ERP** sur le Bureau (ou le menu Démarrer).
@@ -211,7 +244,7 @@ Options : `-SkipService`, `-SkipShortcut`. Repli manuel :
 
 ---
 
-## 9. Sauvegardes (important)
+## 10. Sauvegardes (important)
 
 - **Hub PostgreSQL** (cas normal) : sauvegardez la base `teyssir` **et** le dossier `media\` :
   ```
@@ -226,7 +259,7 @@ suffit pour l'essentiel des données de gestion.
 
 ---
 
-## 10. Options avancées (facultatif)
+## 11. Options avancées (facultatif)
 
 <details>
 <summary><b>Flags de install.ps1</b></summary>
@@ -359,7 +392,7 @@ et consultez le tableau **« Multi-magasins »** pour la consolidation.
 
 ---
 
-## 11. Dépannage
+## 12. Dépannage
 
 | Problème | Solution |
 |----------|----------|
@@ -376,7 +409,7 @@ et consultez le tableau **« Multi-magasins »** pour la consolidation.
 
 ---
 
-## 12. Désinstaller
+## 13. Désinstaller
 
 ```powershell
 .\deploy\windows\uninstall.ps1

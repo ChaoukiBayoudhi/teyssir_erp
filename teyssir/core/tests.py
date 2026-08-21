@@ -213,3 +213,5 @@ class HealthLlmTests(TestCase):
         self.assertIn("installed", body["tesseract"])
         self.assertIn("path", body["tesseract"])
         self.assertIn("langs", body["tesseract"])
+        self.assertIn("printer", body)
+        self.assertIn("target", body["printer"])

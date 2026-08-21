@@ -22,6 +22,8 @@ param(
     [string]$StoreCode = "",
     [string]$HubUrl = "http://teyssir-hub.local:8000",
     [string]$SyncKey = "",
+    [string]$Printer = "",
+    [switch]$DiscoverPrinter,
     [switch]$SkipBuild,
     [switch]$SkipLlm,
     [string]$LlmModel = "mistral",
@@ -281,6 +283,41 @@ if ($Role -eq "till") {
     if ($syncKeyFromCaller) { Set-DotEnvValue $envPath "TEYSSIR_SYNC_KEY" $SyncKey }
 }
 
+# 4a) Receipt printer (client LAN — never assume a fixed shop IP) ------------
+$resolvedPrinter = $Printer
+if ($DiscoverPrinter -and -not $resolvedPrinter) {
+    Write-Host "Scanning local /24 for ESC/POS on TCP 9100 ..."
+    try {
+        $discOut = & $script:VenvPython (Join-Path $Root "deploy\discover_printer.py") 2>&1
+        $line = ($discOut | Where-Object { $_ -match '^(tcp:|dummy$)' } | Select-Object -Last 1)
+        if ($line) { $resolvedPrinter = [string]$line.ToString().Trim() }
+    }
+    catch {
+        Write-Warning ("Printer discover skipped: " + $_.Exception.Message)
+    }
+    if (-not $resolvedPrinter) { $resolvedPrinter = "dummy" }
+    if ($resolvedPrinter -eq "dummy") {
+        Write-Warning "No printer found — TEYSSIR_PRINTER=dummy (set -Printer tcp:IP:9100 later)."
+    }
+    else {
+        Write-Host ("Discovered printer: " + $resolvedPrinter) -ForegroundColor Green
+    }
+}
+if ($resolvedPrinter) {
+    Set-DotEnvValue $envPath "TEYSSIR_PRINTER" $resolvedPrinter
+    Write-Host ("TEYSSIR_PRINTER=" + $resolvedPrinter + " written to .env")
+}
+elseif (Test-Path $envPath) {
+    $existingPrinter = Get-DotEnvValue $envPath "TEYSSIR_PRINTER"
+    if ($existingPrinter) {
+        $resolvedPrinter = $existingPrinter.Trim()
+        Write-Host ("Using existing TEYSSIR_PRINTER=" + $resolvedPrinter + " from .env")
+    }
+    else {
+        Write-Host "Receipt printer: not set (dummy until you pass -Printer tcp:IP:9100 or -DiscoverPrinter)."
+    }
+}
+
 # 4b) PostgreSQL (HUB only) — optional, never fails the ERP install ----------
 $global:TeyssirPostgresReady = $false
 if ($Role -eq "hub" -and -not $SkipPostgres) {
@@ -495,7 +532,12 @@ if (-not $SkipService) {
     Write-Host "Registering Windows service TeyssirBackend ..."
     $svcScript = Join-Path $PSScriptRoot "Install-WindowsService.ps1"
     try {
-        & $svcScript
+        if ($resolvedPrinter) {
+            & $svcScript -Printer $resolvedPrinter
+        }
+        else {
+            & $svcScript
+        }
     }
     catch {
         Write-Warning ("Windows service skipped: " + $_.Exception.Message)
@@ -531,6 +573,9 @@ else {
     Write-Host "Then open:           http://localhost:8000"
 }
 Write-Host "Health check:        http://localhost:8000/health/"
+if ($resolvedPrinter) {
+    Write-Host ("Printer:             TEYSSIR_PRINTER=" + $resolvedPrinter + "  (Menu → Diagnostics to verify)")
+}
 if ($global:TeyssirTesseractReady) {
     Write-Host "OCR (Tesseract):     ready — see Menu → Diagnostics"
 }

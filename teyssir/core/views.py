@@ -1,3 +1,5 @@
+import os
+
 from django.conf import settings
 from django.db import connection
 from django.http import JsonResponse
@@ -14,6 +16,7 @@ def health(request):
     except Exception:  # pragma: no cover
         db_ok = False
     tess = tesseract_status(include_langs=True)
+    printer_target = os.environ.get("TEYSSIR_PRINTER", "dummy")
     return JsonResponse(
         {
             "status": "ok" if db_ok else "degraded",
@@ -21,6 +24,7 @@ def health(request):
             "terminal": settings.TERMINAL if settings.ROLE == "till" else None,
             "db": connection.vendor,
             "currency": settings.CURRENCY,
+            "printer": {"target": printer_target},
             "llm": llm_status(ping=False),
             "tesseract": {
                 "installed": tess.get("installed", False),

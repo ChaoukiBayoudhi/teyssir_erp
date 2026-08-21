@@ -4,16 +4,20 @@
 #  Equivalent of the Windows NSSM service "TeyssirBackend".
 #
 #     bash deploy/macos/Install-BackendService.sh
+#     bash deploy/macos/Install-BackendService.sh --printer tcp:192.168.1.100:9100
 #     bash deploy/macos/Install-BackendService.sh --remove
+#  TEYSSIR_PRINTER is taken from --printer, else .env, else dummy.
 # ===========================================================
 set -euo pipefail
 
 REMOVE=0
 PORT="${TEYSSIR_PORT:-8000}"
+PRINTER_ARG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --remove) REMOVE=1; shift;;
     --port) PORT="$2"; shift 2;;
+    --printer) PRINTER_ARG="$2"; shift 2;;
     *) echo "Unknown option: $1"; exit 1;;
   esac
 done
@@ -36,6 +40,15 @@ done
 if [ -f "$ROOT/.env" ]; then
   env_cmd="$(grep -E '^(TEYSSIR_TESSERACT_CMD|TESSERACT_CMD)=' "$ROOT/.env" | head -1 | cut -d= -f2- || true)"
   if [ -n "${env_cmd:-}" ] && [ -x "$env_cmd" ]; then TESS_CMD="$env_cmd"; fi
+fi
+
+# Receipt printer: CLI > .env > dummy (never bake a developer LAN IP into the plist)
+PRINTER="dummy"
+if [ -n "$PRINTER_ARG" ]; then
+  PRINTER="$PRINTER_ARG"
+elif [ -f "$ROOT/.env" ]; then
+  env_printer="$(grep -E '^TEYSSIR_PRINTER=' "$ROOT/.env" | head -1 | cut -d= -f2- | tr -d '\r' || true)"
+  if [ -n "${env_printer:-}" ]; then PRINTER="$env_printer"; fi
 fi
 
 uid="$(id -u)"
@@ -111,6 +124,8 @@ cat > "$PLIST" <<EOF
     <string>$TESS_CMD</string>
     <key>TESSERACT_CMD</key>
     <string>$TESS_CMD</string>
+    <key>TEYSSIR_PRINTER</key>
+    <string>$PRINTER</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -147,6 +162,7 @@ for i in $(seq 1 25); do
 done
 
 echo "LaunchAgent $LABEL installed (RunAtLoad + KeepAlive)."
+echo "Printer:     TEYSSIR_PRINTER=$PRINTER"
 echo "Logs: $LOG_DIR/teyssir-backend-*.log"
 if [ "$ok" -eq 1 ]; then
   echo "Health check: OK  http://127.0.0.1:$PORT/health/"

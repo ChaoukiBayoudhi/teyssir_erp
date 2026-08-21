@@ -105,6 +105,8 @@ bash deploy/macos/install.sh --role till --terminal C1 \
 - **`--terminal`** : `C1`, `C2`, `C3` — **unique** par caisse.
 - **`--hub-url`** : adresse du Hub (nom `teyssir-hub.local` ou IP, ex. `http://192.168.1.10:8000`).
 - **`--sync-key`** : **exactement** la clé du Hub (étape 4).
+- **`--printer tcp:IP:9100`** (optionnel) : imprimante ticket sur le LAN de **cette** caisse — voir §7.
+- **`--discover-printer`** (optionnel) : scan du /24 sur le port 9100.
 
 Créez un compte caissier (sauté si un admin existe déjà). Le raccourci **Teyssir ERP** et le
 LaunchAgent sont créés automatiquement. Double-cliquez l'icône Bureau pour ouvrir la caisse.
@@ -127,7 +129,37 @@ Options** → autorisez les connexions entrantes pour `python`/Teyssir.
 
 ---
 
-## 7. Auto-start & Desktop Shortcut (Mac)
+## 7. Imprimante ticket thermique (réseau local du magasin)
+
+L'imprimante ESC/POS se configure avec **`TEYSSIR_PRINTER=tcp:IP:9100`**.
+L'IP est celle du **réseau du magasin** (différente du Mac développeur). Après un
+changement de réseau, mettez à jour la cible.
+
+**À l'installation :**
+```bash
+bash deploy/macos/install.sh --role till --terminal C1 \
+  --hub-url http://teyssir-hub.local:8000 --sync-key <clé> \
+  --printer tcp:192.168.1.100:9100
+```
+Ou découverte du /24 (port 9100) — soft-fail vers `dummy` :
+```bash
+bash deploy/macos/install.sh --role till --terminal C1 \
+  --hub-url http://teyssir-hub.local:8000 --sync-key <clé> --discover-printer
+bash deploy/macos/discover-printer.sh
+```
+
+**Après coup :** éditez `.env` (`TEYSSIR_PRINTER=tcp:NOUVELLE-IP:9100`), puis
+ré-enregistrez le LaunchAgent (il lit `.env` et injecte `TEYSSIR_PRINTER` dans le plist) :
+```bash
+bash deploy/macos/Install-BackendService.sh
+# ou : bash deploy/macos/Install-BackendService.sh --printer tcp:NOUVELLE-IP:9100
+```
+
+**Vérifier :** Menu → **Diagnostics** (cible + test TCP). Exemples : `192.168.1.100` (placeholder).
+
+---
+
+## 8. Auto-start & Desktop Shortcut (Mac)
 
 Après `install.sh` :
 
@@ -162,7 +194,7 @@ Sur les caisses, `com.teyssir.sync` synchronise avec le Hub toutes les 5 min.
 
 ---
 
-## 8. Utilisation quotidienne
+## 9. Utilisation quotidienne
 
 1. Allumez le **Hub** d'abord, puis les caisses (le LaunchAgent démarre tout seul à la connexion).
 2. Double-cliquez **Teyssir ERP** sur le Bureau.
@@ -170,7 +202,7 @@ Sur les caisses, `com.teyssir.sync` synchronise avec le Hub toutes les 5 min.
 
 ---
 
-## 9. Sauvegardes
+## 10. Sauvegardes
 
 Les données sont des fichiers dans le dossier du projet : `teyssir_hub.sqlite3` (Hub),
 `teyssir_C1.sqlite3`… (caisses) et le dossier `media/` (images des livres).
@@ -179,7 +211,7 @@ Time Machine. Le Hub contient déjà la consolidation de toutes les caisses.
 
 ---
 
-## 10. Options (facultatif)
+## 11. Options (facultatif)
 
 <details>
 <summary><b>Lecture des livres par photo (OCR) — gratuit</b></summary>
@@ -205,7 +237,7 @@ Time Machine. Le Hub contient déjà la consolidation de toutes les caisses.
 
 ---
 
-## 11. Dépannage
+## 12. Dépannage
 
 | Problème | Solution |
 |----------|----------|
@@ -221,7 +253,7 @@ Time Machine. Le Hub contient déjà la consolidation de toutes les caisses.
 
 ---
 
-## 12. Désinstaller
+## 13. Désinstaller
 
 ```bash
 bash deploy/macos/uninstall.sh

@@ -5,6 +5,8 @@
 #     bash deploy/macos/install.sh --role hub
 #     bash deploy/macos/install.sh --role till --terminal C1 \
 #          --hub-url http://teyssir-hub.local:8000 --sync-key <hub-key>
+#     bash deploy/macos/install.sh --role till --printer tcp:192.168.1.100:9100 ...
+#     bash deploy/macos/install.sh --role till --discover-printer ...
 #
 #  Safe to re-run. Registers LaunchAgent com.teyssir.backend + Desktop app.
 # ============================================================
@@ -13,6 +15,7 @@ set -euo pipefail
 ROLE="till"; TERMINAL="C1"; STORE=""; HUB_URL="http://teyssir-hub.local:8000"
 SYNC_KEY=""; SKIP_BUILD=0; SKIP_SERVICE=0; SKIP_SHORTCUT=0; SKIP_ADMIN=0
 ADMIN_USER=""; ADMIN_PASSWORD=""
+PRINTER=""; DISCOVER_PRINTER=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --role) ROLE="$2"; shift 2;;
@@ -20,6 +23,8 @@ while [ $# -gt 0 ]; do
     --store) STORE="$2"; shift 2;;
     --hub-url) HUB_URL="$2"; shift 2;;
     --sync-key) SYNC_KEY="$2"; shift 2;;
+    --printer) PRINTER="$2"; shift 2;;
+    --discover-printer) DISCOVER_PRINTER=1; shift;;
     --skip-build) SKIP_BUILD=1; shift;;
     --skip-service) SKIP_SERVICE=1; shift;;
     --skip-shortcut) SKIP_SHORTCUT=1; shift;;
@@ -36,6 +41,16 @@ echo "==== Teyssir installer (role: $ROLE) ===="
 echo "Project: $ROOT"
 
 rand_key() { LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c "$1"; }
+
+set_env_value() {
+  # set_env_value KEY VALUE — upsert into .env (no BOM concerns on macOS)
+  local key="$1" value="$2"
+  if [ -f .env ] && grep -q "^${key}=" .env 2>/dev/null; then
+    sed -i '' "s|^${key}=.*|${key}=${value}|" .env
+  else
+    echo "${key}=${value}" >> .env
+  fi
+}
 
 # 1) Python 3.12+ -----------------------------------------------------------
 PY="$(command -v python3 || true)"
@@ -165,6 +180,30 @@ else
   fi
 fi
 
+# 4b) Receipt printer (client LAN — never assume a fixed shop IP) ------------
+if [ "$DISCOVER_PRINTER" -eq 1 ] && [ -z "$PRINTER" ]; then
+  echo "Scanning local /24 for ESC/POS on TCP 9100 ..."
+  disc_py=".venv/bin/python"
+  [ -x "$disc_py" ] || disc_py="python3"
+  PRINTER="$("$disc_py" deploy/discover_printer.py 2>/dev/null | tail -1 | tr -d '\r' || true)"
+  [ -n "$PRINTER" ] || PRINTER="dummy"
+  if [ "$PRINTER" = "dummy" ]; then
+    echo "WARNING: no printer found — TEYSSIR_PRINTER=dummy (set --printer tcp:IP:9100 later)."
+  else
+    echo "Discovered printer: $PRINTER"
+  fi
+fi
+if [ -n "$PRINTER" ]; then
+  set_env_value TEYSSIR_PRINTER "$PRINTER"
+  echo "TEYSSIR_PRINTER=$PRINTER written to .env"
+elif [ -f .env ] && grep -q '^TEYSSIR_PRINTER=' .env 2>/dev/null; then
+  PRINTER="$(grep -E '^TEYSSIR_PRINTER=' .env | head -1 | cut -d= -f2- | tr -d '\r')"
+  echo "Using existing TEYSSIR_PRINTER=$PRINTER from .env"
+else
+  # First install without a flag: leave unset so the service defaults to dummy
+  echo "Receipt printer: not set (dummy until you pass --printer tcp:IP:9100 or --discover-printer)."
+fi
+
 # 5) database + static ------------------------------------------------------
 echo "Setting up the database ..."
 .venv/bin/python manage.py migrate --noinput
@@ -200,10 +239,15 @@ fi
 # 7) LaunchAgent backend ----------------------------------------------------
 if [ "$SKIP_SERVICE" -eq 0 ]; then
   echo "Registering LaunchAgent com.teyssir.backend ..."
+  # Install-BackendService reads TEYSSIR_PRINTER from .env (or --printer if passed).
   if [ "$ROLE" = "till" ]; then
     bash deploy/macos/register-autostart.sh till 300 || echo "WARNING: LaunchAgent / sync schedule skipped."
   else
-    bash deploy/macos/Install-BackendService.sh || echo "WARNING: LaunchAgent skipped."
+    if [ -n "$PRINTER" ]; then
+      bash deploy/macos/Install-BackendService.sh --printer "$PRINTER" || echo "WARNING: LaunchAgent skipped."
+    else
+      bash deploy/macos/Install-BackendService.sh || echo "WARNING: LaunchAgent skipped."
+    fi
   fi
 else
   echo "Skipping LaunchAgent (--skip-service)."
@@ -227,4 +271,7 @@ else
   echo "Then open:   http://localhost:8000"
 fi
 echo "Health:      http://localhost:8000/health/"
+if [ -n "${PRINTER:-}" ]; then
+  echo "Printer:     TEYSSIR_PRINTER=$PRINTER  (Menu → Diagnostics to verify reachability)"
+fi
 echo "Uninstall:   bash deploy/macos/uninstall.sh"

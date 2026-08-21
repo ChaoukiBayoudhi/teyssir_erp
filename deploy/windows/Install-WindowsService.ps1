@@ -8,7 +8,8 @@
 [CmdletBinding()]
 param(
     [string]$ServiceName = "TeyssirBackend",
-    [string]$Port = "8000"
+    [string]$Port = "8000",
+    [string]$Printer = ""
 )
 
 $ErrorActionPreference = "Continue"
@@ -168,15 +169,33 @@ try {
         $tessEnv = "C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"
     }
     if (-not (Test-Path $tessEnv)) { $tessEnv = "tesseract" }
+
+    # TEYSSIR_PRINTER: CLI > .env > dummy (client LAN; never hardcode a shop IP)
+    $printerTarget = $Printer
+    if (-not $printerTarget) {
+        $envFile = Join-Path $Root ".env"
+        if (Test-Path $envFile) {
+            $pline = [System.IO.File]::ReadAllLines($envFile) |
+                Where-Object { $_ -match '^\s*TEYSSIR_PRINTER=' } |
+                Select-Object -First 1
+            if ($pline) {
+                $printerTarget = $pline.Substring($pline.IndexOf("=") + 1).Trim()
+            }
+        }
+    }
+    if (-not $printerTarget) { $printerTarget = "dummy" }
+
     $envExtra = @(
         "PORT=$Port",
         "PYTHONUNBUFFERED=1",
         "TEYSSIR_SCAN_EXECUTOR=thread",
         "TEYSSIR_TESSERACT_CMD=$tessEnv",
         "TESSERACT_CMD=$tessEnv",
+        "TEYSSIR_PRINTER=$printerTarget",
         "PATH=C:\Program Files\Tesseract-OCR;C:\Program Files (x86)\Tesseract-OCR;%SystemRoot%\system32;%SystemRoot%;%SystemRoot%\System32\Wbem"
     ) -join "`n"
     & $nssm set $ServiceName AppEnvironmentExtra $envExtra | Out-Null
+    Write-Svc ("TEYSSIR_PRINTER=$printerTarget") "Gray"
 
     sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/5000/restart/5000 | Out-Null
     sc.exe config $ServiceName start= delayed-auto | Out-Null

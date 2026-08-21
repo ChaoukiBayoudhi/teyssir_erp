@@ -44,6 +44,7 @@ One PC Hub + up to 3 tills, each serving the PWA + API on a single port (WhiteNo
 Set-ExecutionPolicy -Scope Process Bypass -Force
 .\deploy\windows\install.ps1 -Role hub          # note the printed SYNC KEY
 .\deploy\windows\install.ps1 -Role till -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey <hub-key>
+# Optional receipt printer on the shop LAN:  -Printer tcp:192.168.1.100:9100  or  -DiscoverPrinter
 # Then double-click  Teyssir ERP  on the Desktop  (http://localhost:8000)
 ```
 
