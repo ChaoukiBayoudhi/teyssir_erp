@@ -1,10 +1,15 @@
-"""Book-scan orchestration: ISBN-first, multi-cover merge, title-search fallback → draft."""
+"""Book-scan orchestration: ISBN-first (barcode → enrich), multi-cover merge, title fallback."""
+from __future__ import annotations
+
 import uuid
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from concurrent.futures import as_completed
 
 from django.db import transaction
 
 from teyssir.core.money import require_non_negative_money
 
+from .barcode import decode_isbn_barcode
 from .draft import BookDraft
 from .isbn import to_isbn13
 from .metadata import enrich_by_isbn, enrich_by_title
@@ -42,8 +47,11 @@ def _merge_cover_drafts(front: BookDraft, back: BookDraft | None) -> BookDraft:
             out.languages = list(back.languages)
         out.raw["covers"] = {"front": True, "back": True}
         out.raw["back"] = {k: back.raw.get(k) for k in
-                           ("isbn_detected", "isbn_not_detected", "price_detected", "ocr_langs")
+                           ("isbn_detected", "isbn_not_detected", "price_detected",
+                            "isbn_from_barcode", "ocr_langs")
                            if back.raw}
+        if back.raw.get("isbn_from_barcode"):
+            out.raw["isbn_from_barcode"] = True
 
     # Confidence: boost when we have ISBN or a solid title
     if out.isbn13:
@@ -61,63 +69,85 @@ def _merge_cover_drafts(front: BookDraft, back: BookDraft | None) -> BookDraft:
     return out
 
 
+def _barcode_isbn_from_paths(image_paths) -> str:
+    """Try barcode decode on all images (prefer last = verso), return first ISBN-13."""
+    if not image_paths:
+        return ""
+    # Verso last, then earlier shots
+    order = list(reversed(range(len(image_paths))))
+    for i in order:
+        isbn = decode_isbn_barcode(image_paths[i])
+        if isbn:
+            return isbn
+    return ""
+
+
+def _extract_pair(provider, image_paths):
+    """OCR front (+ optional back) in parallel when two covers are present."""
+    texts: list[str] = []
+    front = BookDraft(raw={"isbn_not_detected": True})
+    back = None
+
+    if not image_paths:
+        return texts, front, back
+
+    role0 = "front" if len(image_paths) > 1 else "auto"
+
+    if len(image_paths) == 1:
+        t0, front = provider.extract(image_paths[0], role=role0)
+        texts.append(t0 or "")
+        return texts, front, back
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_front = pool.submit(provider.extract, image_paths[0], role0)
+        fut_back = pool.submit(provider.extract, image_paths[1], "back")
+        results = {}
+        for fut in as_completed([fut_front, fut_back]):
+            results[fut] = fut.result()
+        t0, front = results[fut_front]
+        t1, back = results[fut_back]
+        texts.extend([t0 or "", t1 or ""])
+    return texts, front, back
+
+
 def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_by_title):
     """Produce a (BookDraft, ocr_text) from image path(s) + an optional ISBN.
 
     Multi-cover (Phase 6):
+      * barcode decode on images first (ISBN-13 from EAN)
       * image[0] → front cover (title / author / language)
       * image[1] → back cover (ISBN / barcode / price)
-      * merge → enrich by ISBN, else title search
-      * optional Vision-LLM upgrade when Tesseract is weak and Ollama is up
+      * merge → enrich by ISBN, else cautious title search
+      * optional Vision-LLM only when OCR has no usable title/ISBN (short timeout)
     """
     isbn = to_isbn13(isbn) or (isbn or "").strip()
     provider = get_ocr_provider()
-    texts = []
-    front = BookDraft(raw={"isbn_not_detected": not bool(isbn)})
-    back = None
 
-    if image_paths:
-        role0 = "front" if len(image_paths) > 1 else "auto"
-        t0, front = provider.extract(image_paths[0], role=role0)
-        texts.append(t0 or "")
-        if not isbn and front.isbn13:
-            isbn = to_isbn13(front.isbn13) or front.isbn13
+    # ISBN-first: real barcode beats OCR digits and wrong title-only OL hits.
+    if not isbn and image_paths:
+        isbn = _barcode_isbn_from_paths(image_paths)
 
-        if len(image_paths) > 1:
-            t1, back = provider.extract(image_paths[1], role="back")
-            texts.append(t1 or "")
-            if not isbn and back.isbn13:
-                isbn = to_isbn13(back.isbn13) or back.isbn13
+    texts, front, back = _extract_pair(provider, image_paths)
+    if not isbn and front.isbn13:
+        isbn = to_isbn13(front.isbn13) or front.isbn13
+    if not isbn and back and back.isbn13:
+        isbn = to_isbn13(back.isbn13) or back.isbn13
 
     ocr_draft = _merge_cover_drafts(front, back) if image_paths else front
     ocr_text = "\n---\n".join(texts)
+    if isbn:
+        ocr_draft.isbn13 = ocr_draft.isbn13 or isbn
+        ocr_draft.raw["isbn_detected"] = True
+        ocr_draft.raw.pop("isbn_not_detected", None)
 
     # Phone-camera covers often defeat Tesseract; upgrade via local Ollama vision when weak.
     if image_paths and _should_try_vision(ocr_draft, provider):
-        try:
-            from .ocr import VisionLlmOcrProvider
-
-            v_text, v_front = VisionLlmOcrProvider().extract(image_paths[0], role="front")
-            # Keep Tesseract back-cover ISBN/price; only upgrade bibliographic fields via vision.
-            vision_draft = _merge_cover_drafts(v_front, back if back and back.source != "manual" else None)
-            if not vision_draft.isbn13 and back and back.isbn13:
-                vision_draft.isbn13 = back.isbn13
-            if not vision_draft.price and back and back.price:
-                vision_draft.price = back.price
-            if vision_draft.title or vision_draft.isbn13 or vision_draft.confidence > ocr_draft.confidence:
-                vision_draft.raw = {
-                    **(ocr_draft.raw or {}),
-                    **(vision_draft.raw or {}),
-                    "vision_fallback": True,
-                    "tesseract_title": ocr_draft.title,
-                }
-                ocr_draft = vision_draft
-                if v_text:
-                    ocr_text = f"{ocr_text}\n---\n{v_text}"
-                if not isbn and ocr_draft.isbn13:
-                    isbn = to_isbn13(ocr_draft.isbn13) or ocr_draft.isbn13
-        except Exception as exc:
-            ocr_draft.raw = {**(ocr_draft.raw or {}), "vision_fallback_error": str(exc)[:200]}
+        ocr_draft = _maybe_vision_upgrade(image_paths, ocr_draft, back)
+        if not isbn and ocr_draft.isbn13:
+            isbn = to_isbn13(ocr_draft.isbn13) or ocr_draft.isbn13
+        # Append vision text marker if present
+        if ocr_draft.raw.get("vision_fallback") and ocr_draft.raw.get("vision_text"):
+            ocr_text = f"{ocr_text}\n---\n{ocr_draft.raw.get('vision_text')}"
 
     draft = enrich(isbn) if isbn else None
     metadata_hit = draft is not None
@@ -127,8 +157,11 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
         draft.merge(ocr_draft)
         if ocr_draft.price and not draft.price:
             draft.price = ocr_draft.price
+        # Prefer barcode/OCR ISBN; keep OCR price
+        if isbn:
+            draft.isbn13 = draft.isbn13 or isbn
 
-    # No ISBN: try title/author metadata search (local Tunisian editions)
+    # No ISBN: try title/author metadata search (local Tunisian editions) — low confidence
     title_hit = False
     if not isbn and draft.title and draft.source in ("tesseract", "vision", "manual", ""):
         found = enrich_title(draft.title, (draft.authors or [""])[0] if draft.authors else "")
@@ -136,46 +169,114 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
             title_hit = True
             price = draft.price
             langs = list(draft.languages or [])
+            ocr_title = draft.title
+            ocr_authors = list(draft.authors or [])
             raw_ocr = dict(draft.raw or {})
-            found.merge(draft)  # search wins; OCR fills empty gaps
+            # OCR title/authors stay unless search is a strong match (see metadata)
+            strong = (found.confidence or 0) >= 0.55 and not found.raw.get("title_search_weak")
+            if strong:
+                found.merge(draft)  # search wins bibliographic fields; OCR fills gaps
+            else:
+                # Keep OCR identity; only fill empty extras from search
+                draft.merge(found)
+                found = draft
+                found.confidence = min(found.confidence or 0.35, 0.45)
+                if ocr_authors:
+                    found.authors = ocr_authors
+                if ocr_title:
+                    found.title = ocr_title
             if price:
                 found.price = price
             if langs and not found.languages:
                 found.languages = langs
-            found.raw = {**(found.raw or {}), **raw_ocr, "title_search": True}
+            found.raw = {
+                **(found.raw or {}), **raw_ocr, "title_search": True,
+                **({"title_search_weak": True} if not strong else {}),
+            }
             draft = found
 
     if isbn:
         draft.isbn13 = draft.isbn13 or isbn
         draft.raw = {**(draft.raw or {}), "isbn_detected": True}
+        draft.raw.pop("isbn_not_detected", None)
         if not metadata_hit:
             draft.raw["metadata_miss"] = True
     else:
         draft.raw = {**(draft.raw or {}), "isbn_not_detected": True}
         if draft.title and not title_hit and not metadata_hit:
             draft.raw["manual_assist"] = True
+        # Never advertise high confidence without ISBN from fuzzy title alone
+        if draft.raw.get("title_search") and not draft.isbn13:
+            draft.confidence = min(draft.confidence or 0.4, 0.45)
 
     return draft, ocr_text
 
 
+def _maybe_vision_upgrade(image_paths, ocr_draft, back):
+    """Run Vision-LLM with a hard timeout; never block the scan for long."""
+    from django.conf import settings
+
+    from .ocr import VisionLlmOcrProvider
+
+    timeout = float(getattr(settings, "VISION_FALLBACK_TIMEOUT", 12) or 12)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(VisionLlmOcrProvider().extract, image_paths[0], "front")
+            try:
+                v_text, v_front = fut.result(timeout=timeout)
+            except FuturesTimeout:
+                fut.cancel()
+                ocr_draft.raw = {
+                    **(ocr_draft.raw or {}),
+                    "vision_fallback_error": f"timeout after {timeout}s",
+                }
+                return ocr_draft
+    except Exception as exc:
+        ocr_draft.raw = {**(ocr_draft.raw or {}), "vision_fallback_error": str(exc)[:200]}
+        return ocr_draft
+
+    vision_draft = _merge_cover_drafts(v_front, back if back and back.source != "manual" else None)
+    if not vision_draft.isbn13 and back and back.isbn13:
+        vision_draft.isbn13 = back.isbn13
+    if not vision_draft.price and back and back.price:
+        vision_draft.price = back.price
+    if vision_draft.title or vision_draft.isbn13 or vision_draft.confidence > ocr_draft.confidence:
+        vision_draft.raw = {
+            **(ocr_draft.raw or {}),
+            **(vision_draft.raw or {}),
+            "vision_fallback": True,
+            "tesseract_title": ocr_draft.title,
+            "vision_text": (v_text or "")[:2000],
+        }
+        return vision_draft
+    return ocr_draft
+
+
 def _should_try_vision(draft, provider) -> bool:
-    """Use local Vision-LLM when primary OCR is empty/weak (phone photos of covers)."""
+    """Use local Vision-LLM only when primary OCR has no usable title/ISBN.
+
+    Avoid long Ollama waits when Tesseract already extracted a title (even if weak).
+    """
     from django.conf import settings
 
     if getattr(provider, "name", "") != "tesseract":
         return False
     if not getattr(settings, "OCR_VISION_FALLBACK", True):
         return False
-    if draft.isbn13 and (draft.confidence or 0) >= 0.7 and draft.title:
+    # Real ISBN from barcode / digits → skip vision entirely
+    if draft.isbn13:
         return False
-    if (draft.confidence or 0) >= 0.55 and draft.title and len(draft.title) >= 6:
+    title = (draft.title or "").strip()
+    # Usable title already — prefer fast path + optional title search over vision
+    if title and len(title) >= 4:
         return False
-    # Empty / manual / very weak tesseract
+    if (draft.confidence or 0) >= 0.55 and title:
+        return False
     if draft.raw.get("ocr_available") is False:
         return True
     if (draft.confidence or 0) < 0.5:
         return True
-    if not (draft.title or "").strip():
+    if not title:
         return True
     return False
 

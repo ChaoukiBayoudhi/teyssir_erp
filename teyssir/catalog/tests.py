@@ -124,6 +124,8 @@ class PriceAndLangTests(unittest.TestCase):
         self.assertEqual(extract_price_dt("Prix: 15 DT"), "15.000")
         self.assertEqual(extract_price_dt("12.500"), "12.500")
         self.assertEqual(extract_price_dt("الثمن 8,750 د.ت"), "8.750")
+        self.assertEqual(extract_price_dt("9.900 €"), "9.900")
+        self.assertEqual(extract_price_dt("€12.500"), "12.500")
         self.assertEqual(extract_price_dt("no price here"), "")
 
     def test_detect_script_langs(self):
@@ -131,6 +133,110 @@ class PriceAndLangTests(unittest.TestCase):
         self.assertIn("ar", detect_script_langs("كتاب الفقه للمبتدئين"))
         self.assertIn("fr", detect_script_langs("Été français — édition scolaire"))
         self.assertIn("en", detect_script_langs("The Little Prince"))
+
+
+class BarcodeIsbnTests(unittest.TestCase):
+    def test_decode_isbn_from_ean13_image(self):
+        """pyzbar recovers ISBN from a rendered EAN-13 (and from a small angled crop)."""
+        try:
+            import barcode
+            from barcode.writer import ImageWriter
+            from pyzbar.pyzbar import decode as zbar_decode
+        except Exception:
+            self.skipTest("pyzbar / python-barcode not available")
+
+        from teyssir.catalog.bookscan.barcode import decode_isbn_barcode
+
+        buf = BytesIO()
+        # python-barcode expects 12 digits; check digit appended
+        barcode.get_barcode_class("ean13")("978207061275", writer=ImageWriter()).write(buf)
+        buf.seek(0)
+        bc = Image.open(buf).convert("RGB")
+        self.assertTrue(any(h.data == b"9782070612758" for h in zbar_decode(bc)))
+
+        # Full clean barcode image
+        path = os.path.join(tempfile.mkdtemp(), "ean.png")
+        bc.save(path)
+        self.assertEqual(decode_isbn_barcode(path), "9782070612758")
+
+        # Small angled barcode on a large page (phone verso simulation)
+        page = Image.new("RGB", (900, 1200), "white")
+        small = bc.resize((200, 90)).rotate(14, expand=True, fillcolor="white")
+        page.paste(small, (340, 980))
+        path2 = os.path.join(tempfile.mkdtemp(), "verso.png")
+        page.save(path2)
+        self.assertEqual(decode_isbn_barcode(path2), "9782070612758")
+
+    def test_barcode_engine_available_flag(self):
+        from teyssir.catalog.bookscan.barcode import barcode_engine_available
+        # Soft assert: True when pyzbar imports; False is OK on hosts without it
+        self.assertIsInstance(barcode_engine_available(), bool)
+
+
+class TitleSearchGatingTests(unittest.TestCase):
+    def test_title_similarity_jaccard(self):
+        from teyssir.catalog.bookscan.metadata import title_similarity
+        self.assertGreater(title_similarity("Beauty and the Beast", "Beauty and the Beast"), 0.9)
+        self.assertLess(title_similarity("Beauty and the Beast", "The Little Prince"), 0.3)
+
+    def test_pick_best_rejects_low_overlap(self):
+        from teyssir.catalog.bookscan.metadata import _pick_best_ol_doc
+        docs = [{"title": "Completely Different Book", "author_name": ["Someone"]}]
+        self.assertIsNone(_pick_best_ol_doc(docs, "Beauty and the Beast"))
+
+    def test_scan_skips_vision_when_title_present(self):
+        from unittest.mock import patch
+        ocr_draft = BookDraft(
+            title="Beauty and the Beast", source="tesseract", confidence=0.35,
+            raw={"isbn_not_detected": True, "ocr_text_only": True},
+        )
+        vision_called = {"n": 0}
+
+        def fake_title(t, a=""):
+            return None
+
+        with patch("teyssir.catalog.bookscan.services.get_ocr_provider") as g, \
+             patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths", return_value=""), \
+             patch("teyssir.catalog.bookscan.services._maybe_vision_upgrade") as vision:
+            class P:
+                name = "tesseract"
+                def extract(self, path, role="auto"):
+                    return "Beauty and the Beast", ocr_draft
+            g.return_value = P()
+            vision.side_effect = lambda *a, **k: vision_called.__setitem__("n", 1) or ocr_draft
+            out, _ = scan_book(["/tmp/fake.png"], isbn="", enrich=lambda i: None,
+                               enrich_title=fake_title)
+        self.assertEqual(vision_called["n"], 0)
+        self.assertEqual(out.title, "Beauty and the Beast")
+        self.assertLessEqual(out.confidence or 0, 0.45)
+
+    def test_weak_title_search_keeps_ocr_authors(self):
+        from unittest.mock import patch
+        ocr_draft = BookDraft(
+            title="Beauty and the Beast", authors=["Golden Tales"],
+            source="tesseract", confidence=0.35,
+            raw={"isbn_not_detected": True},
+        )
+
+        def fake_title(t, a=""):
+            return BookDraft(
+                title="Beauty and the Beast", authors=["Hannah Howell"],
+                source="openlibrary", confidence=0.35,
+                raw={"title_search": True, "title_search_weak": True},
+            )
+
+        with patch("teyssir.catalog.bookscan.services.get_ocr_provider") as g, \
+             patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths", return_value=""):
+            class P:
+                name = "tesseract"
+                def extract(self, path, role="auto"):
+                    return "Beauty and the Beast", ocr_draft
+            g.return_value = P()
+            out, _ = scan_book(["/tmp/fake.png"], isbn="", enrich=lambda i: None,
+                               enrich_title=fake_title)
+        self.assertEqual(out.authors, ["Golden Tales"])
+        self.assertTrue(out.raw.get("title_search_weak") or out.raw.get("title_search"))
+        self.assertLessEqual(out.confidence or 0, 0.45)
 
 
 @override_settings(OCR_PROVIDER="manual", METADATA_PROVIDERS=[], MEDIA_ROOT=tempfile.mkdtemp())

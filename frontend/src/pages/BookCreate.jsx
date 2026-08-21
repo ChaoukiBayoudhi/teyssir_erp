@@ -10,11 +10,56 @@ import LangToggle from "../LangToggle.jsx";
 async function detectIsbn(file) {
   if (!("BarcodeDetector" in window)) return "";
   try {
-    const det = new window.BarcodeDetector({ formats: ["ean_13"] });
+    const det = new window.BarcodeDetector({
+      formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128"],
+    });
     const bmp = await createImageBitmap(file);
-    const codes = await det.detect(bmp);
-    const ean = codes.find((c) => /^97[89]\d{10}$/.test(c.rawValue));
-    return ean ? ean.rawValue : "";
+    const tryDetect = async (source) => {
+      const codes = await det.detect(source);
+      const ean = codes.find((c) => /^97[89]\d{10}$/.test(c.rawValue));
+      return ean ? ean.rawValue : "";
+    };
+    let hit = await tryDetect(bmp);
+    if (hit) {
+      bmp.close?.();
+      return hit;
+    }
+    // Small / angled verso barcodes: crop lower band + slight rotations + upscale
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    const w = bmp.width;
+    const h = bmp.height;
+    const crops = [
+      { sx: 0, sy: Math.floor(h * 0.55), sw: w, sh: Math.floor(h * 0.45) },
+      { sx: Math.floor(w * 0.1), sy: Math.floor(h * 0.7), sw: Math.floor(w * 0.8), sh: Math.floor(h * 0.3) },
+    ];
+    for (const c of crops) {
+      if (c.sw < 20 || c.sh < 20) continue;
+      const scale = Math.max(2, Math.ceil(900 / Math.max(c.sw, c.sh)));
+      canvas.width = c.sw * scale;
+      canvas.height = c.sh * scale;
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(bmp, c.sx, c.sy, c.sw, c.sh, 0, 0, canvas.width, canvas.height);
+      hit = await tryDetect(canvas);
+      if (hit) break;
+      for (const angle of [-12, 12, -20, 20]) {
+        const rot = document.createElement("canvas");
+        const rad = (angle * Math.PI) / 180;
+        const rw = Math.abs(canvas.width * Math.cos(rad)) + Math.abs(canvas.height * Math.sin(rad));
+        const rh = Math.abs(canvas.width * Math.sin(rad)) + Math.abs(canvas.height * Math.cos(rad));
+        rot.width = Math.ceil(rw);
+        rot.height = Math.ceil(rh);
+        const rctx = rot.getContext("2d");
+        rctx.translate(rot.width / 2, rot.height / 2);
+        rctx.rotate(rad);
+        rctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+        hit = await tryDetect(rot);
+        if (hit) break;
+      }
+      if (hit) break;
+    }
+    bmp.close?.();
+    return hit || "";
   } catch {
     return "";
   }
@@ -262,28 +307,39 @@ export default function BookCreate({ onBack, onLogout }) {
       setDraft(d);
 
       const resolvedIsbn = d.isbn13 || isbn || "";
-      const isbnMissing = !resolvedIsbn || d.raw?.isbn_not_detected;
+      const isbnMissing = !resolvedIsbn;
+      const priceMissing = !d.price;
       const ocrErr = d.raw?.ocr_error || d.raw?.back?.ocr_error;
       const lowConf = d.raw?.ocr_low_confidence || (d.confidence != null && d.confidence < 0.35);
+      const weakTitleSearch = d.raw?.title_search_weak || (d.raw?.title_search && isbnMissing);
+      let warn = "";
+      let note = "";
       if (ocrErr) {
-        setError(`${t("ocrUnavailable")}\n${ocrErr}\n${t("imageBlurryRetry")}`);
+        warn = `${t("ocrUnavailable")}\n${ocrErr}\n${t("imageBlurryRetry")}`;
       } else if (lowConf && !d.title && !resolvedIsbn) {
-        setError(t("imageBlurryRetry"));
+        warn = t("imageBlurryRetry");
       } else if (lowConf) {
-        setInfo(`${t("ocrWeak")}${d.raw?.suggested_title ? ` — ${d.raw.suggested_title}` : ""}`);
+        note = `${t("ocrWeak")}${d.raw?.suggested_title ? ` — ${d.raw.suggested_title}` : ""}`;
       } else if (isbnMissing && d.title) {
-        setError(`${t("isbnNotDetected")}\n${t("noIsbnTitleAssist")}`);
+        warn = `${t("isbnNotDetected")}\n${t("noIsbnTitleAssist")}`;
       } else if (isbnMissing) {
-        setError(`${t("isbnNotDetected")}\n${t("isbnManualHint")}`);
+        warn = `${t("isbnNotDetected")}\n${t("isbnManualHint")}`;
       } else if (d.raw?.metadata_miss && !d.title) {
-        setError(t("metadataMiss"));
+        warn = t("metadataMiss");
       } else if (d.source === "manual" || d.raw?.ocr_available === false) {
-        setError(t("ocrUnavailable"));
+        warn = t("ocrUnavailable");
       } else if (!d.title && !resolvedIsbn) {
-        setError(t("ocrEmptyManual"));
+        warn = t("ocrEmptyManual");
+      } else if (weakTitleSearch) {
+        note = t("titleSearchWeak");
       } else if (d.raw?.title_search) {
-        setInfo(t("titleSearchHit"));
+        note = t("titleSearchHit");
       }
+      if (!isbnMissing && priceMissing) {
+        note = note ? `${note}\n${t("priceNotDetected")}` : t("priceNotDetected");
+      }
+      setError(warn);
+      setInfo(note);
 
       const livre = cats.find((c) => /livre|book|كتاب|manuel/i.test(c.name_fr || ""));
       const tva7 = taxes.find((x) => Number(x.rate_percent) === 7);

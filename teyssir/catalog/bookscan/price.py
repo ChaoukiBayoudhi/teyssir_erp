@@ -9,12 +9,21 @@ from teyssir.core.money import to_money
 _PRICE_RES = [
     # Explicit currency / label
     re.compile(
-        r"(?:prix|price|سعر|الثمن)\s*[:=]?\s*"
-        r"(\d{1,4}(?:[.,]\d{1,3})?)\s*(?:dt|d\.?t\.?|tnd|د\.?\s*ت\.?|دينار)?\b",
+        r"(?:prix|price|سعر|الثمن|ttc|ht)\s*[:=]?\s*"
+        r"(\d{1,4}(?:[.,]\d{1,3})?)\s*(?:dt|d\.?t\.?|tnd|د\.?\s*ت\.?|دينار|€|eur|euros?)?\b",
         re.IGNORECASE,
     ),
     re.compile(
         r"\b(\d{1,4}(?:[.,]\d{1,3})?)\s*(?:dt|d\.?t\.?|tnd|د\.?\s*ت\.?|دينار)\b",
+        re.IGNORECASE,
+    ),
+    # Euro on imported / bilingual covers
+    re.compile(
+        r"(?:€|eur|euros?)\s*(\d{1,4}(?:[.,]\d{1,3})?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(\d{1,4}(?:[.,]\d{1,3})?)\s*(?:€|eur|euros?)\b",
         re.IGNORECASE,
     ),
     # Millime retail style: 12.500 / 12,500 (exactly 3 fractional digits)

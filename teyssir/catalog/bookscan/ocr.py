@@ -129,8 +129,12 @@ def _tesseract_langs_for(text_hint: str = "", role: str = "auto", available: set
     return "+".join(chosen) if chosen else "eng"
 
 
-def _preprocess_variants(image_path, role="auto"):
-    """Yield (label, PIL.Image) variants: original / grayscale / threshold (+ role crops)."""
+def _preprocess_variants(image_path, role="auto", *, isbn_found=False):
+    """Yield (label, PIL.Image) variants: original / grayscale / threshold (+ role crops).
+
+    When ``isbn_found`` is True (barcode already decoded), skip expensive extra passes —
+    keep a short path for title / price text only.
+    """
     from PIL import Image, ImageEnhance, ImageOps, ImageFilter
 
     img = Image.open(image_path).convert("RGB")
@@ -138,7 +142,8 @@ def _preprocess_variants(image_path, role="auto"):
     mx, my = int(w * 0.12), int(h * 0.12)
     crop = img.crop((mx, my, w - mx, h - my)) if w > 40 and h > 40 else img
     # Back covers: barcode/price often in the lower third
-    lower = img.crop((0, int(h * 0.55), w, h)) if role == "back" and h > 80 else None
+    lower = img.crop((0, int(h * 0.55), w, h)) if role in ("back", "auto") and h > 80 else None
+    barcode_band = img.crop((0, int(h * 0.72), w, h)) if role in ("back", "auto") and h > 100 else None
 
     def _upscale(im):
         if max(im.size) < 900:
@@ -167,10 +172,25 @@ def _preprocess_variants(image_path, role="auto"):
     # Multi-pass baseline: original → grayscale → binary threshold
     yield "original", _upscale(ImageOps.autocontrast(crop.copy()))
     yield "grayscale", _enhance(crop)
+    if isbn_found:
+        # ISBN already known — one price/title pass is enough
+        if role == "back" and lower is not None:
+            yield "lower", _enhance(lower)
+        elif role == "front":
+            yield "crop_color", _enhance(crop, color=True)
+        return
+
     yield "threshold", _threshold(crop)
 
-    if role == "back" and lower is not None:
+    if role in ("back", "auto") and lower is not None:
         yield "lower", _enhance(lower)
+        # Slight rotations of the barcode band (angled phone photos)
+        for angle in (-12, 12, -20, 20):
+            rotated = lower.rotate(angle, expand=True, fillcolor="white")
+            yield f"lower_rot{angle}", _enhance(rotated)
+    if barcode_band is not None:
+        yield "barcode_band", _threshold(barcode_band)
+        yield "barcode_band_up", _enhance(barcode_band)
     yield "full", _enhance(img)
     if role == "front":
         yield "crop_color", _enhance(crop, color=True)
@@ -342,6 +362,8 @@ class TesseractOcrProvider(OcrProvider):
             return "", draft
 
         try:
+            from .barcode import decode_isbn_barcode
+
             digit_blob = ""
             text_blob = ""
             used = []
@@ -349,33 +371,69 @@ class TesseractOcrProvider(OcrProvider):
             langs = _tesseract_langs_for(role=role, available=installed)
             best = None  # (score, label, combined_text, draft, mean_conf)
 
-            for label, im in _preprocess_variants(image_path, role=role):
+            # Barcode-first (EAN-13 = ISBN): beats Tesseract on small/angled verso photos.
+            barcode_isbn = ""
+            if role in ("back", "auto"):
+                barcode_isbn = decode_isbn_barcode(image_path) or ""
+                if barcode_isbn:
+                    digit_blob = barcode_isbn
+                    used.append("barcode")
+
+            for label, im in _preprocess_variants(
+                image_path, role=role, isbn_found=bool(barcode_isbn),
+            ):
                 used.append(label)
                 pass_digits = ""
                 pass_text = ""
                 if role in ("back", "auto"):
                     pass_digits = _ocr_digits(pytesseract, im)
                     digit_blob += "\n" + pass_digits
-                    isbn = extract_isbn(digit_blob)
+                    isbn = barcode_isbn or extract_isbn(digit_blob)
                     price = extract_price_dt(digit_blob)
-                    if isbn or (role == "back" and price):
+                    # Also hunt price in full text of this pass
+                    if not price:
                         pass_text = _ocr_text(pytesseract, im, langs)
+                        price = extract_price_dt(pass_text) or extract_price_dt(
+                            f"{digit_blob}\n{pass_text}"
+                        )
+                    if isbn or (role == "back" and price) or barcode_isbn:
+                        if not pass_text:
+                            pass_text = _ocr_text(pytesseract, im, langs)
                         combined = f"{digit_blob}\n{pass_text}"
-                        draft = _draft_from_text(combined, isbn_hint=isbn, role=role)
+                        draft = _draft_from_text(
+                            combined, isbn_hint=isbn or barcode_isbn, role=role,
+                        )
                         if not draft.price and price:
                             draft.price = price
+                            draft.raw["price_detected"] = True
+                        if barcode_isbn:
+                            draft.isbn13 = barcode_isbn
+                            draft.raw["isbn_detected"] = True
+                            draft.raw["isbn_from_barcode"] = True
+                            draft.confidence = max(draft.confidence or 0, 0.85)
                         mean_conf = _mean_ocr_confidence(pytesseract, im, langs)
                         draft = _apply_confidence_gate(draft, mean_conf)
                         draft.raw["ocr_pass"] = label
                         draft.raw["ocr_variants"] = used
                         draft.raw["ocr_langs"] = langs
                         draft.raw["tesseract_cmd"] = cmd
-                        # Strong ISBN hit: return early
+                        # Strong ISBN hit: return early (barcode decode is definitive)
+                        if barcode_isbn and (draft.price or label in ("lower", "grayscale", "original")):
+                            return combined, draft
                         if isbn and (mean_conf >= 40 or draft.confidence >= 0.55):
                             return combined, draft
-                        score = (2 if isbn else 0) + (1 if price else 0) + mean_conf / 100.0 + (draft.confidence or 0)
+                        score = (
+                            (3 if barcode_isbn else 0)
+                            + (2 if isbn else 0)
+                            + (1 if price else 0)
+                            + mean_conf / 100.0
+                            + (draft.confidence or 0)
+                        )
                         if best is None or score > best[0]:
                             best = (score, label, combined, draft, mean_conf)
+                        # Barcode ISBN + any pass: stop after a couple of price attempts
+                        if barcode_isbn and len(used) >= 4:
+                            break
                 if role in ("front", "auto"):
                     # Large-text pass for titles (psm 11 sparse / 6 block)
                     psm = 11 if role == "front" else 6
@@ -384,7 +442,13 @@ class TesseractOcrProvider(OcrProvider):
                     text_blob += "\n" + chunk
                     mean_conf = _mean_ocr_confidence(pytesseract, im, langs, psm=psm)
                     combined = f"{digit_blob}\n{text_blob}"
-                    draft = _draft_from_text(combined, role=role)
+                    draft = _draft_from_text(
+                        combined, isbn_hint=barcode_isbn, role=role,
+                    )
+                    if barcode_isbn:
+                        draft.isbn13 = barcode_isbn
+                        draft.raw["isbn_detected"] = True
+                        draft.raw["isbn_from_barcode"] = True
                     draft = _apply_confidence_gate(draft, mean_conf)
                     # Prefer longer title + higher confidence
                     title_len = len((draft.title or "").strip())
@@ -395,6 +459,8 @@ class TesseractOcrProvider(OcrProvider):
                         best = (score, label, combined, draft, mean_conf)
                     # Refine lang model once we see script
                     langs = _tesseract_langs_for(text_blob, role=role, available=installed)
+                    if barcode_isbn and draft.title and len(used) >= 3:
+                        break
 
             if best is not None:
                 _, label, combined, draft, mean_conf = best
@@ -402,19 +468,35 @@ class TesseractOcrProvider(OcrProvider):
                 draft.raw["ocr_variants"] = used
                 draft.raw["ocr_langs"] = langs
                 draft.raw["tesseract_cmd"] = cmd
+                if barcode_isbn:
+                    draft.isbn13 = barcode_isbn
+                    draft.raw["isbn_detected"] = True
+                    draft.raw["isbn_from_barcode"] = True
+                    draft.raw.pop("isbn_not_detected", None)
+                    draft.confidence = max(draft.confidence or 0, 0.85)
                 draft = _apply_confidence_gate(draft, mean_conf)
                 return combined, draft
 
             if role == "front" and not text_blob.strip():
                 text_blob = _ocr_text(
-                    pytesseract, list(_preprocess_variants(image_path, role="front"))[-1][1], langs
+                    pytesseract,
+                    list(_preprocess_variants(image_path, role="front"))[-1][1],
+                    langs,
                 )
             if role != "front":
                 text_blob += "\n" + _ocr_text(
-                    pytesseract, list(_preprocess_variants(image_path, role=role))[-1][1], langs
+                    pytesseract,
+                    list(_preprocess_variants(image_path, role=role))[-1][1],
+                    langs,
                 )
             combined = f"{digit_blob}\n{text_blob}"
-            draft = _draft_from_text(combined, role=role)
+            draft = _draft_from_text(combined, isbn_hint=barcode_isbn, role=role)
+            if barcode_isbn:
+                draft.isbn13 = barcode_isbn
+                draft.raw["isbn_detected"] = True
+                draft.raw["isbn_from_barcode"] = True
+                draft.raw.pop("isbn_not_detected", None)
+                draft.confidence = max(draft.confidence or 0, 0.85)
             draft.raw["ocr_pass"] = "full_fallback"
             draft.raw["ocr_variants"] = used
             draft.raw["ocr_langs"] = langs

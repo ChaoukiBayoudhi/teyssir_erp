@@ -12,6 +12,10 @@ pdf2docx>=0.5               # PDF -> Word (.docx) converter (free/OSS; brings Py
 pytesseract>=0.3            # offline OCR; needs the `tesseract` binary + ara/fra/eng language data
                             #   macOS: brew install tesseract  + ara/fra traineddata in tessdata/
                             #   Linux: apt install tesseract-ocr tesseract-ocr-ara tesseract-ocr-fra
+pyzbar>=0.1.9               # EAN-13/ISBN barcode decode from verso photos (needs libzbar)
+                            #   macOS: brew install zbar
+                            #   Debian/Ubuntu: apt install libzbar0
+                            #   Windows: bundle libzbar DLL or skip (OCR digit fallback still works)
 # Vision-LLM OCR (OCR_PROVIDER=vision) is free/offline via Ollama (no Python dep — uses urllib):
 #   install Ollama, then `ollama pull qwen2.5vl:3b` (or llama3.2-vision / minicpm-v).
 
@@ -26,4 +30,4 @@ psycopg[binary]>=3.2
 # celery>=5 ; redis>=5                    # async jobs, backups, notifications
 # python-escpos>=3                        # ESC/POS thermal receipts (§13.5)
 # weasyprint>=62                          # A4 facture PDF (§13.5)
-# python-barcode>=0.15 ; Pillow>=10       # internal Code-128 labels (§12.3)
+# python-barcode>=0.15 ; Pillow>=10       # internal Code-128 labels (§12.3) / bookscan tests

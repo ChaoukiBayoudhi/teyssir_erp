@@ -226,7 +226,10 @@ METADATA_PROVIDERS = [
 # Vision-LLM OCR (OCR_PROVIDER=vision): free, offline, local — Ollama + a vision model.
 OLLAMA_URL = os.environ.get("TEYSSIR_OLLAMA_URL", os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"))
 VISION_MODEL = os.environ.get("TEYSSIR_VISION_MODEL", "qwen2.5vl:3b")
-VISION_TIMEOUT = int(os.environ.get("TEYSSIR_VISION_TIMEOUT", "120"))
+# Hard timeout for primary vision provider calls (OCR_PROVIDER=vision).
+VISION_TIMEOUT = int(os.environ.get("TEYSSIR_VISION_TIMEOUT", "45"))
+# Shorter timeout when vision is only a Tesseract fallback (skip if Ollama is slow/down).
+VISION_FALLBACK_TIMEOUT = float(os.environ.get("TEYSSIR_VISION_FALLBACK_TIMEOUT", "12"))
 # Optional text LLM (Ollama). ERP must run when this is false or Ollama is down.
 USE_LLM = os.environ.get("USE_LLM", os.environ.get("TEYSSIR_USE_LLM", "false")).strip().lower() in (
     "1", "true", "yes", "on",
