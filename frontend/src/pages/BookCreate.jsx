@@ -311,11 +311,18 @@ export default function BookCreate({ onBack, onLogout }) {
       const priceMissing = !d.price;
       const ocrErr = d.raw?.ocr_error || d.raw?.back?.ocr_error;
       const lowConf = d.raw?.ocr_low_confidence || (d.confidence != null && d.confidence < 0.35);
+      const garbageLatin = !!(d.raw?.ocr_garbage_latin || d.raw?.ocr_arabic_likely || d.raw?.ocr_title_unusable);
+      const missingAra = !!(d.raw?.tess_missing_ara || (d.raw?.tess_missing_langs || []).includes?.("ara"));
       const weakTitleSearch = d.raw?.title_search_weak || (d.raw?.title_search && isbnMissing);
       let warn = "";
       let note = "";
       if (ocrErr) {
         warn = `${t("ocrUnavailable")}\n${ocrErr}\n${t("imageBlurryRetry")}`;
+      } else if (garbageLatin || missingAra) {
+        warn = missingAra ? t("ocrMissingAra") : t("ocrArabicWeak");
+        if (d.raw?.rejected_title || d.raw?.suggested_title) {
+          note = `${t("ocrGarbageTitleHint")} — ${d.raw.rejected_title || d.raw.suggested_title}`;
+        }
       } else if (lowConf && !d.title && !resolvedIsbn) {
         warn = t("imageBlurryRetry");
       } else if (lowConf) {
@@ -343,22 +350,29 @@ export default function BookCreate({ onBack, onLogout }) {
 
       const livre = cats.find((c) => /livre|book|كتاب|manuel/i.test(c.name_fr || ""));
       const tva7 = taxes.find((x) => Number(x.rate_percent) === 7);
+      // Do not present garbage Latin OCR as a confident title; keep languages=ar when likely Arabic
+      const safeTitle = garbageLatin ? "" : (d.title || d.raw?.suggested_title || "");
+      const safeAuthors = garbageLatin ? "" : (d.authors || []).join(", ");
+      let langList = d.languages || [];
+      if (garbageLatin && !langList.includes("ar")) {
+        langList = ["ar"];
+      }
       setForm((prev) => ({
         ...EMPTY,
         isbn13: resolvedIsbn,
-        title: d.title || d.raw?.suggested_title || "",
+        title: safeTitle,
         subtitle: d.subtitle || "",
-        authors: (d.authors || []).join(", "),
+        authors: safeAuthors,
         translators: (d.translators || []).join(", "),
         publisher: d.publisher || "",
         series: d.series || "",
         edition: d.edition || "",
         pub_year: d.pub_year || "",
         pages: d.pages || "",
-        languages: (d.languages || []).join(", "),
+        languages: langList.join(", "),
         subject: d.subject || "",
         description: d.description || "",
-        sale_price: d.price || "",
+        sale_price: garbageLatin && !d.raw?.price_detected ? "" : (d.price || ""),
         category: prev.category || livre?.id || "",
         tax_rate: prev.tax_rate || tva7?.id || "",
       }));

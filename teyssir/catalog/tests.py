@@ -127,12 +127,44 @@ class PriceAndLangTests(unittest.TestCase):
         self.assertEqual(extract_price_dt("9.900 €"), "9.900")
         self.assertEqual(extract_price_dt("€12.500"), "12.500")
         self.assertEqual(extract_price_dt("no price here"), "")
+        # Spurious OCR noise (screenshot 3) must not become a shelf price
+        self.assertEqual(extract_price_dt("ol YI a Teeny 8.043 FRE pte"), "")
 
     def test_detect_script_langs(self):
         from teyssir.catalog.bookscan.ocr import detect_script_langs
         self.assertIn("ar", detect_script_langs("كتاب الفقه للمبتدئين"))
         self.assertIn("fr", detect_script_langs("Été français — édition scolaire"))
         self.assertIn("en", detect_script_langs("The Little Prince"))
+
+    def test_garbage_latin_rejected_and_not_tagged_en(self):
+        from teyssir.catalog.bookscan.ocr import (
+            _draft_from_text,
+            detect_script_langs,
+            is_garbage_latin_ocr,
+            is_usable_ocr_title,
+        )
+        for junk in ("wis! Boot ay", "9 or et O.", 'ol YI a "Teeny"', "arr", "FRE pte"):
+            self.assertTrue(
+                is_garbage_latin_ocr(junk, mean_conf=35),
+                msg=f"expected garbage: {junk!r}",
+            )
+            self.assertNotIn("en", detect_script_langs(junk, mean_conf=35))
+            self.assertFalse(is_usable_ocr_title(junk, mean_conf=35))
+
+        self.assertFalse(is_garbage_latin_ocr("The Little Prince", mean_conf=70))
+        self.assertTrue(is_usable_ocr_title("The Little Prince", mean_conf=70))
+        self.assertTrue(is_usable_ocr_title("كتاب الفقه", mean_conf=40))
+
+        draft = _draft_from_text("wis! Boot ay\narr", role="front", mean_conf=35)
+        self.assertEqual(draft.title, "")
+        self.assertTrue(draft.raw.get("ocr_garbage_latin"))
+        self.assertIn("ar", draft.languages)
+        self.assertNotIn("en", draft.languages)
+
+    def test_arabic_char_ratio(self):
+        from teyssir.catalog.bookscan.ocr import arabic_char_ratio
+        self.assertGreater(arabic_char_ratio("فقه السنة سيد سابق"), 0.8)
+        self.assertEqual(arabic_char_ratio("wis! Boot ay"), 0.0)
 
 
 class BarcodeIsbnTests(unittest.TestCase):
@@ -209,6 +241,63 @@ class TitleSearchGatingTests(unittest.TestCase):
         self.assertEqual(vision_called["n"], 0)
         self.assertEqual(out.title, "Beauty and the Beast")
         self.assertLessEqual(out.confidence or 0, 0.45)
+
+    def test_scan_tries_vision_on_garbage_latin_title(self):
+        """Arabic covers misread as Latin must not block Vision fallback."""
+        from unittest.mock import patch
+        ocr_draft = BookDraft(
+            title="", source="tesseract", confidence=0.1,
+            languages=["ar"],
+            raw={
+                "isbn_not_detected": True,
+                "ocr_garbage_latin": True,
+                "ocr_arabic_likely": True,
+                "rejected_title": "wis! Boot ay",
+                "ocr_mean_confidence": 35,
+                "ocr_low_confidence": True,
+            },
+        )
+        vision_called = {"n": 0}
+
+        with patch("teyssir.catalog.bookscan.services.get_ocr_provider") as g, \
+             patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths", return_value=""), \
+             patch("teyssir.catalog.bookscan.services._maybe_vision_upgrade") as vision:
+            class P:
+                name = "tesseract"
+                def extract(self, path, role="auto"):
+                    return "wis! Boot ay", ocr_draft
+            g.return_value = P()
+
+            def _vision(paths, draft, back):
+                vision_called["n"] += 1
+                return BookDraft(
+                    title="كتاب الفقه", authors=["مؤلف"], languages=["ar"],
+                    source="vision", confidence=0.8,
+                    raw={"vision_fallback": True},
+                )
+            vision.side_effect = _vision
+            out, _ = scan_book(
+                ["/tmp/fake.png"], isbn="", enrich=lambda i: None,
+                enrich_title=lambda t, a="": None,
+            )
+        self.assertEqual(vision_called["n"], 1)
+        self.assertEqual(out.title, "كتاب الفقه")
+        self.assertIn("ar", out.languages)
+
+    def test_should_try_vision_rejects_garbage_even_if_title_long(self):
+        from teyssir.catalog.bookscan.services import _should_try_vision
+        class P:
+            name = "tesseract"
+        draft = BookDraft(
+            title="wis! Boot ay", source="tesseract", confidence=0.35,
+            raw={"ocr_mean_confidence": 35, "ocr_garbage_latin": True},
+        )
+        self.assertTrue(_should_try_vision(draft, P()))
+        good = BookDraft(
+            title="Beauty and the Beast", source="tesseract", confidence=0.35,
+            raw={"ocr_text_only": True},
+        )
+        self.assertFalse(_should_try_vision(good, P()))
 
     def test_weak_title_search_keeps_ocr_authors(self):
         from unittest.mock import patch

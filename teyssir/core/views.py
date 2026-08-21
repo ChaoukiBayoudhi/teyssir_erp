@@ -30,6 +30,8 @@ def health(request):
                 "installed": tess.get("installed", False),
                 "path": tess.get("path"),
                 "langs": tess.get("langs") or [],
+                "missing_langs": tess.get("missing_langs") or [],
+                "recommended_langs": tess.get("recommended_langs") or ["eng", "fra", "ara"],
             },
         },
         status=200 if db_ok else 503,   # so monitors/probes see the failure in the HTTP status

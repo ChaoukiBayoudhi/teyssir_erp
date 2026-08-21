@@ -85,6 +85,34 @@ if [ -z "$TESS_CMD" ] && command -v brew >/dev/null 2>&1; then
 fi
 if [ -n "$TESS_CMD" ]; then
   echo "Tesseract: $TESS_CMD"
+  # Ensure ara+fra packs (brew tesseract alone often ships eng only)
+  MISSING_LANGS=""
+  for need in ara fra eng; do
+    if ! "$TESS_CMD" --list-langs 2>/dev/null | grep -qx "$need"; then
+      MISSING_LANGS="$MISSING_LANGS $need"
+    fi
+  done
+  if [ -n "$MISSING_LANGS" ]; then
+    echo "WARNING: Tesseract missing langs:$MISSING_LANGS"
+    if command -v brew >/dev/null 2>&1; then
+      echo "Installing tesseract-lang (ara/fra/…) via Homebrew ..."
+      brew install tesseract-lang >/dev/null 2>&1 || true
+    fi
+    STILL=""
+    for need in ara fra; do
+      if ! "$TESS_CMD" --list-langs 2>/dev/null | grep -qx "$need"; then
+        STILL="$STILL $need"
+      fi
+    done
+    if [ -n "$STILL" ]; then
+      echo "WARNING: Still missing:$STILL — Arabic covers will OCR as Latin garbage."
+      echo "  Fix: brew install tesseract-lang   OR download ara.traineddata into tessdata/"
+    else
+      echo "Tesseract langs OK (ara+fra+eng)."
+    fi
+  else
+    echo "Tesseract langs OK (ara+fra+eng)."
+  fi
 else
   echo "WARNING: Tesseract not found — book OCR will fall back to manual/vision."
 fi

@@ -162,8 +162,15 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
             draft.isbn13 = draft.isbn13 or isbn
 
     # No ISBN: try title/author metadata search (local Tunisian editions) — low confidence
+    # Never search OpenLibrary with garbage Latin OCR (locks wrong language / wrong book).
     title_hit = False
-    if not isbn and draft.title and draft.source in ("tesseract", "vision", "manual", ""):
+    from .ocr import is_garbage_latin_ocr, is_usable_ocr_title
+
+    title_ok = bool(draft.title) and is_usable_ocr_title(draft.title) and not (
+        (draft.raw or {}).get("ocr_garbage_latin")
+        or is_garbage_latin_ocr(draft.title or "")
+    )
+    if not isbn and title_ok and draft.source in ("tesseract", "vision", "manual", ""):
         found = enrich_title(draft.title, (draft.authors or [""])[0] if draft.authors else "")
         if found:
             title_hit = True
@@ -187,13 +194,21 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
                     found.title = ocr_title
             if price:
                 found.price = price
-            if langs and not found.languages:
+            # Prefer OCR script tags (ar) over OL defaulting to eng from a bad query
+            if langs:
+                found.languages = langs
+            elif not found.languages:
                 found.languages = langs
             found.raw = {
                 **(found.raw or {}), **raw_ocr, "title_search": True,
                 **({"title_search_weak": True} if not strong else {}),
             }
             draft = found
+    elif not isbn and draft.title and not title_ok:
+        draft.raw = {
+            **(draft.raw or {}),
+            "title_search_skipped_garbage": True,
+        }
 
     if isbn:
         draft.isbn13 = draft.isbn13 or isbn
@@ -253,11 +268,14 @@ def _maybe_vision_upgrade(image_paths, ocr_draft, back):
 
 
 def _should_try_vision(draft, provider) -> bool:
-    """Use local Vision-LLM only when primary OCR has no usable title/ISBN.
+    """Use local Vision-LLM when primary OCR has no *usable* title/ISBN.
 
-    Avoid long Ollama waits when Tesseract already extracted a title (even if weak).
+    Garbage Latin titles (Arabic covers misread as ``wis! Boot ay``) must NOT
+    block Vision — they are not usable bibliographic text.
     """
     from django.conf import settings
+
+    from .ocr import is_garbage_latin_ocr, is_usable_ocr_title
 
     if getattr(provider, "name", "") != "tesseract":
         return False
@@ -267,10 +285,25 @@ def _should_try_vision(draft, provider) -> bool:
     if draft.isbn13:
         return False
     title = (draft.title or "").strip()
+    mean_conf = None
+    try:
+        mean_conf = float((draft.raw or {}).get("ocr_mean_confidence") or 0) or None
+    except (TypeError, ValueError):
+        mean_conf = None
+    raw = draft.raw or {}
+    # Explicit garbage / Arabic-likely / missing ara → always try vision
+    if (
+        raw.get("ocr_garbage_latin")
+        or raw.get("ocr_arabic_likely")
+        or raw.get("ocr_title_unusable")
+        or raw.get("tess_missing_ara")
+        or (title and is_garbage_latin_ocr(title, mean_conf=mean_conf))
+    ):
+        return True
     # Usable title already — prefer fast path + optional title search over vision
-    if title and len(title) >= 4:
+    if is_usable_ocr_title(title, mean_conf=mean_conf):
         return False
-    if (draft.confidence or 0) >= 0.55 and title:
+    if (draft.confidence or 0) >= 0.55 and is_usable_ocr_title(title, mean_conf=mean_conf):
         return False
     if draft.raw.get("ocr_available") is False:
         return True
