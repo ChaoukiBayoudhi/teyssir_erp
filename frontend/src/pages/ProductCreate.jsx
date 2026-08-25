@@ -120,9 +120,14 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
                        value={barcode}
                        onChange={(e) => setBarcode(e.target.value)} onKeyDown={onBarcodeKey}
                        onBlur={() => barcode && lookup(barcode.trim())} autoFocus />
-            {!camera
-              ? <Button variant="outlined" onClick={() => setCamera(true)} aria-label={t("scanWithCamera")}>📷</Button>
-              : <Button variant="outlined" color="error" onClick={() => setCamera(false)}>■</Button>}
+            <Button
+              variant={camera ? "contained" : "outlined"}
+              sx={{ minWidth: 52 }}
+              onClick={() => setCamera((c) => !c)}
+              aria-label={t("scanWithCamera")}
+            >
+              📷
+            </Button>
           </Stack>
           {camera && (
             <CameraScanner
