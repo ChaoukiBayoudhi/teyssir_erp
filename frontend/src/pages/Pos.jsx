@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AppBar, Toolbar, Typography, Box, Grid, Paper, TextField, List, ListItemButton,
   ListItemText, IconButton, Stack, Button, Divider, Alert, Select, MenuItem, Menu, Snackbar, Chip,
+  CircularProgress,
 } from "@mui/material";
 import { useTranslation } from "react-i18next";
 import { searchProducts, lookupBarcode, checkout, listCustomers, reprintReceipt } from "../api";
@@ -16,6 +17,14 @@ const fromMillimes = (m) => m / 1000;
 const r3 = (x) => fromMillimes(toMillimes(x));
 const fmt = (x) => Number(x).toFixed(2); // 2-dp display (server stores 3-dp)
 
+/** Digits-heavy or alphanumeric refs (PEN-001, 1001, EAN) — not free-text names. */
+const looksLikeCode = (q) => {
+  const s = String(q || "").trim();
+  if (!s || /\s/.test(s)) return false;
+  if (/^\d{4,}$/.test(s)) return true;
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$/.test(s) && /\d/.test(s);
+};
+
 export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onReceiving,
                               onCustomers, onNewBook, onQuotation, onPurchaseOrders, onCatalog,
                               onNewProduct, onPdfConvert, onDiagnostics }) {
@@ -24,6 +33,9 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+  const searchSeq = useRef(0);
   const [cart, setCart] = useState([]); // {product, qty, discountPct}
   const [globalDiscountPct, setGlobalDiscountPct] = useState(0);
   const [method, setMethod] = useState("CASH");
@@ -56,6 +68,7 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
   const addToCart = (product) => {
     setResults([]);
     setQuery("");
+    setHasSearched(false);
     setCart((c) => {
       const found = c.find((l) => l.product.id === product.id);
       if (found) {
@@ -74,20 +87,75 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
     )));
   const removeLine = (id) => setCart((c) => c.filter((l) => l.product.id !== id));
 
+  // Live debounced search while typing (Catalog-style). Ignore stale responses.
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setResults([]);
+      setHasSearched(false);
+      setSearching(false);
+      return undefined;
+    }
+    const seq = ++searchSeq.current;
+    const ctrl = new AbortController();
+    const timer = setTimeout(async () => {
+      setSearching(true);
+      setError("");
+      try {
+        let hits = [];
+        if (looksLikeCode(q)) {
+          hits = await lookupBarcode(q, { signal: ctrl.signal });
+        }
+        if (!hits.length) {
+          hits = await searchProducts(q, { signal: ctrl.signal });
+        }
+        if (seq !== searchSeq.current) return;
+        setResults(hits);
+        setHasSearched(true);
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        if (seq !== searchSeq.current) return;
+        setError(String(err.message || err));
+        setResults([]);
+        setHasSearched(true);
+      } finally {
+        if (seq === searchSeq.current) setSearching(false);
+      }
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+      ctrl.abort();
+    };
+  }, [query]);
+
+  // Enter / scanner submit: exact code → single hit goes straight into the cart.
   const onSearch = async (e) => {
     e.preventDefault();
     setError("");
     const q = query.trim();
     if (!q) return;
+    const seq = ++searchSeq.current;
+    setSearching(true);
     try {
-      if (!/\s/.test(q)) {
+      if (looksLikeCode(q)) {
         const hits = await lookupBarcode(q);
+        if (seq !== searchSeq.current) return;
         if (hits.length === 1) return addToCart(hits[0]);
-        if (hits.length > 1) return setResults(hits);
+        if (hits.length > 1) {
+          setResults(hits);
+          setHasSearched(true);
+          return;
+        }
       }
-      setResults(await searchProducts(q));
+      const hits = await searchProducts(q);
+      if (seq !== searchSeq.current) return;
+      setResults(hits);
+      setHasSearched(true);
     } catch (err) {
+      if (seq !== searchSeq.current) return;
       setError(String(err.message || err));
+    } finally {
+      if (seq === searchSeq.current) setSearching(false);
     }
   };
 
@@ -97,7 +165,11 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
     try {
       const hits = await lookupBarcode(code);
       if (hits.length === 1) return addToCart(hits[0]);
-      if (hits.length > 1) return setResults(hits);
+      if (hits.length > 1) {
+        setResults(hits);
+        setHasSearched(true);
+        return;
+      }
       setError(`${t("unknownBarcode")}: ${code}`);
     } catch (err) {
       setError(String(err.message || err));
@@ -108,8 +180,11 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
   const onCameraQuery = async (q) => {
     setError("");
     setQuery(q);
+    // Live debounce effect will run; also fetch immediately for OCR latency.
     try {
-      setResults(await searchProducts(q));
+      const hits = await searchProducts(q);
+      setResults(hits);
+      setHasSearched(true);
     } catch (err) {
       setError(String(err.message || err));
     }
@@ -273,7 +348,12 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
                 />
               )}
               <List dense>
-                {results.length === 0 && (
+                {searching && (
+                  <Box sx={{ display: "flex", justifyContent: "center", p: 1 }}>
+                    <CircularProgress size={22} />
+                  </Box>
+                )}
+                {!searching && hasSearched && results.length === 0 && (
                   <Typography color="text.secondary" sx={{ p: 1 }}>{t("noResults")}</Typography>
                 )}
                 {results.map((p) => (

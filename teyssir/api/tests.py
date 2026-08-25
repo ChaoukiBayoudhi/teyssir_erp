@@ -47,6 +47,48 @@ class ApiTests(TestCase):
         self.assertEqual(len(r.json()), 1)
         self.assertEqual(r.json()[0]["tax_rate_percent"], "7.00")
 
+    def test_product_search_partial_case_accents_and_codes(self):
+        """POS search: exact/partial/case/Arabic/accents/reference/barcode (Phase 14)."""
+        Product.objects.create(
+            sku="BK-PP", name_fr="Le Petit Prince", name_ar="الأمير الصغير",
+            tax_rate=self.tva7, sale_price=Decimal("12.000"),
+            product_type=Product.BOOK, is_book=True, isbn="9782070612758",
+        )
+        sac = Product.objects.create(
+            sku="1001", reference="1001", name_fr="Sac à dos",
+            tax_rate=self.tva7, sale_price=Decimal("45.000"),
+        )
+        Barcode.objects.create(product=sac, value="6199988776655", symbology="EAN13")
+
+        cases = [
+            ("Stylo", "Stylo"),           # A exact FR name
+            ("sty", "Stylo"),             # B partial
+            ("STYLO", "Stylo"),           # C case-insensitive
+            ("الأمير", "Le Petit Prince"),  # D Arabic
+            ("Sac à", "Sac à dos"),       # E French accents
+            ("  Sac  ", "Sac à dos"),     # F whitespace trim
+            ("1001", "Sac à dos"),        # G furniture reference
+            ("6199988776655", "Sac à dos"),  # H barcode
+            ("9782070612758", "Le Petit Prince"),  # ISBN
+        ]
+        for q, expect in cases:
+            with self.subTest(q=q):
+                r = self.client.get("/api/v1/catalog/products/", {"search": q})
+                self.assertEqual(r.status_code, 200, r.content)
+                names = [p["name_fr"] for p in r.json()]
+                self.assertIn(expect, names, f"search={q!r} -> {names}")
+
+        # q= alias matches search=
+        r = self.client.get("/api/v1/catalog/products/", {"q": "sty"})
+        self.assertEqual(r.json()[0]["name_fr"], "Stylo")
+
+        # Rank: exact name before contains-only when both match
+        Product.objects.create(
+            sku="STY-X", name_fr="Stylo Bic", tax_rate=self.tva7, sale_price=Decimal("1.000"),
+        )
+        ranked = self.client.get("/api/v1/catalog/products/", {"search": "Stylo"}).json()
+        self.assertEqual(ranked[0]["name_fr"], "Stylo")
+
     def test_barcode_lookup(self):
         r = self.client.get("/api/v1/catalog/products/?barcode=6191234567890")
         self.assertEqual(r.status_code, 200)
