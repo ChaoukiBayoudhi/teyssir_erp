@@ -7,6 +7,18 @@ import { useTranslation } from "react-i18next";
 import { scanBook, pollScanJob, createBook, listCategories, listTaxRates } from "../api";
 import LangToggle from "../LangToggle.jsx";
 
+/** ISBN-13 check digit (bookland 978/979 only). Reject OCR digit soup before hinting. */
+function isbn13CheckOk(raw) {
+  const s = String(raw || "").replace(/[-\s]/g, "");
+  if (!/^97[89]\d{10}$/.test(s)) return false;
+  let total = 0;
+  for (let i = 0; i < 12; i++) {
+    total += (i % 2 === 0 ? 1 : 3) * parseInt(s[i], 10);
+  }
+  const check = (10 - (total % 10)) % 10;
+  return check === parseInt(s[12], 10);
+}
+
 async function detectIsbn(file) {
   if (!("BarcodeDetector" in window)) return "";
   try {
@@ -16,8 +28,11 @@ async function detectIsbn(file) {
     const bmp = await createImageBitmap(file);
     const tryDetect = async (source) => {
       const codes = await det.detect(source);
-      const ean = codes.find((c) => /^97[89]\d{10}$/.test(c.rawValue));
-      return ean ? ean.rawValue : "";
+      // Prefer checksum-valid bookland EAN-13
+      const bookland = codes.filter((c) => isbn13CheckOk(c.rawValue));
+      if (bookland.length) return bookland[0].rawValue;
+      // Reject invalid-checksum 978/979 blobs (common OCR / misread)
+      return "";
     };
     let hit = await tryDetect(bmp);
     if (hit) {
@@ -317,9 +332,10 @@ export default function BookCreate({ onBack, onLogout }) {
         }
       }
       setBusyLabel(t("detectingIsbn"));
-      const isbn = await detectIsbnFromImages(files);
+      const detected = await detectIsbnFromImages(files);
+      const isbnHint = detected && isbn13CheckOk(detected) ? detected : "";
       setBusyLabel(t("runningOcr"));
-      let d = await scanBook(files, isbn);
+      let d = await scanBook(files, isbnHint);
       if (d.status === "pending") {
         setBusyLabel(t("waitingOcr"));
         d = await pollScanJob(d.job_id);
@@ -329,7 +345,9 @@ export default function BookCreate({ onBack, onLogout }) {
       }
       setDraft(d);
 
-      const resolvedIsbn = d.isbn13 || isbn || "";
+      const serverIsbn = d.isbn13 && isbn13CheckOk(d.isbn13) ? d.isbn13 : "";
+      const resolvedIsbn = serverIsbn
+        || (!d.raw?.isbn_unconfirmed && !d.raw?.isbn_not_detected && isbnHint ? isbnHint : "");
       const isbnMissing = !resolvedIsbn;
       const priceMissing = !d.price;
       const ocrErr = d.raw?.ocr_error || d.raw?.back?.ocr_error;
@@ -376,6 +394,11 @@ export default function BookCreate({ onBack, onLogout }) {
       }
       if (!isbnMissing && priceMissing) {
         note = note ? `${note}\n${t("priceNotDetected")}` : t("priceNotDetected");
+      }
+      if (d.raw?.suggested_isbn && isbnMissing) {
+        note = note
+          ? `${note}\n${t("isbnManualHint")} (${d.raw.suggested_isbn})`
+          : `${t("isbnManualHint")} (${d.raw.suggested_isbn})`;
       }
       setError(warn);
       setInfo(note);

@@ -37,8 +37,19 @@ class IsbnExtractionTests(unittest.TestCase):
         self.assertEqual(extract_isbn("no isbn here"), "")
 
     def test_rejects_bad_check_digit(self):
-        from teyssir.catalog.bookscan.isbn import to_isbn13
+        from teyssir.catalog.bookscan.isbn import isbn13_check_ok, to_isbn13
         self.assertEqual(to_isbn13("9782070612750"), "")
+        self.assertFalse(isbn13_check_ok("9782070612750"))
+        # Wrong check digit on a 978 blob
+        self.assertFalse(isbn13_check_ok("9787723827430"))
+        self.assertEqual(to_isbn13("9787723827430"), "")
+
+    def test_screenshot_isbn_checksum_valid_but_suspect(self):
+        """9787723827435 has a valid check digit (OCR luck) — accept structurally,
+        but scan_book must not treat digit-OCR as high-confidence barcode."""
+        from teyssir.catalog.bookscan.isbn import isbn13_check_ok, to_isbn13
+        self.assertTrue(isbn13_check_ok("9787723827435"))
+        self.assertEqual(to_isbn13("9787723827435"), "9787723827435")
 
 
 def _png(name="cover.png"):
@@ -126,6 +137,7 @@ class PriceAndLangTests(unittest.TestCase):
         self.assertEqual(extract_price_dt("الثمن 8,750 د.ت"), "8.750")
         self.assertEqual(extract_price_dt("9.900 €"), "9.900")
         self.assertEqual(extract_price_dt("€12.500"), "12.500")
+        self.assertEqual(extract_price_dt("DT 14.900"), "14.900")
         self.assertEqual(extract_price_dt("no price here"), "")
         # Spurious OCR noise (screenshot 3) must not become a shelf price
         self.assertEqual(extract_price_dt("ol YI a Teeny 8.043 FRE pte"), "")
@@ -135,6 +147,104 @@ class PriceAndLangTests(unittest.TestCase):
         self.assertIn("ar", detect_script_langs("كتاب الفقه للمبتدئين"))
         self.assertIn("fr", detect_script_langs("Été français — édition scolaire"))
         self.assertIn("en", detect_script_langs("The Little Prince"))
+
+    def test_merge_bilingual_title(self):
+        from teyssir.catalog.bookscan.ocr import merge_bilingual_title, _draft_from_text
+        merged = merge_bilingual_title("Le premier", "الثلاثي الاول")
+        self.assertEqual(merged, "Le premier (الثلاثي الاول)")
+        self.assertEqual(
+            merge_bilingual_title("Le premier", "الثلاثي الاول", style="slash"),
+            "Le premier / الثلاثي الاول",
+        )
+        # Do not drop Latin when Arabic present
+        self.assertIn("Le premier", merge_bilingual_title("الثلاثي الاول", "Le premier"))
+        self.assertIn("الثلاثي", merge_bilingual_title("الثلاثي الاول", "Le premier"))
+        # Single script passthrough
+        self.assertEqual(merge_bilingual_title("Le Petit Prince"), "Le Petit Prince")
+
+        draft = _draft_from_text(
+            "الثلاثي الاول\nLe premier\n",
+            role="front",
+            mean_conf=55,
+        )
+        self.assertIn("Le premier", draft.title)
+        self.assertIn("الثلاثي", draft.title)
+        self.assertIn("ar", draft.languages)
+        self.assertIn("fr", draft.languages)
+        self.assertTrue(draft.raw.get("bilingual_title"))
+
+    def test_digit_ocr_isbn_not_high_confidence(self):
+        """Checksum-valid digit-OCR ISBN + OL miss must not stay at 85%."""
+        from unittest.mock import patch
+
+        from teyssir.catalog.bookscan.draft import BookDraft
+
+        # Suspect ISBN from screenshot 1 — valid check digit, wrong book
+        suspect = "9787723827435"
+        ocr_draft = BookDraft(
+            title="الثلاثي الاول",
+            isbn13=suspect,
+            source="tesseract",
+            confidence=0.85,
+            languages=["ar"],
+            raw={
+                "isbn_detected": True,
+                "isbn_from_digit_ocr": True,
+                "isbn_not_detected": False,
+            },
+        )
+
+        with patch("teyssir.catalog.bookscan.services.get_ocr_provider") as g, \
+             patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths",
+                   return_value=(suspect, "digit_ocr")), \
+             patch("teyssir.catalog.bookscan.services._should_try_vision", return_value=False):
+            class P:
+                name = "tesseract"
+
+                def extract(self, path, role="auto"):
+                    return "الثلاثي الاول", ocr_draft
+            g.return_value = P()
+            out, _ = scan_book(
+                ["/tmp/fake.png"], isbn="", enrich=lambda i: None,
+            )
+        # Cleared or demoted — never high confidence
+        self.assertLess(out.confidence or 0, 0.5)
+        self.assertNotEqual(out.confidence or 0, 0.85)
+        self.assertTrue(
+            not out.isbn13 or out.raw.get("isbn_unconfirmed") or out.raw.get("suggested_isbn")
+        )
+        if not out.isbn13:
+            self.assertEqual(out.raw.get("suggested_isbn"), suspect)
+
+    def test_barcode_isbn_keeps_high_confidence_on_metadata_miss(self):
+        from unittest.mock import patch
+
+        from teyssir.catalog.bookscan.draft import BookDraft
+
+        good = "9782070612758"
+        ocr_draft = BookDraft(
+            title="Le Petit Prince",
+            isbn13=good,
+            source="tesseract",
+            confidence=0.4,
+            languages=["fr"],
+            raw={"isbn_detected": True, "isbn_from_barcode": True},
+        )
+        with patch("teyssir.catalog.bookscan.services.get_ocr_provider") as g, \
+             patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths",
+                   return_value=(good, "barcode")), \
+             patch("teyssir.catalog.bookscan.services._should_try_vision", return_value=False):
+            class P:
+                name = "tesseract"
+
+                def extract(self, path, role="auto"):
+                    return "Le Petit Prince", ocr_draft
+            g.return_value = P()
+            out, _ = scan_book(
+                ["/tmp/fake.png"], isbn="", enrich=lambda i: None,
+            )
+        self.assertEqual(out.isbn13, good)
+        self.assertGreaterEqual(out.confidence or 0, 0.85)
 
     def test_garbage_latin_rejected_and_not_tagged_en(self):
         from teyssir.catalog.bookscan.ocr import (
@@ -282,7 +392,7 @@ class TitleSearchGatingTests(unittest.TestCase):
             return None
 
         with patch("teyssir.catalog.bookscan.services.get_ocr_provider") as g, \
-             patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths", return_value=""), \
+             patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths", return_value=("", "")), \
              patch("teyssir.catalog.bookscan.services._maybe_vision_upgrade") as vision:
             class P:
                 name = "tesseract"
@@ -314,7 +424,7 @@ class TitleSearchGatingTests(unittest.TestCase):
         vision_called = {"n": 0}
 
         with patch("teyssir.catalog.bookscan.services.get_ocr_provider") as g, \
-             patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths", return_value=""), \
+             patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths", return_value=("", "")), \
              patch("teyssir.catalog.bookscan.services._maybe_vision_upgrade") as vision:
             class P:
                 name = "tesseract"
@@ -382,7 +492,7 @@ class TitleSearchGatingTests(unittest.TestCase):
         )
         with patch("teyssir.catalog.bookscan.services.get_ocr_provider") as g, \
              patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths",
-                   return_value="9782070612758"), \
+                   return_value=("9782070612758", "barcode")), \
              patch("teyssir.catalog.bookscan.services._should_try_vision", return_value=False):
             class P:
                 name = "tesseract"
@@ -414,7 +524,7 @@ class TitleSearchGatingTests(unittest.TestCase):
             )
 
         with patch("teyssir.catalog.bookscan.services.get_ocr_provider") as g, \
-             patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths", return_value=""):
+             patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths", return_value=("", "")):
             class P:
                 name = "tesseract"
                 def extract(self, path, role="auto"):

@@ -188,6 +188,13 @@ def is_usable_ocr_title(title: str, *, mean_conf: float | None = None) -> bool:
     t = (title or "").strip()
     if len(t) < 4:
         return False
+    # Bilingual merged titles are usable if either side is solid
+    if "(" in t and ")" in t:
+        parts = re.split(r"\s*[/(]\s*", t, maxsplit=1)
+        if len(parts) >= 2 and any(
+            is_usable_ocr_title(p.rstrip(")"), mean_conf=mean_conf) for p in parts
+        ):
+            return True
     if is_garbage_arabic_ocr(t, mean_conf=mean_conf):
         return False
     if arabic_char_ratio(t) >= 0.15:
@@ -199,6 +206,81 @@ def is_usable_ocr_title(title: str, *, mean_conf: float | None = None) -> bool:
     # Decent Latin/French title
     letters = sum(1 for c in t if c.isalpha())
     return letters >= 4
+
+
+def _latin_title_quality(text: str, *, mean_conf: float | None = None) -> float:
+    """Score a Latin/French title fragment (higher = better); 0 if unusable."""
+    s = (text or "").strip().replace("\u200e", "").replace("\u200f", "")
+    if len(s) < 3 or arabic_char_ratio(s) >= 0.2:
+        return 0.0
+    if is_garbage_latin_ocr(s, mean_conf=mean_conf):
+        return 0.0
+    letters = sum(1 for c in s if c.isalpha())
+    if letters < 3:
+        return 0.0
+    # Prefer French diacritics / longer phrases (e.g. "Le premier")
+    bonus = 0.3 if re.search(r"[àâäéèêëïîôùûüçœæÀÂÄÉÈÊËÏÎÔÙÛÜÇ]", s) else 0.0
+    bonus += 0.2 if re.match(r"^(Le|La|Les|L'|Un|Une|The)\b", s, re.I) else 0.0
+    return letters / 20.0 + bonus + min(len(s), 40) / 80.0
+
+
+def _arabic_title_quality(text: str, *, mean_conf: float | None = None) -> float:
+    """Score an Arabic title fragment; 0 if unusable."""
+    s = (text or "").strip().replace("\u200e", "").replace("\u200f", "")
+    if arabic_char_ratio(s) < 0.2:
+        return 0.0
+    if is_garbage_arabic_ocr(s, mean_conf=mean_conf):
+        return 0.0
+    ar = sum(1 for c in s if is_arabic_char(c))
+    if ar < 4:
+        return 0.0
+    return ar / 20.0 + min(len(s), 40) / 80.0
+
+
+def merge_bilingual_title(
+    *parts: str,
+    mean_conf: float | None = None,
+    style: str = "parens",
+) -> str:
+    """Merge Latin/French + Arabic cover titles into one string.
+
+    Preferred form: ``Le premier (الثلاثي الاول)``. Falls back to `` / `` separator
+    when ``style='slash'``. Single-script input is returned unchanged (cleaned).
+    Never drops a usable Latin title when Arabic is also present.
+    """
+    best_latin = ""
+    best_latin_score = 0.0
+    best_arabic = ""
+    best_arabic_score = 0.0
+    for raw in parts:
+        s = (raw or "").strip()
+        if not s:
+            continue
+        # Already merged? peel sides
+        if re.search(r"[/（(]", s) and (arabic_char_ratio(s) >= 0.15):
+            for chunk in re.split(r"\s*[/(（]\s*", s):
+                chunk = chunk.rstrip(")）").strip()
+                if not chunk:
+                    continue
+                ls = _latin_title_quality(chunk, mean_conf=mean_conf)
+                if ls > best_latin_score:
+                    best_latin_score, best_latin = ls, chunk
+                as_ = _arabic_title_quality(chunk, mean_conf=mean_conf)
+                if as_ > best_arabic_score:
+                    best_arabic_score, best_arabic = as_, chunk
+            continue
+        ls = _latin_title_quality(s, mean_conf=mean_conf)
+        if ls > best_latin_score:
+            best_latin_score, best_latin = ls, s
+        as_ = _arabic_title_quality(s, mean_conf=mean_conf)
+        if as_ > best_arabic_score:
+            best_arabic_score, best_arabic = as_, s
+
+    if best_latin and best_arabic:
+        if style == "slash":
+            return f"{best_latin} / {best_arabic}"
+        return f"{best_latin} ({best_arabic})"
+    return best_latin or best_arabic or ""
 
 
 def is_plausible_author(name: str, *, mean_conf: float | None = None) -> bool:
@@ -434,6 +516,18 @@ def _preprocess_variants(image_path, role="auto", *, isbn_found=False):
             Image.Resampling.LANCZOS,
         )
         yield "barcode_band_x3", g3.convert("RGB")
+    # Price stickers: mid-lower third + right/left shelves (Tunisian DT tags)
+    if role in ("back", "auto") and h > 120 and w > 80:
+        mid_lower = img.crop((0, int(h * 0.35), w, int(h * 0.75)))
+        yield "price_mid", _enhance(mid_lower)
+        yield "price_mid_thr", _threshold(mid_lower)
+        # Sticker often glued on lower-right / lower-left
+        yield "price_br", _enhance(
+            img.crop((int(w * 0.45), int(h * 0.4), w, int(h * 0.85)))
+        )
+        yield "price_bl", _enhance(
+            img.crop((0, int(h * 0.4), int(w * 0.55), int(h * 0.85)))
+        )
     yield "full", _enhance(img)
     if role == "front":
         yield "crop_color", _enhance(crop, color=True)
@@ -490,13 +584,19 @@ def _mean_ocr_confidence(pytesseract, image, langs: str, *, psm: int = 6) -> flo
 def _apply_confidence_gate(draft: BookDraft, mean_conf: float) -> BookDraft:
     """Flag low Tesseract confidence → manual review + keep suggested text.
 
-    Do not clamp when ISBN came from a real barcode (high-trust path).
+    High confidence (≥0.85) only when ISBN came from a real barcode decode.
+    Digit-OCR ISBN must never inherit barcode trust.
     """
     threshold = float(getattr(settings, "OCR_CONFIDENCE_THRESHOLD", 45) or 45)
     draft.raw = {**(draft.raw or {}), "ocr_mean_confidence": round(mean_conf, 1)}
     if draft.raw.get("isbn_from_barcode") and draft.isbn13:
-        # Barcode ISBN is definitive — keep high confidence for metadata merge
+        # Real pyzbar barcode — definitive
         draft.confidence = max(draft.confidence or 0, 0.85)
+        return draft
+    if draft.raw.get("isbn_from_digit_ocr") and draft.isbn13:
+        # Checksum-valid digit OCR is still unverified — keep low until OL confirms
+        draft.confidence = min(draft.confidence or 0.25, 0.35)
+        draft.raw["ocr_low_confidence"] = True
         return draft
     if mean_conf > 0 and mean_conf < threshold:
         draft.raw["ocr_low_confidence"] = True
@@ -505,6 +605,18 @@ def _apply_confidence_gate(draft: BookDraft, mean_conf: float) -> BookDraft:
         if draft.confidence and draft.confidence > 0.25:
             draft.confidence = min(draft.confidence, 0.3)
         draft.source = draft.source or "tesseract"
+    # Incomplete / weak title must not advertise high tess confidence
+    title = (draft.title or "").strip()
+    if title and not is_usable_ocr_title(title, mean_conf=mean_conf):
+        draft.confidence = min(draft.confidence or 0.2, 0.3)
+        draft.raw["ocr_weak"] = True
+    elif title and arabic_char_ratio(title) >= 0.2 and not re.search(
+        r"[A-Za-zÀ-ÿ]{3,}", title
+    ):
+        # Arabic-only title when Latin may exist on cover — don't claim high conf
+        if (draft.confidence or 0) > 0.55 and not draft.raw.get("isbn_from_barcode"):
+            draft.confidence = min(draft.confidence, 0.5)
+            draft.raw["title_may_be_incomplete"] = True
     return draft
 
 
@@ -569,16 +681,52 @@ def _draft_from_text(text, *, isbn_hint="", role="auto", mean_conf: float | None
                 s2 = s.replace("\u200e", "").replace("\u200f", "").strip()
                 if len(s2) >= 3:
                     cleaned.append(s2)
-            # Prefer lines with Arabic script for titles on bilingual noise
-            arabic_lines = [s for s in cleaned if arabic_char_ratio(s) >= 0.2]
-            pool = arabic_lines or cleaned
-            title_cands = sorted(pool[:5], key=lambda s: (-arabic_char_ratio(s), -len(s), pool.index(s))) if pool else []
-            if title_cands:
-                draft.title = title_cands[0]
+            arabic_lines = [
+                s for s in cleaned
+                if _arabic_title_quality(s, mean_conf=mean_conf) > 0
+            ]
+            latin_lines = [
+                s for s in cleaned
+                if _latin_title_quality(s, mean_conf=mean_conf) > 0
+            ]
+            # Merge FR + AR when both scripts appear on the cover
+            merged = merge_bilingual_title(
+                *latin_lines[:3], *arabic_lines[:3], mean_conf=mean_conf,
+            )
+            if merged:
+                draft.title = merged
                 draft.raw["title_candidates"] = cleaned[:5]
+                if latin_lines and arabic_lines:
+                    draft.raw["bilingual_title"] = True
+            else:
+                pool = arabic_lines or latin_lines or cleaned
+                title_cands = sorted(
+                    pool[:5],
+                    key=lambda s: (
+                        -max(
+                            _arabic_title_quality(s, mean_conf=mean_conf),
+                            _latin_title_quality(s, mean_conf=mean_conf),
+                        ),
+                        -len(s),
+                        pool.index(s),
+                    ),
+                ) if pool else []
+                if title_cands:
+                    draft.title = title_cands[0]
+                    draft.raw["title_candidates"] = cleaned[:5]
+            # Languages: both scripts → ar,fr (or ar,en)
+            if latin_lines and arabic_lines:
+                has_fr = any(
+                    re.search(r"[àâäéèêëïîôùûüçœæÀÂÄÉÈÊËÏÎÔÙÛÜÇ]", ln)
+                    or re.match(r"^(Le|La|Les|L'|Un|Une)\b", ln, re.I)
+                    for ln in latin_lines
+                )
+                langs_bi = ["ar", "fr" if has_fr else "en"]
+                draft.languages = langs_bi
+                draft.raw["detected_langs"] = langs_bi
             if len(cleaned) > 1:
                 for ln in cleaned:
-                    if ln == draft.title:
+                    if ln == draft.title or (draft.title and ln in draft.title):
                         continue
                     if not is_plausible_author(ln, mean_conf=mean_conf):
                         continue
@@ -632,7 +780,11 @@ def _draft_from_text(text, *, isbn_hint="", role="auto", mean_conf: float | None
         draft.authors = kept
 
     if draft.isbn13 or draft.price:
-        draft.confidence = 0.6 if draft.isbn13 else 0.45
+        if draft.isbn13 and not (draft.raw or {}).get("isbn_from_barcode"):
+            # Text-extracted / digit OCR ISBN — modest confidence until confirmed
+            draft.confidence = 0.35 if draft.isbn13 else 0.45
+        else:
+            draft.confidence = 0.6 if draft.isbn13 else 0.45
     elif draft.title and is_usable_ocr_title(draft.title, mean_conf=mean_conf):
         # Reflect Tesseract mean when available — never hardcode a fake "35%" floor
         if mean_conf and mean_conf > 0:
@@ -683,7 +835,7 @@ class TesseractOcrProvider(OcrProvider):
             return "", draft
 
         try:
-            from .barcode import decode_isbn_barcode
+            from .barcode import decode_isbn_with_source
 
             digit_blob = ""
             text_blob = ""
@@ -695,16 +847,21 @@ class TesseractOcrProvider(OcrProvider):
             )
             missing_rec = [c for c in ("ara", "fra", "eng") if c not in installed]
             best = None  # (score, label, combined_text, draft, mean_conf, langs)
+            # Track best FR / AR title fragments across lang passes for bilingual merge
+            best_latin_title = ""
+            best_latin_score = 0.0
+            best_arabic_title = ""
+            best_arabic_score = 0.0
 
             # Barcode-first (EAN-13 = ISBN): beats Tesseract on small/angled verso photos.
+            # Never treat digit-OCR as barcode — checksum-valid OCR can still be wrong.
             barcode_isbn = ""
+            isbn_source = ""  # barcode | digit_ocr | ""
             if role in ("back", "auto"):
-                from .barcode import decode_isbn_barcode_or_digits
-
-                barcode_isbn = decode_isbn_barcode_or_digits(image_path) or ""
+                barcode_isbn, isbn_source = decode_isbn_with_source(image_path)
                 if barcode_isbn:
                     digit_blob = barcode_isbn
-                    used.append("barcode")
+                    used.append("barcode" if isbn_source == "barcode" else "digit_ocr")
 
             def _annotate(draft, label, mean_conf, langs_used):
                 draft.raw["ocr_pass"] = label
@@ -718,8 +875,60 @@ class TesseractOcrProvider(OcrProvider):
                         draft.raw["tess_missing_ara"] = True
                 return _apply_confidence_gate(draft, mean_conf)
 
+            def _apply_isbn(draft):
+                if not barcode_isbn:
+                    return draft
+                draft.isbn13 = barcode_isbn
+                draft.raw["isbn_detected"] = True
+                draft.raw.pop("isbn_not_detected", None)
+                if isbn_source == "barcode":
+                    draft.raw["isbn_from_barcode"] = True
+                    draft.raw.pop("isbn_from_digit_ocr", None)
+                    draft.confidence = max(draft.confidence or 0, 0.85)
+                else:
+                    draft.raw["isbn_from_digit_ocr"] = True
+                    draft.raw.pop("isbn_from_barcode", None)
+                    # Unverified digit OCR — low until OpenLibrary confirms
+                    draft.confidence = min(draft.confidence or 0.25, 0.35)
+                return draft
+
+            def _note_title_parts(chunk: str, mean_conf: float):
+                nonlocal best_latin_title, best_latin_score
+                nonlocal best_arabic_title, best_arabic_score
+                for ln in _clean_lines(chunk or ""):
+                    ls = _latin_title_quality(ln, mean_conf=mean_conf)
+                    if ls > best_latin_score:
+                        best_latin_score, best_latin_title = ls, ln
+                    as_ = _arabic_title_quality(ln, mean_conf=mean_conf)
+                    if as_ > best_arabic_score:
+                        best_arabic_score, best_arabic_title = as_, ln
+
+            def _finalize_bilingual(draft, mean_conf):
+                merged = merge_bilingual_title(
+                    best_latin_title, best_arabic_title,
+                    draft.title or "", mean_conf=mean_conf,
+                )
+                if merged and merged != (draft.title or ""):
+                    draft.raw["title_before_bilingual_merge"] = draft.title
+                    draft.title = merged
+                    draft.raw["bilingual_title"] = True
+                if best_latin_title and best_arabic_title:
+                    has_fr = bool(
+                        re.search(
+                            r"[àâäéèêëïîôùûüçœæÀÂÄÉÈÊËÏÎÔÙÛÜÇ]",
+                            best_latin_title,
+                        )
+                        or re.match(
+                            r"^(Le|La|Les|L'|Un|Une)\b", best_latin_title, re.I
+                        )
+                    )
+                    langs_bi = ["ar", "fr" if has_fr else "en"]
+                    draft.languages = langs_bi
+                    draft.raw["detected_langs"] = langs_bi
+                return draft
+
             for label, im in _preprocess_variants(
-                image_path, role=role, isbn_found=bool(barcode_isbn),
+                image_path, role=role, isbn_found=bool(barcode_isbn and isbn_source == "barcode"),
             ):
                 used.append(label)
                 pass_digits = ""
@@ -727,7 +936,12 @@ class TesseractOcrProvider(OcrProvider):
                 if role in ("back", "auto"):
                     pass_digits = _ocr_digits(pytesseract, im)
                     digit_blob += "\n" + pass_digits
+                    # Prefer real barcode; only accept checksum-valid digit blobs as ISBN
                     isbn = barcode_isbn or extract_isbn(digit_blob)
+                    if isbn and not barcode_isbn:
+                        # Tess digit pass found a checksum-valid candidate
+                        barcode_isbn = isbn
+                        isbn_source = "digit_ocr"
                     price = extract_price_dt(digit_blob)
                     # Also hunt price in full text of this pass
                     if not price:
@@ -747,19 +961,19 @@ class TesseractOcrProvider(OcrProvider):
                         if not draft.price and price:
                             draft.price = price
                             draft.raw["price_detected"] = True
-                        if barcode_isbn:
-                            draft.isbn13 = barcode_isbn
-                            draft.raw["isbn_detected"] = True
-                            draft.raw["isbn_from_barcode"] = True
-                            draft.confidence = max(draft.confidence or 0, 0.85)
+                        draft = _apply_isbn(draft)
                         draft = _annotate(draft, label, mean_conf, langs)
-                        # Strong ISBN hit: return early (barcode decode is definitive)
-                        if barcode_isbn and (draft.price or label in ("lower", "grayscale", "original")):
+                        # Strong ISBN hit: return early only for real barcode
+                        if isbn_source == "barcode" and (
+                            draft.price or label in ("lower", "grayscale", "original", "price_mid")
+                        ):
                             return combined, draft
-                        if isbn and (mean_conf >= 40 or draft.confidence >= 0.55):
+                        if isbn_source == "barcode" and (mean_conf >= 40 or draft.confidence >= 0.55):
                             return combined, draft
+                        # Digit-OCR ISBN: never early-return at high confidence
                         score = (
-                            (3 if barcode_isbn else 0)
+                            (3 if isbn_source == "barcode" else 0)
+                            + (1 if isbn_source == "digit_ocr" else 0)
                             + (2 if isbn else 0)
                             + (1 if price else 0)
                             + mean_conf / 100.0
@@ -767,8 +981,9 @@ class TesseractOcrProvider(OcrProvider):
                         )
                         if best is None or score > best[0]:
                             best = (score, label, combined, draft, mean_conf, langs)
-                        # Barcode ISBN + any pass: stop after a couple of price attempts
-                        if barcode_isbn and len(used) >= 4:
+                        if isbn_source == "barcode" and len(used) >= 4:
+                            break
+                        if isbn_source == "digit_ocr" and draft.price and len(used) >= 6:
                             break
                 if role in ("front", "auto"):
                     # Large-text pass for titles (psm 11 sparse / 6 block)
@@ -779,29 +994,33 @@ class TesseractOcrProvider(OcrProvider):
                         mean_conf = _mean_ocr_confidence(
                             pytesseract, im, langs_try, psm=psm,
                         )
+                        _note_title_parts(chunk, mean_conf)
                         combined_try = f"{digit_blob}\n{text_blob}\n{chunk}"
                         draft = _draft_from_text(
                             combined_try, isbn_hint=barcode_isbn, role=role,
                             mean_conf=mean_conf,
                         )
-                        if barcode_isbn:
-                            draft.isbn13 = barcode_isbn
-                            draft.raw["isbn_detected"] = True
-                            draft.raw["isbn_from_barcode"] = True
+                        draft = _apply_isbn(draft)
+                        draft = _finalize_bilingual(draft, mean_conf)
                         draft = _annotate(draft, f"{label}/{langs_try}", mean_conf, langs_try)
                         score = _score_ocr_candidate(
                             combined_try, draft, mean_conf, langs=langs_try,
                         )
+                        # Reward bilingual merges
+                        if draft.raw.get("bilingual_title"):
+                            score += 0.6
                         if best is None or score > best[0]:
                             best = (score, label, combined_try, draft, mean_conf, langs_try)
                             langs = langs_try
                             pass_text = chunk
-                        # Strong Arabic title: stop trying weaker Latin packs
+                        # Strong Arabic title: stop trying weaker Latin packs only if
+                        # we already captured a Latin fragment (or no fra pack available)
                         if (
                             draft.title
                             and arabic_char_ratio(draft.title) >= 0.3
                             and mean_conf >= 40
                             and "ara" in langs_try
+                            and (best_latin_title or "fra" not in installed)
                         ):
                             break
                     if pass_text:
@@ -809,23 +1028,24 @@ class TesseractOcrProvider(OcrProvider):
                     # Refine preferred order once we see Arabic script
                     if arabic_char_ratio(text_blob) >= 0.15:
                         lang_passes = _lang_pass_candidates("front", installed)
-                    if barcode_isbn and best and best[3].title and len(used) >= 3:
+                    if isbn_source == "barcode" and best and best[3].title and len(used) >= 3:
                         break
-                    # Enough image variants once we have a usable Arabic or Latin title
+                    # Enough image variants once we have a usable bilingual or solid title
                     if best and is_usable_ocr_title(
                         best[3].title or "", mean_conf=best[4],
                     ) and len(used) >= 3:
-                        break
+                        # Keep going if Arabic-only and Latin might still appear
+                        if not (
+                            best_arabic_title and not best_latin_title
+                            and "fra" in installed and len(used) < 5
+                        ):
+                            break
 
             if best is not None:
                 _, label, combined, draft, mean_conf, langs_used = best
+                draft = _apply_isbn(draft)
+                draft = _finalize_bilingual(draft, mean_conf)
                 draft = _annotate(draft, label, mean_conf, langs_used)
-                if barcode_isbn:
-                    draft.isbn13 = barcode_isbn
-                    draft.raw["isbn_detected"] = True
-                    draft.raw["isbn_from_barcode"] = True
-                    draft.raw.pop("isbn_not_detected", None)
-                    draft.confidence = max(draft.confidence or 0, 0.85)
                 return combined, draft
 
             if role == "front" and not text_blob.strip():
@@ -844,12 +1064,8 @@ class TesseractOcrProvider(OcrProvider):
             draft = _draft_from_text(
                 combined, isbn_hint=barcode_isbn, role=role, mean_conf=0.0,
             )
-            if barcode_isbn:
-                draft.isbn13 = barcode_isbn
-                draft.raw["isbn_detected"] = True
-                draft.raw["isbn_from_barcode"] = True
-                draft.raw.pop("isbn_not_detected", None)
-                draft.confidence = max(draft.confidence or 0, 0.85)
+            draft = _apply_isbn(draft)
+            draft = _finalize_bilingual(draft, 0.0)
             draft = _annotate(draft, "full_fallback", 0.0, langs)
             return combined, draft
         except Exception as exc:
@@ -908,10 +1124,14 @@ def _draft_from_vision_json(raw):
     if draft.price:
         draft.price = extract_price_dt(draft.price) or draft.price
     if draft.isbn13:
-        draft.isbn13 = to_isbn13(draft.isbn13) or re.sub(r"[-\s]", "", draft.isbn13)
-        if draft.isbn13:
+        valid = to_isbn13(draft.isbn13)
+        if valid:
+            draft.isbn13 = valid
             draft.raw["isbn_detected"] = True
         else:
+            # Reject checksum-invalid vision guesses
+            draft.raw["rejected_isbn"] = draft.isbn13
+            draft.isbn13 = ""
             draft.raw["isbn_not_detected"] = True
     else:
         draft.raw["isbn_not_detected"] = True

@@ -5,15 +5,29 @@ import { scanBook, pollScanJob } from "../api";
 
 const BARCODE_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code", "itf"];
 
+/** ISBN-13 check digit (978/979). Do not send invalid EAN as a scan hint. */
+function isbn13CheckOk(raw) {
+  const s = String(raw || "").replace(/[-\s]/g, "");
+  if (!/^97[89]\d{10}$/.test(s)) return false;
+  let total = 0;
+  for (let i = 0; i < 12; i++) {
+    total += (i % 2 === 0 ? 1 : 3) * parseInt(s[i], 10);
+  }
+  const check = (10 - (total % 10)) % 10;
+  return check === parseInt(s[12], 10);
+}
+
 async function detectCodeFromSource(source) {
   if (!("BarcodeDetector" in window)) return "";
   try {
     const detector = new window.BarcodeDetector({ formats: BARCODE_FORMATS });
     const codes = await detector.detect(source);
     if (!codes.length) return "";
-    // Prefer ISBN-like EAN-13 (978/979), else first raw value.
-    const isbn = codes.find((c) => /^97[89]\d{10}$/.test(c.rawValue));
-    return (isbn || codes[0]).rawValue || "";
+    // Prefer checksum-valid ISBN-like EAN-13 (978/979)
+    const isbn = codes.find((c) => isbn13CheckOk(c.rawValue));
+    if (isbn) return isbn.rawValue;
+    // Non-ISBN retail barcodes (still useful for POS lookup)
+    return (codes[0]).rawValue || "";
   } catch {
     return "";
   }

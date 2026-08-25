@@ -35,6 +35,12 @@ _PRICE_RES = [
         r"\b(\d{1,4}(?:[.,]\d{1,3})?)\s*(?:dt|d\.?t\.?|tnd|د\.?\s*ت\.?|دينار)\b",
         re.IGNORECASE,
     ),
+    # Currency then amount (DT 14.900 / د.ت 12,500)
+    re.compile(
+        r"(?:dt|d\.?t\.?|tnd|د\.?\s*ت\.?|دينار)\s*[:=]?\s*"
+        r"(\d{1,4}(?:[.,]\d{1,3})?)\b",
+        re.IGNORECASE,
+    ),
     # Euro on imported / bilingual covers
     re.compile(
         r"(?:€|eur|euros?)\s*(\d{1,4}(?:[.,]\d{1,3})?)\b",

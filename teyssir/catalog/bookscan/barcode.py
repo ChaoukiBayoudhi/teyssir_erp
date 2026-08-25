@@ -183,9 +183,26 @@ def ocr_isbn_digits_from_image(image_path: str) -> str:
     return extract_isbn(blob) or ""
 
 
+def decode_isbn_with_source(image_path: str) -> tuple[str, str]:
+    """Return ``(isbn13, source)`` with ``source`` in ``barcode`` | ``digit_ocr`` | ``''``.
+
+    Prefer pyzbar (real EAN bars). Digit OCR is a last resort and must never be
+    treated as a barcode hit for confidence boosting — checksum-valid OCR noise
+    (e.g. ``9787723827435``) can still be wrong.
+    """
+    isbn = decode_isbn_barcode(image_path)
+    if isbn:
+        return isbn, "barcode"
+    isbn = ocr_isbn_digits_from_image(image_path)
+    if isbn:
+        return isbn, "digit_ocr"
+    return "", ""
+
+
 def decode_isbn_barcode_or_digits(image_path: str) -> str:
-    """Barcode first, then digit OCR on verso bands."""
-    return decode_isbn_barcode(image_path) or ocr_isbn_digits_from_image(image_path)
+    """Barcode first, then digit OCR on verso bands (ISBN only, no source)."""
+    isbn, _src = decode_isbn_with_source(image_path)
+    return isbn
 
 
 def barcode_engine_available() -> bool:
