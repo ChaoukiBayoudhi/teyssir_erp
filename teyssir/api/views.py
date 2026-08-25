@@ -431,23 +431,33 @@ class CategoryListView(APIView):
 
 
 class ProductDetailView(APIView):
-    """GET /catalog/products/<pk>/detail — full product profile (info, stock, barcodes, cover
-    images, and the bibliographic book record) for the 'Show details' view."""
+    """GET /catalog/products/<pk>/detail — full product profile.
+    PATCH — update editable catalogue fields (``edit_product``).
+    DELETE — soft-delete (``active=False``) so the row leaves catalogue/POS search."""
 
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method in ("PATCH", "PUT", "DELETE"):
+            return [capability("edit_product")()]
+        return [IsAuthenticated()]
 
-    def get(self, request, pk):
-        from teyssir.catalog.models import Product, ProductImage
+    def _get_product(self, pk, *, active_only=False):
+        from teyssir.catalog.models import Product
 
-        p = (Product.objects.select_related("category", "tax_rate").filter(pk=pk).first())
-        if not p:
-            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        qs = Product.objects.select_related("category", "tax_rate")
+        if active_only:
+            qs = qs.filter(active=True)
+        return qs.filter(pk=pk).first()
+
+    def _detail_payload(self, request, p):
+        from teyssir.catalog.models import ProductImage
 
         data = {
             "id": str(p.id), "sku": p.sku, "reference": p.reference,
             "internal_code": p.internal_code,
             "name_fr": p.name_fr, "name_ar": p.name_ar,
             "category": p.category.name_fr if p.category_id else "",
+            "category_id": str(p.category_id) if p.category_id else "",
+            "tax_rate": str(p.tax_rate_id) if p.tax_rate_id else "",
             "is_book": p.is_book, "product_type": p.product_type,
             "isbn": p.isbn, "color": p.color, "brand": p.brand, "active": p.active,
             "sale_price": str(p.sale_price), "cost_avg": str(p.cost_avg),
@@ -471,7 +481,54 @@ class ProductDetailView(APIView):
                     for bc in book.contributors.select_related("contributor").order_by("order")
                 ],
             }
-        return Response(data)
+        return data
+
+    def get(self, request, pk):
+        p = self._get_product(pk)
+        if not p:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(self._detail_payload(request, p))
+
+    def patch(self, request, pk):
+        from teyssir.catalog.services import update_product
+
+        p = self._get_product(pk, active_only=True)
+        if not p:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        d = request.data
+        kwargs = {}
+        for key in ("name_fr", "name_ar", "sale_price", "reorder_point", "reference",
+                    "color", "brand", "isbn"):
+            if key in d:
+                kwargs[key] = d.get(key)
+        if "category" in d:
+            cat = d.get("category")
+            if cat in (None, ""):
+                kwargs["clear_category"] = True
+            else:
+                kwargs["category_id"] = cat
+        if "tax_rate" in d:
+            tax = d.get("tax_rate")
+            if tax in (None, ""):
+                kwargs["clear_tax_rate"] = True
+            else:
+                kwargs["tax_rate_id"] = tax
+        try:
+            p = update_product(p, **kwargs)
+        except ValueError as exc:
+            msg = str(exc)
+            code = status.HTTP_409_CONFLICT if "déjà" in msg or "existe déjà" in msg else status.HTTP_400_BAD_REQUEST
+            return Response({"detail": msg}, status=code)
+        return Response(self._detail_payload(request, p))
+
+    def delete(self, request, pk):
+        from teyssir.catalog.services import deactivate_product
+
+        p = self._get_product(pk, active_only=True)
+        if not p:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        deactivate_product(p)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class TaxRateViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):

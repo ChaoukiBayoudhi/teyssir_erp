@@ -57,6 +57,10 @@ export const catalogSearch = (params) => {
   return request(`/catalog/search?${new URLSearchParams(clean).toString()}`);
 };
 export const productDetail = (id) => request(`/catalog/products/${id}/detail`);
+export const updateProduct = (id, payload) =>
+  request(`/catalog/products/${id}/detail`, { method: "PATCH", body: payload });
+export const deleteProduct = (id) =>
+  request(`/catalog/products/${id}/detail`, { method: "DELETE" });
 export const listCategories = () => request("/catalog/categories");
 export const listTaxRates = () => request("/catalog/tax-rates/");
 // Register any article (book or supply) from its scanned barcode.
