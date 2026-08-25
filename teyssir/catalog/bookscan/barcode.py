@@ -3,16 +3,27 @@
 Phone photos of book versos often show a small, angled EAN-13. Plain Tesseract digit OCR
 misses those; a real barcode decoder + region crops recovers the ISBN before metadata search.
 Degrades gracefully when ``pyzbar`` / libzbar are not installed.
+
+Phase 2A: when a ``CoverPreprocessResult`` is supplied, try white_label / barcode_band
+crops first (budgeted variants) before the broader region search. ISBN-only retention
+is unchanged (non-ISBN / CNP codes still discarded — Phase 2B).
 """
 from __future__ import annotations
 
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator
 
 from .isbn import extract_isbn, to_isbn13
+
+if TYPE_CHECKING:
+    from .preprocess import CoverPreprocessResult
 
 # Small tilts + cardinal rotations for handheld / sideways verso shots.
 _TILT_ROTATIONS = (-8, 8, -15, 15, -25, 25)
 _CARDINAL_ROTATIONS = (90, 180, 270)
+
+# Budgeted ROI-first variants (avoid unbounded explosion when preprocess ROIs exist).
+_ROI_TILTS = (-12, 12)
+_ROI_SCALES = (1.0, 2.0, 3.0)
 
 
 def _pyzbar_decode(image) -> list[str]:
@@ -109,7 +120,46 @@ def _variants(region) -> Iterator[tuple[str, object]]:
         yield f"card{angle}_x2", _scale(rotated, 2.0)
 
 
-def decode_isbn_barcode(image_path: str) -> str:
+def _roi_band_regions(img, prepare: "CoverPreprocessResult | None") -> Iterator[tuple[str, object]]:
+    """Yield preprocess ROI crops (white sticker first) — budgeted barcode tries."""
+    if prepare is None:
+        return
+    from .preprocess import iter_roi_crops
+
+    w, h = img.size
+    # Prefer sticker → barcode_band → price_band (title unused for barcodes)
+    order = ("white_label", "barcode_band", "price_band")
+    boxes = {name: box for name, box in iter_roi_crops(prepare)}
+    for name in order:
+        box = boxes.get(name)
+        if box is None:
+            continue
+        clamped = box.clamp(w, h)
+        if clamped.width < 12 or clamped.height < 12:
+            continue
+        yield name, img.crop(clamped.as_tuple())
+
+
+def _roi_variants(region) -> Iterator[tuple[str, object]]:
+    """Few upscale/tilt variants for ROI crops (no cardinal explosion)."""
+    from PIL import ImageEnhance, ImageOps
+
+    yield "raw", region
+    for scale in _ROI_SCALES:
+        if scale <= 1.01:
+            continue
+        up = _scale(region, scale)
+        yield f"x{int(scale)}", up
+        g = ImageOps.autocontrast(ImageOps.grayscale(up))
+        yield f"x{int(scale)}_gray", g.convert("RGB")
+        contrast = ImageEnhance.Contrast(g).enhance(2.2)
+        yield f"x{int(scale)}_contrast", contrast.convert("RGB")
+    base = _up_min_side(region, 700)
+    for angle in _ROI_TILTS:
+        yield f"tilt{angle}", base.rotate(angle, expand=True, fillcolor="white")
+
+
+def decode_isbn_barcode(image_path: str, prepare: "CoverPreprocessResult | None" = None) -> str:
     """Return validated ISBN-13 from a cover/verso image, or ''."""
     try:
         from PIL import Image
@@ -125,7 +175,17 @@ def decode_isbn_barcode(image_path: str) -> str:
     for isbn in _pyzbar_decode(img):
         return isbn
 
+    # Phase 2A: preprocess ROIs first (white PVP/CNP stickers on Tunisian covers)
     seen: set[str] = set()
+    for rlabel, region in _roi_band_regions(img, prepare):
+        for vlabel, variant in _roi_variants(region):
+            key = f"roi:{rlabel}:{vlabel}"
+            if key in seen:
+                continue
+            seen.add(key)
+            for isbn in _pyzbar_decode(variant):
+                return isbn
+
     for rlabel, region in _barcode_regions(img):
         for vlabel, variant in _variants(region):
             key = f"{rlabel}:{vlabel}"
@@ -137,7 +197,9 @@ def decode_isbn_barcode(image_path: str) -> str:
     return ""
 
 
-def ocr_isbn_digits_from_image(image_path: str) -> str:
+def ocr_isbn_digits_from_image(
+    image_path: str, prepare: "CoverPreprocessResult | None" = None
+) -> str:
     """Last-resort ISBN from digit OCR on barcode bands (when zbar misses)."""
     try:
         import pytesseract
@@ -159,6 +221,9 @@ def ocr_isbn_digits_from_image(image_path: str) -> str:
 
     w, h = img.size
     bands = [img]
+    # Prefer preprocess ROI crops when available
+    for _label, region in _roi_band_regions(img, prepare):
+        bands.append(region)
     if h > 80:
         bands.append(img.crop((0, int(h * 0.65), w, h)))
         bands.append(img.crop((0, int(h * 0.78), w, h)))
@@ -168,7 +233,8 @@ def ocr_isbn_digits_from_image(image_path: str) -> str:
 
     cfg = "--psm 6 -c tessedit_char_whitelist=0123456789Xx-"
     blob = ""
-    for band in bands:
+    # Cap band count — ROI + fixed bands, no explosion
+    for band in bands[:8]:
         for scale in (1.0, 2.0, 3.0):
             im = _scale(band, scale) if scale > 1 else band
             g = ImageOps.autocontrast(ImageOps.grayscale(im))
@@ -183,25 +249,30 @@ def ocr_isbn_digits_from_image(image_path: str) -> str:
     return extract_isbn(blob) or ""
 
 
-def decode_isbn_with_source(image_path: str) -> tuple[str, str]:
+def decode_isbn_with_source(
+    image_path: str, prepare: "CoverPreprocessResult | None" = None
+) -> tuple[str, str]:
     """Return ``(isbn13, source)`` with ``source`` in ``barcode`` | ``digit_ocr`` | ``''``.
 
     Prefer pyzbar (real EAN bars). Digit OCR is a last resort and must never be
     treated as a barcode hit for confidence boosting — checksum-valid OCR noise
     (e.g. ``9787723827435``) can still be wrong.
+    Non-ISBN barcodes (CNP / TN EAN 619…) remain discarded until Phase 2B.
     """
-    isbn = decode_isbn_barcode(image_path)
+    isbn = decode_isbn_barcode(image_path, prepare=prepare)
     if isbn:
         return isbn, "barcode"
-    isbn = ocr_isbn_digits_from_image(image_path)
+    isbn = ocr_isbn_digits_from_image(image_path, prepare=prepare)
     if isbn:
         return isbn, "digit_ocr"
     return "", ""
 
 
-def decode_isbn_barcode_or_digits(image_path: str) -> str:
+def decode_isbn_barcode_or_digits(
+    image_path: str, prepare: "CoverPreprocessResult | None" = None
+) -> str:
     """Barcode first, then digit OCR on verso bands (ISBN only, no source)."""
-    isbn, _src = decode_isbn_with_source(image_path)
+    isbn, _src = decode_isbn_with_source(image_path, prepare=prepare)
     return isbn
 
 

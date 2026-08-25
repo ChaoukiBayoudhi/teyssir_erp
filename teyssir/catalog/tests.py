@@ -299,6 +299,100 @@ class PriceAndLangTests(unittest.TestCase):
         self.assertEqual(arabic_char_ratio("wis! Boot ay"), 0.0)
 
 
+class CoverPreprocessTests(unittest.TestCase):
+    """Phase 2A: orient/clamp/bands/white-label ROI (OpenCV or Pillow fallback)."""
+
+    def test_opencv_flag_and_synthetic_bands(self):
+        from teyssir.catalog.bookscan.preprocess import (
+            cleanup_preprocess,
+            opencv_available,
+            preprocess_cover,
+        )
+
+        self.assertIsInstance(opencv_available(), bool)
+        # Synthetic cover: dark margins + white sticker in lower-right
+        img = Image.new("RGB", (800, 1100), (40, 40, 40))
+        cover = Image.new("RGB", (520, 780), (30, 90, 40))
+        sticker = Image.new("RGB", (160, 90), (250, 250, 250))
+        cover.paste(sticker, (330, 650))
+        img.paste(cover, (140, 120))
+        path = os.path.join(tempfile.mkdtemp(), "synth_cover.jpg")
+        img.save(path, quality=92)
+        prep = preprocess_cover(path, max_edge=1600)
+        try:
+            self.assertGreaterEqual(prep.width, 200)
+            self.assertGreaterEqual(prep.height, 200)
+            self.assertLessEqual(max(prep.width, prep.height), 2000)
+            self.assertGreaterEqual(prep.title_band.height, int(prep.height * 0.25))
+            self.assertGreaterEqual(prep.barcode_band.y0, int(prep.height * 0.45))
+            self.assertIn("opencv" if opencv_available() else "pillow", prep.method)
+            # White sticker should be detected when OpenCV is present
+            if opencv_available() and prep.white_label is not None:
+                wl = prep.white_label
+                self.assertLessEqual(prep.barcode_band.x0, wl.x0 + 8)
+                self.assertLessEqual(prep.barcode_band.y0, wl.y0 + 8)
+                self.assertGreaterEqual(prep.barcode_band.x1, wl.x1 - 8)
+                self.assertGreaterEqual(prep.barcode_band.y1, wl.y1 - 8)
+        finally:
+            cleanup_preprocess([prep])
+
+    def test_books_photos_critical_versos_have_sticker_in_bands(self):
+        """Corpus History 12.41 + Math 12.42 versos: white label inside barcode/price bands."""
+        root = os.path.join(os.path.dirname(__file__), "..", "..", "..", "books_photos")
+        root = os.path.abspath(root)
+        if not os.path.isdir(root):
+            self.skipTest("books_photos/ not present")
+
+        from teyssir.catalog.bookscan.preprocess import cleanup_preprocess, preprocess_cover
+
+        critical = []
+        for name in os.listdir(root):
+            if not name.lower().endswith(".jpg"):
+                continue
+            if "12.42" in name:
+                critical.append(os.path.join(root, name))
+            elif "12.41" in name and "#2" not in name:
+                critical.append(os.path.join(root, name))
+        if len(critical) < 2:
+            self.skipTest("critical verso samples (*12.41* / *12.42*) missing")
+
+        for path in critical:
+            prep = preprocess_cover(path)
+            try:
+                self.assertIsNotNone(prep.white_label, msg=path)
+                wl = prep.white_label
+                bb, pb = prep.barcode_band, prep.price_band
+                self.assertLessEqual(bb.x0 - 8, wl.x0)
+                self.assertLessEqual(bb.y0 - 8, wl.y0)
+                self.assertGreaterEqual(bb.x1 + 8, wl.x1)
+                self.assertGreaterEqual(bb.y1 + 8, wl.y1)
+                self.assertLessEqual(pb.x0 - 8, wl.x0)
+                self.assertLessEqual(pb.y0 - 8, wl.y0)
+                self.assertGreaterEqual(pb.x1 + 8, wl.x1)
+                self.assertGreaterEqual(pb.y1 + 8, wl.y1)
+            finally:
+                cleanup_preprocess([prep])
+
+    def test_scan_book_runs_preprocess_before_barcode(self):
+        """scan_book still returns a draft when preprocess wraps the path."""
+        from unittest.mock import patch
+
+        from teyssir.catalog.bookscan.draft import BookDraft
+
+        img = Image.new("RGB", (400, 600), "white")
+        path = os.path.join(tempfile.mkdtemp(), "front.jpg")
+        img.save(path)
+        empty = BookDraft(title="", raw={"isbn_not_detected": True}, confidence=0.1)
+        with patch("teyssir.catalog.bookscan.services.get_ocr_provider") as g, \
+             patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths",
+                   return_value=("", "")), \
+             patch("teyssir.catalog.bookscan.services._should_try_vision", return_value=False):
+            g.return_value.extract.return_value = ("", empty)
+            draft, _text = scan_book([path])
+        self.assertIsNotNone(draft)
+        self.assertTrue(draft.raw.get("isbn_not_detected"))
+
+
 class BarcodeIsbnTests(unittest.TestCase):
     def test_decode_isbn_from_ean13_image(self):
         """pyzbar recovers ISBN from a rendered EAN-13 (and from a small angled crop)."""

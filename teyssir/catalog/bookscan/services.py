@@ -103,18 +103,22 @@ def _merge_cover_drafts(front: BookDraft, back: BookDraft | None) -> BookDraft:
     return out
 
 
-def _barcode_isbn_from_paths(image_paths) -> tuple[str, str]:
+def _barcode_isbn_from_paths(image_paths, prepared=None) -> tuple[str, str]:
     """Try barcode (+ digit OCR) on all images (prefer last = verso).
 
     Returns ``(isbn13, source)`` with ``source`` in ``barcode`` | ``digit_ocr`` | ``''``.
     Prefers a real pyzbar hit over digit OCR across all frames.
+    When ``prepared`` (list of CoverPreprocessResult) is given, ROI bands are tried first.
     """
     if not image_paths:
         return "", ""
     order = list(reversed(range(len(image_paths))))
     digit_fallback = ("", "")
     for i in order:
-        isbn, src = decode_isbn_with_source(image_paths[i])
+        prep = None
+        if prepared and 0 <= i < len(prepared):
+            prep = prepared[i]
+        isbn, src = decode_isbn_with_source(image_paths[i], prepare=prep)
         if isbn and src == "barcode":
             return isbn, "barcode"
         if isbn and src == "digit_ocr" and not digit_fallback[0]:
@@ -154,12 +158,15 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
     """Produce a (BookDraft, ocr_text) from image path(s) + an optional ISBN.
 
     Multi-cover (Phase 6):
+      * Phase 2A preprocess (orient / crop / deskew / CLAHE / band ROIs) first
       * barcode decode on images first (ISBN-13 from EAN)
       * image[0] → front cover (title / author / language)
       * image[1] → back cover (ISBN / barcode / price)
       * merge → enrich by ISBN, else cautious title search
       * optional Vision-LLM only when OCR has no usable title/ISBN (short timeout)
     """
+    from .preprocess import prepared_cover_paths
+
     # Client / caller hint: only accept checksum-valid bookland ISBNs
     client_raw = (isbn or "").strip()
     isbn = to_isbn13(client_raw) or ""
@@ -169,11 +176,36 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
 
     provider = get_ocr_provider()
 
+    # Phase 2A: rectify covers before barcode + OCR (temps cleaned on exit).
+    with prepared_cover_paths(image_paths or []) as (prep_paths, prep_results):
+        work_paths = prep_paths if prep_paths else list(image_paths or [])
+        return _scan_book_prepared(
+            work_paths,
+            prepared=prep_results,
+            isbn=isbn,
+            client_isbn_hint=client_isbn_hint,
+            provider=provider,
+            enrich=enrich,
+            enrich_title=enrich_title,
+        )
+
+
+def _scan_book_prepared(
+    image_paths,
+    *,
+    prepared,
+    isbn,
+    client_isbn_hint,
+    provider,
+    enrich,
+    enrich_title,
+):
+    """Inner scan on already-preprocessed paths (+ optional ROI metadata)."""
     # ISBN-first: real barcode beats OCR digits and wrong title-only OL hits.
     barcode_isbn = ""
     isbn_source = ""
     if not isbn and image_paths:
-        barcode_isbn, isbn_source = _barcode_isbn_from_paths(image_paths)
+        barcode_isbn, isbn_source = _barcode_isbn_from_paths(image_paths, prepared)
         isbn = barcode_isbn
 
     texts, front, back = _extract_pair(provider, image_paths)
