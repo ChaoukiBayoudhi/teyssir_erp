@@ -266,6 +266,70 @@ class ProductRegisterApiTests(TestCase):
         self.assertEqual(b.status_code, 201)
 
 
+class ProductUpdateDeleteApiTests(TestCase):
+    """PATCH/DELETE on /catalog/products/<id>/detail for furniture + books."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.client.force_authenticate(User.objects.create_superuser("owner", password="pw-strong-123"))
+        self.furn = self.client.post("/api/v1/catalog/register", {
+            "name_fr": "Sac à dos", "reference": "SAC-UPD", "sale_price": "40.000",
+            "color": "Noir", "brand": "Generic", "product_type": "furniture",
+        }, format="json").json()
+        self.book = self.client.post("/api/v1/catalog/register", {
+            "name_fr": "Le Petit Prince", "is_book": True, "product_type": "book",
+            "isbn": "9782070612758", "sale_price": "12.000", "barcode": "9782070612758",
+        }, format="json").json()
+
+    def test_patch_furniture_updates_fields(self):
+        r = self.client.patch(f"/api/v1/catalog/products/{self.furn['id']}/detail", {
+            "name_fr": "Sac XL", "sale_price": "49.500", "color": "Bleu", "reference": "SAC-UPD",
+        }, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        body = r.json()
+        self.assertEqual(body["name_fr"], "Sac XL")
+        self.assertEqual(body["sale_price"], "49.500")
+        self.assertEqual(body["color"], "Bleu")
+        p = Product.objects.get(pk=self.furn["id"])
+        self.assertEqual(p.name_fr, "Sac XL")
+        self.assertEqual(str(p.sale_price), "49.500")
+
+    def test_patch_book_updates_isbn_and_title(self):
+        r = self.client.patch(f"/api/v1/catalog/products/{self.book['id']}/detail", {
+            "name_fr": "Petit Prince (éd. Gallimard)", "isbn": "9782070612758",
+        }, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["name_fr"], "Petit Prince (éd. Gallimard)")
+        self.assertEqual(r.json()["isbn"], "9782070612758")
+
+    def test_patch_duplicate_reference_conflict(self):
+        other = self.client.post("/api/v1/catalog/register", {
+            "name_fr": "Autre", "reference": "OTHER-1",
+        }, format="json").json()
+        r = self.client.patch(f"/api/v1/catalog/products/{other['id']}/detail", {
+            "reference": "SAC-UPD",
+        }, format="json")
+        self.assertEqual(r.status_code, 409)
+
+    def test_delete_soft_hides_from_catalog_search(self):
+        r = self.client.delete(f"/api/v1/catalog/products/{self.furn['id']}/detail")
+        self.assertEqual(r.status_code, 204)
+        p = Product.objects.get(pk=self.furn["id"])
+        self.assertFalse(p.active)
+        search = self.client.get("/api/v1/catalog/search", {"q": "SAC-UPD"})
+        self.assertEqual(search.status_code, 200)
+        ids = [row["id"] for row in search.json()["results"]]
+        self.assertNotIn(self.furn["id"], ids)
+        # Second delete → 404 (already inactive)
+        r2 = self.client.delete(f"/api/v1/catalog/products/{self.furn['id']}/detail")
+        self.assertEqual(r2.status_code, 404)
+
+    def test_delete_book_same_path(self):
+        r = self.client.delete(f"/api/v1/catalog/products/{self.book['id']}/detail")
+        self.assertEqual(r.status_code, 204)
+        self.assertFalse(Product.objects.get(pk=self.book["id"]).active)
+
+
 @override_settings(OCR_PROVIDER="vision")
 class VisionLlmOcrTests(TestCase):
     """The Vision-LLM provider with an injected transport — no live model needed."""
