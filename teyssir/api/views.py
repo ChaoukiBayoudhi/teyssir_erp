@@ -280,6 +280,8 @@ class CategoryListView(APIView):
 class ProductDetailView(APIView):
     """GET /catalog/products/<pk>/detail — full product profile.
     PATCH — update editable catalogue fields (``edit_product``).
+    Optional ``qty_on_hand`` sets absolute stock via a STOCKTAKE ledger adjustment
+    (same path as inventory stocktake — never write the cache alone).
     DELETE — soft-delete (``active=False``) so the row leaves catalogue/POS search."""
 
     def get_permissions(self):
@@ -366,6 +368,22 @@ class ProductDetailView(APIView):
             msg = str(exc)
             code = status.HTTP_409_CONFLICT if "déjà" in msg or "existe déjà" in msg else status.HTTP_400_BAD_REQUEST
             return Response({"detail": msg}, status=code)
+
+        # Absolute stock set → STOCKTAKE variance on the ledger (spec §14.4), not a direct cache write.
+        if "qty_on_hand" in d:
+            from teyssir.core.qty import QtyError, to_qty
+
+            try:
+                counted = to_qty(d.get("qty_on_hand"), allow_negative=False, label="qty_on_hand")
+            except QtyError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            if counted != int(p.qty_on_hand or 0):
+                post_stocktake(
+                    [{"product_id": p.id, "counted_qty": counted}],
+                    terminal=settings.TERMINAL,
+                )
+                p.refresh_from_db()
+
         return Response(self._detail_payload(request, p))
 
     def delete(self, request, pk):

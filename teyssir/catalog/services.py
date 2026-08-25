@@ -106,7 +106,8 @@ def update_product(product, *, name_fr=None, name_ar=None, category_id=None, tax
                    isbn=None, clear_category=False, clear_tax_rate=False):
     """Update catalogue fields for a book or furniture/supply product.
 
-    Stock qty is intentionally not edited here (stocktake / receiving own that path).
+    Stock qty is not edited here — ProductDetailView PATCH accepts ``qty_on_hand`` and
+    applies it via ``post_stocktake`` (ledger STOCKTAKE), same as inventory stocktake.
     Furniture reference uniqueness is enforced; books keep ISBN on Product (+ Book row if any).
     """
     if name_fr is not None:
