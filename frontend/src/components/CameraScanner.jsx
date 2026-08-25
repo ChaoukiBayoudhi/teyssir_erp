@@ -17,20 +17,61 @@ function isbn13CheckOk(raw) {
   return check === parseInt(s[12], 10);
 }
 
-async function detectCodeFromSource(source) {
-  if (!("BarcodeDetector" in window)) return "";
+let zxingReaderPromise = null;
+
+function getZxingReader() {
+  if (!zxingReaderPromise) {
+    zxingReaderPromise = import("@zxing/browser").then(
+      ({ BrowserMultiFormatReader }) => new BrowserMultiFormatReader(),
+    );
+  }
+  return zxingReaderPromise;
+}
+
+function sourceToCanvas(source) {
+  if (source instanceof HTMLCanvasElement) return source;
+  const canvas = document.createElement("canvas");
+  if (source instanceof HTMLVideoElement) {
+    if (!source.videoWidth || !source.videoHeight) return null;
+    canvas.width = source.videoWidth;
+    canvas.height = source.videoHeight;
+    canvas.getContext("2d").drawImage(source, 0, 0);
+    return canvas;
+  }
+  if (typeof ImageBitmap !== "undefined" && source instanceof ImageBitmap) {
+    canvas.width = source.width;
+    canvas.height = source.height;
+    canvas.getContext("2d").drawImage(source, 0, 0);
+    return canvas;
+  }
+  return null;
+}
+
+async function detectWithZxing(source) {
   try {
-    const detector = new window.BarcodeDetector({ formats: BARCODE_FORMATS });
-    const codes = await detector.detect(source);
-    if (!codes.length) return "";
-    // Prefer checksum-valid ISBN-like EAN-13 (978/979)
-    const isbn = codes.find((c) => isbn13CheckOk(c.rawValue));
-    if (isbn) return isbn.rawValue;
-    // Non-ISBN retail barcodes (still useful for POS lookup)
-    return (codes[0]).rawValue || "";
+    const canvas = sourceToCanvas(source);
+    if (!canvas) return "";
+    const reader = await getZxingReader();
+    const result = await reader.decodeFromCanvas(canvas);
+    return result?.getText?.() || "";
   } catch {
     return "";
   }
+}
+
+async function detectCodeFromSource(source) {
+  if ("BarcodeDetector" in window) {
+    try {
+      const detector = new window.BarcodeDetector({ formats: BARCODE_FORMATS });
+      const codes = await detector.detect(source);
+      if (codes.length) {
+        const isbn = codes.find((c) => isbn13CheckOk(c.rawValue));
+        if (isbn) return isbn.rawValue;
+        return codes[0].rawValue || "";
+      }
+    } catch { /* fall through to ZXing */ }
+  }
+  return detectWithZxing(source);
 }
 
 function frameToBlob(video) {
@@ -96,18 +137,21 @@ export default function CameraScanner({ onDetect, onQuery, onClose }) {
       streamRef.current = media;
       setStream(media);
 
-      if (!("BarcodeDetector" in window)) {
-        setInfo(t("scannerCaptureHint"));
-        return;
-      }
+      const hasNative = "BarcodeDetector" in window;
       setLiveOk(true);
-      setInfo(t("scannerAimBarcode"));
+      setInfo(hasNative ? t("scannerAimBarcode") : t("scannerCaptureHint"));
+      let lastFallbackAt = 0;
       const tick = async () => {
         if (stopped || !videoRef.current) return;
+        const now = Date.now();
+        if (!hasNative && now - lastFallbackAt < 350) {
+          raf = requestAnimationFrame(tick);
+          return;
+        }
+        if (!hasNative) lastFallbackAt = now;
         try {
           const value = await detectCodeFromSource(videoRef.current);
           if (value) {
-            const now = Date.now();
             if (value !== lastRef.current.value || now - lastRef.current.at > 2000) {
               lastRef.current = { value, at: now };
               onDetect?.(value);

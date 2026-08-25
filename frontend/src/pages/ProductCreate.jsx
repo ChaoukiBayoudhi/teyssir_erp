@@ -6,6 +6,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { barcodeLookup, createProduct, listCategories, listTaxRates } from "../api";
 import LangToggle from "../LangToggle.jsx";
+import CameraScanner from "../components/CameraScanner.jsx";
 import { fmtQty } from "../format.js";
 
 const EMPTY = {
@@ -17,15 +18,13 @@ const EMPTY = {
 export default function ProductCreate({ onBack, onLogout, onNewBook }) {
   const { t } = useTranslation();
   const barcodeRef = useRef(null);
-  const videoRef = useRef(null);
-  const streamRef = useRef(null);
   const [barcode, setBarcode] = useState("");
   const [existing, setExisting] = useState(null);
   const [productType, setProductType] = useState("furniture"); // furniture | book
   const [form, setForm] = useState(EMPTY);
   const [cats, setCats] = useState([]);
   const [taxes, setTaxes] = useState([]);
-  const [scanning, setScanning] = useState(false);
+  const [camera, setCamera] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
@@ -40,11 +39,16 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
       if (d) setForm((f) => ({ ...f, tax_rate: d.id }));
     }).catch(() => {});
     barcodeRef.current?.focus();
-    return () => stopScan();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const onCameraCode = (code) => {
+    setBarcode(code);
+    lookup(code);
+    setCamera(false);
+  };
 
   const lookup = async (code) => {
     setError(""); setExisting(null);
@@ -57,42 +61,6 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
 
   const onBarcodeKey = (e) => {
     if (e.key === "Enter") { e.preventDefault(); lookup(barcode.trim()); }
-  };
-
-  const stopScan = () => {
-    const s = streamRef.current || videoRef.current?.srcObject;
-    if (s) s.getTracks().forEach((tk) => tk.stop());
-    streamRef.current = null;
-    if (videoRef.current) videoRef.current.srcObject = null;
-    setScanning(false);
-  };
-
-  const scanWithCamera = async () => {
-    setError("");
-    if (!("BarcodeDetector" in window)) { setError(t("scannerUnsupported")); return; }
-    try {
-      stopScan();
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-      streamRef.current = stream;
-      videoRef.current.srcObject = stream;
-      setScanning(true);
-      const detector = new window.BarcodeDetector();
-      const tick = async () => {
-        if (!videoRef.current?.srcObject) return;
-        try {
-          const codes = await detector.detect(videoRef.current);
-          if (codes.length) {
-            const code = codes[0].rawValue;
-            stopScan();
-            setBarcode(code);
-            lookup(code);
-            return;
-          }
-        } catch { /* frame not ready */ }
-        requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
-    } catch { setError(t("cameraUnavailable")); }
   };
 
   const save = async () => {
@@ -138,7 +106,7 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
 
         <Paper sx={{ p: 2, mb: 2 }}>
           <ToggleButtonGroup exclusive size="small" value={productType} sx={{ mb: 2 }}
-                             onChange={(_, v) => { if (v) { setProductType(v); setExisting(null); stopScan(); } }}>
+                             onChange={(_, v) => { if (v) { setProductType(v); setExisting(null); setCamera(false); } }}>
             <ToggleButton value="furniture">{t("furniture")}</ToggleButton>
             <ToggleButton value="book">{t("books")}</ToggleButton>
           </ToggleButtonGroup>
@@ -152,14 +120,16 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
                        value={barcode}
                        onChange={(e) => setBarcode(e.target.value)} onKeyDown={onBarcodeKey}
                        onBlur={() => barcode && lookup(barcode.trim())} autoFocus />
-            {!scanning
-              ? <Button variant="outlined" onClick={scanWithCamera}>📷</Button>
-              : <Button variant="outlined" color="error" onClick={stopScan}>■</Button>}
+            {!camera
+              ? <Button variant="outlined" onClick={() => setCamera(true)} aria-label={t("scanWithCamera")}>📷</Button>
+              : <Button variant="outlined" color="error" onClick={() => setCamera(false)}>■</Button>}
           </Stack>
-          <Box sx={{ mt: scanning ? 1 : 0 }}>
-            <video ref={videoRef} autoPlay playsInline muted
-                   style={{ width: "100%", borderRadius: 8, display: scanning ? "block" : "none" }} />
-          </Box>
+          {camera && (
+            <CameraScanner
+              onDetect={onCameraCode}
+              onClose={() => setCamera(false)}
+            />
+          )}
           {existing && (
             <Alert severity="info" sx={{ mt: 1 }}>
               {t("alreadyExists")} : <b>{existing.name_fr}</b> — {existing.sale_price} · {t("stock")} {fmtQty(existing.qty_on_hand)}
