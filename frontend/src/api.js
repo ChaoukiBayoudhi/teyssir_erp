@@ -12,7 +12,7 @@ export function clearToken() {
   localStorage.removeItem("teyssir_token");
 }
 
-async function request(path, { method = "GET", body, auth = true } = {}) {
+async function request(path, { method = "GET", body, auth = true, signal } = {}) {
   const headers = { "Content-Type": "application/json" };
   if (auth && getToken()) headers["Authorization"] = `Token ${getToken()}`;
   let res;
@@ -21,8 +21,10 @@ async function request(path, { method = "GET", body, auth = true } = {}) {
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
+      signal,
     });
-  } catch {
+  } catch (e) {
+    if (e?.name === "AbortError") throw e;
     // fetch only throws on a network-level failure (node unreachable) — treat as offline
     const err = new Error("offline");
     err.offline = true;
@@ -35,6 +37,13 @@ async function request(path, { method = "GET", body, auth = true } = {}) {
   return res.status === 204 ? null : res.json();
 }
 
+/** Normalize list endpoints that may return a bare array or {results:[…]}. */
+export function asProductList(data) {
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.results)) return data.results;
+  return [];
+}
+
 export async function login(username, password) {
   const data = await request("/auth/token", {
     method: "POST",
@@ -45,11 +54,13 @@ export async function login(username, password) {
   return data;
 }
 
-export const searchProducts = (q) =>
-  request(`/catalog/products/?search=${encodeURIComponent(q)}`);
+export const searchProducts = (q, { signal } = {}) =>
+  request(`/catalog/products/?search=${encodeURIComponent(q)}`, { signal })
+    .then(asProductList);
 
-export const lookupBarcode = (code) =>
-  request(`/catalog/products/?barcode=${encodeURIComponent(code)}`);
+export const lookupBarcode = (code, { signal } = {}) =>
+  request(`/catalog/products/?barcode=${encodeURIComponent(code)}`, { signal })
+    .then(asProductList);
 
 // Catalogue browser: paginated multi-criteria search + filters + sort.
 export const catalogSearch = (params) => {

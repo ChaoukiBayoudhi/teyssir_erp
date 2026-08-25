@@ -36,12 +36,12 @@ class Product(SyncableModel):
     FURNITURE = "furniture"
     PRODUCT_TYPES = [(BOOK, "Book"), (FURNITURE, "Furniture")]
 
-    sku = models.CharField(max_length=48, unique=True)
+    sku = models.CharField(max_length=48, unique=True, db_index=True)
     # Furniture identifier. Blank on books (ISBN is the key). Unique among non-empty values.
     reference = models.CharField(max_length=48, blank=True, default="", db_index=True)
-    internal_code = models.CharField(max_length=48, blank=True, default="")
-    name_fr = models.CharField(max_length=200)
-    name_ar = models.CharField(max_length=200, blank=True, default="")
+    internal_code = models.CharField(max_length=48, blank=True, default="", db_index=True)
+    name_fr = models.CharField(max_length=200, db_index=True)
+    name_ar = models.CharField(max_length=200, blank=True, default="", db_index=True)
     category = models.ForeignKey(Category, null=True, blank=True, on_delete=models.SET_NULL)
     tax_rate = models.ForeignKey(TaxRate, null=True, blank=True, on_delete=models.SET_NULL)
     color = models.CharField(max_length=64, blank=True, default="")
