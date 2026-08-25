@@ -16,10 +16,10 @@ export default function ProductEdit({ productId, onBack, onLogout, onSaved }) {
   const [toast, setToast] = useState("");
   const [cats, setCats] = useState([]);
   const [taxes, setTaxes] = useState([]);
-  const [meta, setMeta] = useState({ is_book: false, product_type: "furniture", qty_on_hand: "0" });
+  const [meta, setMeta] = useState({ is_book: false, product_type: "furniture" });
   const [form, setForm] = useState({
     name_fr: "", name_ar: "", category: "", tax_rate: "", sale_price: "",
-    reorder_point: "", reference: "", color: "", brand: "", isbn: "",
+    reorder_point: "", qty_on_hand: "0", reference: "", color: "", brand: "", isbn: "",
   });
 
   useEffect(() => {
@@ -36,7 +36,6 @@ export default function ProductEdit({ productId, onBack, onLogout, onSaved }) {
         setMeta({
           is_book: Boolean(detail.is_book),
           product_type: detail.product_type || (detail.is_book ? "book" : "furniture"),
-          qty_on_hand: detail.qty_on_hand,
         });
         setForm({
           name_fr: detail.name_fr || "",
@@ -45,6 +44,7 @@ export default function ProductEdit({ productId, onBack, onLogout, onSaved }) {
           tax_rate: detail.tax_rate || "",
           sale_price: detail.sale_price || "",
           reorder_point: detail.reorder_point || "",
+          qty_on_hand: fmtQty(detail.qty_on_hand),
           reference: detail.reference || "",
           color: detail.color || "",
           brand: detail.brand || "",
@@ -68,18 +68,20 @@ export default function ProductEdit({ productId, onBack, onLogout, onSaved }) {
     if (!isBook && !form.reference.trim()) { setError(t("referenceRequired")); return; }
     setBusy(true);
     try {
-      await updateProduct(productId, {
+      const updated = await updateProduct(productId, {
         name_fr: form.name_fr,
         name_ar: form.name_ar,
         category: form.category,
         tax_rate: form.tax_rate,
         sale_price: form.sale_price || "0",
         reorder_point: form.reorder_point || "0",
+        qty_on_hand: form.qty_on_hand === "" ? "0" : form.qty_on_hand,
         reference: form.reference.trim(),
         color: form.color,
         brand: form.brand,
         isbn: form.isbn.trim(),
       });
+      setForm((f) => ({ ...f, qty_on_hand: fmtQty(updated.qty_on_hand) }));
       setToast(t("productUpdated"));
       onSaved?.();
     } catch (e) {
@@ -110,9 +112,6 @@ export default function ProductEdit({ productId, onBack, onLogout, onSaved }) {
           <Paper sx={{ p: 2 }}>
             <Stack direction="row" spacing={1} sx={{ mb: 2 }} alignItems="center">
               <Chip size="small" label={isBook ? t("books") : t("furniture")} />
-              <Typography variant="body2" color="text.secondary">
-                {t("stock")}: {fmtQty(meta.qty_on_hand)}
-              </Typography>
             </Stack>
             <Stack spacing={2}>
               {isBook ? (
@@ -159,12 +158,17 @@ export default function ProductEdit({ productId, onBack, onLogout, onSaved }) {
                     </Select>
                   </FormControl>
                 </Grid>
-                <Grid item xs={6}>
+                <Grid item xs={4}>
                   <TextField label={`${t("price")} (DT)`} type="number" value={form.sale_price}
                              onChange={(e) => set("sale_price", e.target.value)} fullWidth
                              inputProps={{ min: 0, step: "0.001" }} />
                 </Grid>
-                <Grid item xs={6}>
+                <Grid item xs={4}>
+                  <TextField label={t("stock")} type="number" value={form.qty_on_hand}
+                             onChange={(e) => set("qty_on_hand", e.target.value)} fullWidth
+                             inputProps={{ min: 0, step: 1 }} />
+                </Grid>
+                <Grid item xs={4}>
                   <TextField label={t("reorderPoint")} type="number" value={form.reorder_point}
                              onChange={(e) => set("reorder_point", e.target.value)} fullWidth
                              inputProps={{ min: 0, step: 1 }} />
