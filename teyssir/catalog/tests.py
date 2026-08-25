@@ -801,6 +801,48 @@ class ProductUpdateDeleteApiTests(TestCase):
         self.assertEqual(r.json()["name_fr"], "Petit Prince (éd. Gallimard)")
         self.assertEqual(r.json()["isbn"], "9782070612758")
 
+    def test_patch_sets_stock_via_stocktake_ledger(self):
+        """Edit-article Stock field: absolute qty_on_hand → STOCKTAKE movement, not a cache-only write."""
+        from teyssir.inventory.models import StockMovement
+
+        furn_id = self.furn["id"]
+        self.assertEqual(Product.objects.get(pk=furn_id).qty_on_hand, 0)
+        r = self.client.patch(f"/api/v1/catalog/products/{furn_id}/detail", {
+            "qty_on_hand": "25", "name_fr": "Sac à dos",
+        }, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["qty_on_hand"], "25")
+        p = Product.objects.get(pk=furn_id)
+        self.assertEqual(p.qty_on_hand, 25)
+        mv = StockMovement.objects.get(product_id=furn_id, reason=StockMovement.STOCKTAKE)
+        self.assertEqual(mv.qty, 25)
+
+        # Increase again → another STOCKTAKE variance of +10
+        r2 = self.client.patch(f"/api/v1/catalog/products/{furn_id}/detail", {
+            "qty_on_hand": "35",
+        }, format="json")
+        self.assertEqual(r2.status_code, 200, r2.content)
+        self.assertEqual(r2.json()["qty_on_hand"], "35")
+        self.assertEqual(Product.objects.get(pk=furn_id).qty_on_hand, 35)
+        self.assertEqual(
+            StockMovement.objects.filter(product_id=furn_id, reason=StockMovement.STOCKTAKE).count(), 2
+        )
+
+    def test_patch_stock_works_for_books(self):
+        book_id = self.book["id"]
+        r = self.client.patch(f"/api/v1/catalog/products/{book_id}/detail", {
+            "qty_on_hand": "12",
+        }, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["qty_on_hand"], "12")
+        self.assertEqual(Product.objects.get(pk=book_id).qty_on_hand, 12)
+
+    def test_patch_stock_rejects_negative(self):
+        r = self.client.patch(f"/api/v1/catalog/products/{self.furn['id']}/detail", {
+            "qty_on_hand": "-1",
+        }, format="json")
+        self.assertEqual(r.status_code, 400)
+
     def test_patch_duplicate_reference_conflict(self):
         other = self.client.post("/api/v1/catalog/register", {
             "name_fr": "Autre", "reference": "OTHER-1",
