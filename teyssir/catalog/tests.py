@@ -85,6 +85,23 @@ class PriceAndLangTests(unittest.TestCase):
         )
         self.assertEqual(extract_price_dt("random 9.255 mush"), "")
         self.assertEqual(extract_price_dt("ISBN 9789973352743 34.900"), "")
+        # History CNP: barcode digit glued onto 4.900 → reject 34.900 / prefer labeled
+        self.assertEqual(
+            extract_price_dt("ME . 34,900 ppt\n3\n. , 14,9002 ,\n7 5"),
+            "",
+        )
+        self.assertEqual(
+            extract_price_dt("ثمن البيع للعموم 4,900 د.ت\n34,900"),
+            "4.900",
+        )
+        self.assertEqual(
+            extract_price_dt("نس نيم تعسرم 4,900\n19330282\n24,900"),
+            "4.900",
+        )
+        self.assertEqual(
+            extract_price_dt("6192302468921\n34.900"),
+            "",
+        )
 
     def test_detect_script_langs(self):
         from teyssir.catalog.bookscan.ocr import detect_script_langs
