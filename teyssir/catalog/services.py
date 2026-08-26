@@ -98,3 +98,77 @@ def create_product(*, name_fr, name_ar="", category_id=None, tax_rate_id=None, s
         from teyssir.purchasing.services import receive_goods   # rolls weighted-avg cost + ledger
         receive_goods(product_id=product.id, qty=qty, unit_cost=require_non_negative_money(cost or 0, label="cost"))
     return product
+
+
+@transaction.atomic
+def update_product(product, *, name_fr=None, name_ar=None, category_id=None, tax_rate_id=None,
+                   sale_price=None, reorder_point=None, reference=None, color=None, brand=None,
+                   isbn=None, clear_category=False, clear_tax_rate=False):
+    """Update catalogue fields for a book or furniture/supply product.
+
+    Stock qty is not edited here — ProductDetailView PATCH accepts ``qty_on_hand`` and
+    applies it via ``post_stocktake`` (ledger STOCKTAKE), same as inventory stocktake.
+    Furniture reference uniqueness is enforced; books keep ISBN on Product (+ Book row if any).
+    """
+    if name_fr is not None:
+        name_fr = (name_fr or "").strip()
+        if not name_fr:
+            raise ValueError("name_fr is required")
+        product.name_fr = name_fr
+    if name_ar is not None:
+        product.name_ar = (name_ar or "").strip()
+    if clear_category:
+        product.category_id = None
+    elif category_id is not None:
+        product.category_id = category_id or None
+    if clear_tax_rate:
+        product.tax_rate_id = None
+    elif tax_rate_id is not None:
+        product.tax_rate_id = tax_rate_id or None
+    if sale_price is not None and sale_price != "":
+        product.sale_price = require_non_negative_money(sale_price, label="sale_price")
+    if reorder_point is not None and reorder_point != "":
+        product.reorder_point = to_qty(reorder_point, label="reorder_point")
+    if color is not None:
+        product.color = (color or "").strip()
+    if brand is not None:
+        product.brand = (brand or "").strip()
+
+    is_book = product.is_book or product.product_type == Product.BOOK
+    if is_book:
+        if isbn is not None:
+            product.isbn = (isbn or "").strip()
+            book = getattr(product, "book", None)
+            if book is not None:
+                book.isbn13 = product.isbn
+                book.save(update_fields=["isbn13", "updated_at"])
+    elif reference is not None:
+        reference = normalize_reference(reference)
+        if not reference:
+            raise ValueError("La référence est obligatoire pour un article (fourniture).")
+        if not _REFERENCE_RE.match(reference):
+            raise ValueError(
+                "Référence invalide — utilisez des lettres, chiffres, ., _ ou - (ex. 1001, SAC-001)."
+            )
+        taken = (
+            Product.objects.filter(Q(reference__iexact=reference) | Q(sku__iexact=reference))
+            .exclude(pk=product.pk)
+            .exists()
+        )
+        if taken:
+            raise ValueError(f"La référence « {reference} » existe déjà.")
+        product.reference = reference
+        product.sku = reference
+
+    product.save()
+    return product
+
+
+@transaction.atomic
+def deactivate_product(product):
+    """Soft-delete: hide from catalogue / POS search. Hard delete is unsafe (sales PROTECT)."""
+    if not product.active:
+        return product
+    product.active = False
+    product.save(update_fields=["active", "updated_at"])
+    return product

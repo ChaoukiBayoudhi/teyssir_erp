@@ -18,12 +18,14 @@ import Quotation from "./pages/Quotation.jsx";
 import PurchaseOrders from "./pages/PurchaseOrders.jsx";
 import Catalog from "./pages/Catalog.jsx";
 import ProductCreate from "./pages/ProductCreate.jsx";
+import ProductEdit from "./pages/ProductEdit.jsx";
 import PdfConvert from "./pages/PdfConvert.jsx";
 
 export default function App() {
   const { i18n } = useTranslation();
   const [authed, setAuthed] = useState(Boolean(getToken()));
   const [view, setView] = useState("pos");
+  const [editProductId, setEditProductId] = useState(null);
   const dir = i18n.language === "ar" ? "rtl" : "ltr";
 
   useEffect(() => {
@@ -69,10 +71,14 @@ export default function App() {
           <PurchaseOrders onBack={() => setView("pos")} onLogout={logout} />
         ) : view === "catalog" ? (
           <Catalog onBack={() => setView("pos")} onLogout={logout}
-                   onNewProduct={() => setView("newProduct")} />
+                   onNewProduct={() => setView("newProduct")}
+                   onEditProduct={(id) => { setEditProductId(id); setView("editProduct"); }} />
         ) : view === "newProduct" ? (
           <ProductCreate onBack={() => setView("pos")} onLogout={logout}
                          onNewBook={() => setView("book")} />
+        ) : view === "editProduct" && editProductId ? (
+          <ProductEdit productId={editProductId} onLogout={logout}
+                       onBack={() => { setEditProductId(null); setView("catalog"); }} />
         ) : view === "pdfConvert" ? (
           <PdfConvert onBack={() => setView("pos")} onLogout={logout} />
         ) : (
