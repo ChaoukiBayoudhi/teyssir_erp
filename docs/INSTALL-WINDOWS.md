@@ -107,11 +107,9 @@ Dans la suite, **« le dossier du projet »** désigne ce dossier (ex. `C:\Teyss
    .\deploy\windows\install.ps1 -Role hub -AdminUser owner -AdminPassword "UnMotDePasseFort"
    ```
 
-6. Démarrez le serveur :
-   ```
-   deploy\windows\start-teyssir.bat
-   ```
-   Laissez **cette fenêtre ouverte**. Ouvrez ensuite le navigateur sur **<http://localhost:8000>**.
+6. Le backend est enregistré comme **service Windows** `TeyssirBackend` (démarrage automatique, sans fenêtre).
+   Un raccourci **Teyssir ERP** est posé sur le Bureau.
+   Ouvrez-le : le navigateur par défaut charge **<http://localhost:8000>**.
    Contrôle : **<http://localhost:8000/health/>** doit répondre `ok`.
 
 > Le Hub est prêt. Notez le **nom du PC Hub** (voir §6) — les caisses en auront besoin.
@@ -131,11 +129,8 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 - **`-HubUrl`** : l'adresse du Hub (voir §6). Utilisez le **nom** (`teyssir-hub.local`) ou l'**IP** (ex. `http://192.168.1.10:8000`).
 - **`-SyncKey`** : **exactement** la clé affichée par le Hub à l'étape 4.3.
 
-Créez un compte utilisateur (caissier) quand c'est demandé (sauté si un admin existe déjà), puis démarrez :
-```
-deploy\windows\start-teyssir.bat
-```
-Ouvrez **<http://localhost:8000>** sur la caisse et connectez-vous.
+Créez un compte utilisateur (caissier) quand c'est demandé (sauté si un admin existe déjà).
+Le raccourci **Teyssir ERP** est créé sur le Bureau ; le service `TeyssirBackend` démarre tout seul.
 
 > Répétez pour C2 et C3. **PostgreSQL n'est jamais installé sur une caisse** — uniquement SQLite (mode hors-ligne).
 > Si vous avez oublié `-SyncKey`, relancez la **même** commande avec la clé du Hub : le script met à jour `.env`.
@@ -168,33 +163,51 @@ navigateur — vous devez voir une réponse « ok ».
 
 ---
 
-## 7. Démarrage automatique + synchronisation planifiée
+## 7. Auto-start & Desktop Shortcut
 
-Pour que Teyssir démarre tout seul et que les caisses se synchronisent régulièrement, lancez
-(PowerShell administrateur, dans le dossier du projet) :
+Après `install.ps1` (PowerShell **administrateur**) :
 
-- Sur le **Hub** :
-  ```powershell
-  .\deploy\windows\register-autostart.ps1 -Role hub
-  ```
-- Sur chaque **caisse** :
-  ```powershell
-  .\deploy\windows\register-autostart.ps1 -Role till -SyncMinutes 5
-  ```
+* Le backend tourne comme service Windows **`TeyssirBackend`** (NSSM + waitress) :
+  * démarrage **automatique différé** au boot (sans terminal) ;
+  * **redémarrage automatique** en cas de plantage ;
+  * journaux dans `logs\teyssir-backend-stdout.log` et `logs\teyssir-backend-stderr.log`.
+* Un raccourci Bureau **« Teyssir ERP »** (icône Teyssir) ouvre le navigateur par défaut sur
+  `http://localhost:8000` dès que `/health/` répond.
+* Les caisses enregistrent aussi la tâche **Teyssir Sync** (toutes les 5 min). Les ventes restent
+  locales d'abord ; la sync ne fait que réconcilier avec le Hub.
 
-Cela crée des tâches planifiées Windows : **« Teyssir Server »** (démarrage à l'ouverture de
-session) et, sur les caisses, **« Teyssir Sync »** (toutes les 5 min). Les ventes sont **toujours**
-enregistrées localement d'abord ; la sync ne fait que réconcilier avec le Hub.
+Vérifier le service :
+```powershell
+Get-Service TeyssirBackend
+sc.exe qc TeyssirBackend
+```
+
+Repli si le service n'a pas pu s'installer : `deploy\windows\start-teyssir.bat` (fenêtre à laisser ouverte).
+Ne lancez **pas** le `.bat` en même temps que le service — le port **8000** ne peut servir qu'une fois.
+
+Désinstaller service + raccourcis (sans supprimer les données) :
+```powershell
+.\deploy\windows\uninstall.ps1
+```
+
+La tâche planifiée « Teyssir Server » (ancienne méthode, à l'ouverture de session) n'est **pas**
+créée si le service existe — pas de double serveur.
+
+Options : `-SkipService`, `-SkipShortcut`. Repli manuel :
+```powershell
+.\deploy\windows\Install-WindowsService.ps1
+.\deploy\windows\Install-DesktopShortcut.ps1
+.\deploy\windows\register-autostart.ps1 -Role till -SyncMinutes 5
+```
 
 ---
 
 ## 8. Utilisation quotidienne
 
-1. Allumez le **Hub** en premier, puis les caisses.
-2. Sur chaque PC, Teyssir démarre tout seul (ou double-cliquez `start-teyssir.bat`).
-3. Ouvrez le navigateur sur **<http://localhost:8000>** et connectez-vous.
-4. L'appli peut être **installée** comme une application (Chrome/Edge : icône « Installer » dans la
-   barre d'adresse) pour un lancement plein écran.
+1. Allumez le **Hub** en premier, puis les caisses (le service démarre tout seul).
+2. Double-cliquez **Teyssir ERP** sur le Bureau (ou le menu Démarrer).
+3. Connectez-vous dans le navigateur. L'appli peut être **installée** comme PWA
+   (Chrome/Edge : icône « Installer » dans la barre d'adresse).
 
 ---
 
@@ -230,8 +243,10 @@ suffit pour l'essentiel des données de gestion.
 | `-AdminUser` / `-AdminPassword` | Admin sans invite |
 | `-SkipAdmin` | Ne pas créer d'utilisateur |
 | `-SkipBuild` | Ne pas lancer `npm` |
-| `-RegisterAutostart` | Tâches planifiées (serveur + sync caisse) |
+| `-RegisterAutostart` | Force aussi la tâche « Teyssir Server » (inutile si le service est OK) |
 | `-SkipFirewall` | Ne pas ouvrir le port 8000 |
+| `-SkipService` | Ne pas installer le service Windows |
+| `-SkipShortcut` | Ne pas créer le raccourci Bureau |
 
 </details>
 
@@ -340,7 +355,7 @@ et consultez le tableau **« Multi-magasins »** pour la consolidation.
 | La caisse n'atteint pas le Hub | Vérifiez `http://teyssir-hub.local:8000/health/`, le pare-feu (§6), l'IP/nom, et que le Hub tourne. Relancez l'install Hub **en administrateur**. |
 | « Bad Request (400) » | Ajoutez le nom/IP du PC dans `TEYSSIR_ALLOWED_HOSTS` du `.env`, relancez. |
 | `frontend\dist` manquant | Buildez l'appli sur un PC avec Node (`cd frontend & npm ci & npm run build`) et copiez `frontend\dist`. |
-| Port 8000 déjà utilisé | Éditez `set PORT=8000` dans `start-teyssir.bat` (ex. `8080`). |
+| Port 8000 déjà utilisé | Arrêtez l'autre Teyssir (`nssm stop TeyssirBackend` ou fermez `start-teyssir.bat`). Ou changez `PORT` dans le service / le `.bat`. |
 | La clé de sync ne correspond pas | La caisse et le Hub doivent avoir **exactement** la même `TEYSSIR_SYNC_KEY`. Relancez la caisse avec `-SyncKey`. |
 | Relancer `install.ps1` | Normal et **sûr** : venv réutilisé, `.env` conservé, `migrate` idempotent, admin non recréé. |
 
@@ -348,11 +363,14 @@ et consultez le tableau **« Multi-magasins »** pour la consolidation.
 
 ## 12. Désinstaller
 
-Arrêtez le serveur (fermez la fenêtre), supprimez les tâches planifiées dans **Task Scheduler**
-(« Teyssir Server », « Teyssir Sync »), puis supprimez le dossier du projet. **Sauvegardez d'abord**
-la base Hub (`pg_dump` ou `teyssir_hub.sqlite3`) et `media\` si vous voulez garder les données.
+```powershell
+.\deploy\windows\uninstall.ps1
+```
+Cela arrête et **supprime** le service `TeyssirBackend`, le raccourci Bureau, et les tâches
+planifiées. **Sauvegardez d'abord** la base Hub (`pg_dump` ou `teyssir_hub.sqlite3`) et `media\`.
+Ensuite vous pouvez supprimer le dossier du projet.
 
-Rapport de validation installateur / docs : [INSTALLATION-QA.md](INSTALLATION-QA.md).
+Rapport de validation : [INSTALLATION-QA.md](INSTALLATION-QA.md).
 
 ---
 

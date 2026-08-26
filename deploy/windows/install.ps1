@@ -13,6 +13,7 @@
     Hub: PostgreSQL when possible (SQLite fallback — never abort).
     Till: SQLite only (PostgreSQL is never installed).
     Local Ollama is optional; a failure there never aborts the ERP install.
+    Registers Windows service TeyssirBackend (NSSM + waitress, auto-start) and a Desktop shortcut.
 #>
 [CmdletBinding()]
 param(
@@ -30,7 +31,9 @@ param(
     [string]$AdminPassword = "",
     [switch]$SkipAdmin,
     [switch]$RegisterAutostart,
-    [switch]$SkipFirewall
+    [switch]$SkipFirewall,
+    [switch]$SkipService,
+    [switch]$SkipShortcut
 )
 
 $ErrorActionPreference = "Stop"
@@ -436,11 +439,56 @@ if ($RegisterAutostart) {
         Write-Warning ("Autostart registration skipped: " + $_.Exception.Message)
     }
 }
+elseif ($Role -eq "till") {
+    $reg = Join-Path $PSScriptRoot "register-autostart.ps1"
+    try {
+        & $reg -Role till
+    }
+    catch {
+        Write-Warning ("Till sync schedule skipped: " + $_.Exception.Message)
+    }
+}
+
+$global:TeyssirServiceReady = $false
+if (-not $SkipService) {
+    Write-Host "Registering Windows service TeyssirBackend ..."
+    $svcScript = Join-Path $PSScriptRoot "Install-WindowsService.ps1"
+    try {
+        & $svcScript
+    }
+    catch {
+        Write-Warning ("Windows service skipped: " + $_.Exception.Message)
+    }
+}
+else {
+    Write-Host "Skipping Windows service (-SkipService)."
+}
+
+$global:TeyssirShortcutReady = $false
+if (-not $SkipShortcut) {
+    Write-Host "Creating desktop shortcut ..."
+    $scScript = Join-Path $PSScriptRoot "Install-DesktopShortcut.ps1"
+    try {
+        & $scScript
+    }
+    catch {
+        Write-Warning ("Desktop shortcut skipped: " + $_.Exception.Message)
+    }
+}
+else {
+    Write-Host "Skipping desktop shortcut (-SkipShortcut)."
+}
 
 Write-Host ""
 Write-Host "==== Installation complete ====" -ForegroundColor Green
-Write-Host "Start Teyssir with:  deploy\windows\start-teyssir.bat"
-Write-Host "Then open:           http://localhost:8000"
+if ($global:TeyssirServiceReady) {
+    Write-Host "Backend:              Windows service TeyssirBackend (automatic at boot, no terminal)"
+    Write-Host "Open Teyssir:         double-click the Desktop icon  « Teyssir ERP »"
+}
+else {
+    Write-Host "Start Teyssir with:  deploy\windows\start-teyssir.bat"
+    Write-Host "Then open:           http://localhost:8000"
+}
 Write-Host "Health check:        http://localhost:8000/health/"
 if ($global:TeyssirLlmReady) {
     $modelNote = $LlmModel
@@ -459,11 +507,11 @@ if ($Role -eq "hub") {
     else {
         Write-Host "Hub database:        SQLite fallback  (teyssir_hub.sqlite3 — see docs/POSTGRESQL-SETUP.md)"
     }
-    Write-Host "Next (recommended):  .\deploy\windows\register-autostart.ps1 -Role hub"
+    Write-Host "Next:                Desktop icon « Teyssir ERP »  ·  uninstall: deploy\windows\uninstall.ps1"
 }
 else {
     Write-Host "Till database:       SQLite  (offline)"
     Write-Host ("Till terminal:       " + $Terminal)
     Write-Host ("Hub URL:             " + (Get-DotEnvValue $envPath "TEYSSIR_HUB_URL"))
-    Write-Host "Next (recommended):  .\deploy\windows\register-autostart.ps1 -Role till -SyncMinutes 5"
+    Write-Host "Next:                Desktop icon « Teyssir ERP »  ·  uninstall: deploy\windows\uninstall.ps1"
 }

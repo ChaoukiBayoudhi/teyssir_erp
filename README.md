@@ -34,13 +34,14 @@ sync** (till → store-hub → cloud-hub) with **multi-store consolidation**. 75
 ## Deploy for the client (Windows)
 
 One PC Hub + up to 3 tills, each serving the PWA + API on a single port (WhiteNoise + waitress).
-Full guide: **[docs/INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md)** · kit: [deploy/windows/](deploy/windows/).
+**Works like a desktop app** on Windows: the backend is a boot-time service (`TeyssirBackend`) and a
+**Teyssir ERP** desktop shortcut opens the UI. Full guide: **[docs/INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md)** · kit: [deploy/windows/](deploy/windows/).
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force
 .\deploy\windows\install.ps1 -Role hub          # note the printed SYNC KEY
 .\deploy\windows\install.ps1 -Role till -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey <hub-key>
-.\deploy\windows\start-teyssir.bat              # then open http://localhost:8000
+# Then double-click  Teyssir ERP  on the Desktop  (http://localhost:8000)
 ```
 
 Hub install (elevated PowerShell recommended) auto-detects/installs **Python 3.12** if missing, creates `.venv`, installs PostgreSQL when possible (SQLite fallback), and seeds RBAC/fiscal data. Tills never install PostgreSQL. The script is **safe to re-run**. Full QA notes: [docs/INSTALLATION-QA.md](docs/INSTALLATION-QA.md).
