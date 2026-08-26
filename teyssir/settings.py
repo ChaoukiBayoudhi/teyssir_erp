@@ -215,6 +215,10 @@ VISION_MODEL = os.environ.get("TEYSSIR_VISION_MODEL", "qwen2.5vl:3b")
 VISION_TIMEOUT = int(os.environ.get("TEYSSIR_VISION_TIMEOUT", "120"))
 # Scan execution: inline (sync, default) | thread (background, so slow OCR doesn't block the request)
 SCAN_EXECUTOR = os.environ.get("TEYSSIR_SCAN_EXECUTOR", "inline")
+# PDF→Word: thread by default on Windows Hub (long converts must not block waitress); inline elsewhere/tests.
+import sys as _sys
+_CONVERT_DEFAULT = "thread" if _sys.platform == "win32" else "inline"
+CONVERT_EXECUTOR = os.environ.get("TEYSSIR_CONVERT_EXECUTOR", _CONVERT_DEFAULT)
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
