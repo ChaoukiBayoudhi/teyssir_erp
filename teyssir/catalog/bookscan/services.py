@@ -45,7 +45,10 @@ def create_book_from_draft(*, data, image_ids=(), sale_price="0", origin_termina
     sku = (data.get("sku") or isbn13 or f"BK-{uuid.uuid4().hex[:10]}").strip()
     product = Product.objects.create(
         sku=sku, name_fr=data.get("title", ""), name_ar=data.get("title_ar", ""),
-        is_book=True, isbn=isbn13, sale_price=to_money(sale_price or 0),
+        product_type=Product.BOOK, is_book=True, isbn=isbn13,
+        sale_price=require_non_negative_money(sale_price or 0, label="sale_price"),
+        tax_rate_id=tax_rate_id or None,
+        category_id=category_id or None,
         origin_terminal=origin_terminal,
     )
     book = Book.objects.create(

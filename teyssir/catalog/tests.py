@@ -207,10 +207,63 @@ class ProductRegisterApiTests(TestCase):
         self.assertEqual(r.status_code, 409)
 
     def test_register_without_barcode_generates_sku(self):
-        r = self.client.post("/api/v1/catalog/register", {"name_fr": "Article sans code"},
-                             format="json")
+        r = self.client.post("/api/v1/catalog/register", {
+            "name_fr": "Article sans code", "reference": "ART-MANUEL-1",
+        }, format="json")
         self.assertEqual(r.status_code, 201)
-        self.assertTrue(r.json()["sku"].startswith("ART-"))
+        self.assertEqual(r.json()["sku"], "ART-MANUEL-1")
+        self.assertEqual(r.json()["reference"], "ART-MANUEL-1")
+
+    def test_furniture_requires_reference(self):
+        r = self.client.post("/api/v1/catalog/register", {"name_fr": "Sac"}, format="json")
+        self.assertEqual(r.status_code, 400)
+
+    def test_furniture_creation_with_reference(self):
+        r = self.client.post("/api/v1/catalog/register", {
+            "name_fr": "Sac à dos", "reference": "1001", "color": "Blue", "brand": "HP",
+            "sale_price": "45.000", "initial_qty": "8", "product_type": "furniture",
+        }, format="json")
+        self.assertEqual(r.status_code, 201)
+        body = r.json()
+        self.assertEqual(body["reference"], "1001")
+        self.assertEqual(body["product_type"], "furniture")
+        p = Product.objects.get(id=body["id"])
+        self.assertFalse(p.is_book)
+        self.assertEqual(p.color, "Blue")
+        self.assertEqual(p.brand, "HP")
+        self.assertEqual(p.qty_on_hand, 8)
+        self.assertEqual(str(p.sale_price), "45.000")
+
+    def test_duplicate_reference_is_rejected(self):
+        self.client.post("/api/v1/catalog/register",
+                         {"name_fr": "A", "reference": "SAC-001"}, format="json")
+        r = self.client.post("/api/v1/catalog/register",
+                             {"name_fr": "B", "reference": "sac-001"}, format="json")
+        self.assertEqual(r.status_code, 409)
+
+    def test_pos_search_by_reference_and_barcode(self):
+        created = self.client.post("/api/v1/catalog/register", {
+            "name_fr": "Trousse", "reference": "TZ-9", "barcode": "6190000000001",
+            "sale_price": "3.500",
+        }, format="json").json()
+        by_ref = self.client.get("/api/v1/catalog/products/", {"barcode": "TZ-9"})
+        self.assertEqual(by_ref.status_code, 200)
+        self.assertEqual(len(by_ref.json()), 1)
+        self.assertEqual(by_ref.json()[0]["id"], created["id"])
+        search = self.client.get("/api/v1/catalog/products/", {"search": "TZ-9"})
+        self.assertEqual(search.json()[0]["name_fr"], "Trousse")
+        by_bc = self.client.get("/api/v1/catalog/products/", {"barcode": "6190000000001"})
+        self.assertEqual(by_bc.json()[0]["id"], created["id"])
+        lookup = self.client.get("/api/v1/catalog/lookup", {"barcode": "TZ-9"})
+        self.assertTrue(lookup.json()["found"])
+
+    def test_alphanumeric_and_numeric_references(self):
+        a = self.client.post("/api/v1/catalog/register",
+                             {"name_fr": "Sac", "reference": "1001"}, format="json")
+        b = self.client.post("/api/v1/catalog/register",
+                             {"name_fr": "Sac HP", "reference": "SAC-001"}, format="json")
+        self.assertEqual(a.status_code, 201)
+        self.assertEqual(b.status_code, 201)
 
 
 @override_settings(OCR_PROVIDER="vision")
