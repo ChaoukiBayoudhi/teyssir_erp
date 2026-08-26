@@ -852,6 +852,63 @@ class TitleSearchGatingTests(unittest.TestCase):
         )
         self.assertTrue(_should_try_vision(weak_ar, P()))
 
+    def test_should_try_vision_skips_strong_barcode_title(self):
+        """Phase 2E: barcode ISBN + usable title must not call Vision."""
+        from teyssir.catalog.bookscan.services import _should_try_vision
+        class P:
+            name = "tesseract"
+        strong = BookDraft(
+            title="Le Petit Prince", isbn13="9782070612758",
+            source="tesseract", confidence=0.7,
+            raw={
+                "isbn_from_barcode": True,
+                "barcode_detected": True,
+                "ocr_mean_confidence": 70,
+            },
+        )
+        self.assertFalse(_should_try_vision(strong, P()))
+        cnp_title = BookDraft(
+            title="Mathematique 6eme", barcode_raw="6191234567890",
+            source="tesseract", confidence=0.6,
+            raw={
+                "barcode_detected": True,
+                "barcode_non_isbn": True,
+                "ocr_mean_confidence": 65,
+            },
+        )
+        self.assertFalse(_should_try_vision(cnp_title, P()))
+
+    def test_should_try_vision_on_phone_photo_no_barcode(self):
+        """Missing barcode + unusable title (phone cover) -> Vision."""
+        from teyssir.catalog.bookscan.services import _should_try_vision
+        class P:
+            name = "tesseract"
+        phone = BookDraft(
+            title="", source="tesseract", confidence=0.2,
+            raw={"isbn_not_detected": True, "ocr_mean_confidence": 28},
+        )
+        self.assertTrue(_should_try_vision(phone, P()))
+        garb = BookDraft(
+            title="wis! Boot ay", source="tesseract", confidence=0.25,
+            raw={"ocr_garbage_latin": True, "ocr_mean_confidence": 30},
+        )
+        self.assertTrue(_should_try_vision(garb, P()))
+
+    def test_vision_rejects_invented_isbn_without_checksum(self):
+        """Vision must never keep an ISBN that fails check digit."""
+        from teyssir.catalog.bookscan.ocr import _draft_from_vision_json
+        from teyssir.catalog.bookscan.services import _sanitize_vision_isbn
+
+        bad = _draft_from_vision_json(
+            '{"title": "Fake Book", "isbn13": "9781234567890", "authors": []}'
+        )
+        self.assertEqual(bad.isbn13, "")
+        self.assertTrue(bad.raw.get("rejected_isbn") or bad.raw.get("isbn_not_detected"))
+        drafted = BookDraft(title="X", isbn13="9781234567890", source="vision", raw={})
+        cleaned = _sanitize_vision_isbn(drafted)
+        self.assertEqual(cleaned.isbn13, "")
+        self.assertTrue(cleaned.raw.get("vision_isbn_rejected"))
+
     def test_scan_isbn_metadata_raises_confidence(self):
         """Barcode/ISBN hint + OpenLibrary must present high confidence, not 35%."""
         from unittest.mock import patch

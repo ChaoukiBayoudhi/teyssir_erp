@@ -213,6 +213,8 @@ Deux moteurs **gratuits** sont disponibles :
   (<https://ollama.com>), puis `ollama pull qwen2.5vl:3b`, et dans `.env` :
   `TEYSSIR_OCR_PROVIDER=vision` et `TEYSSIR_SCAN_EXECUTOR=thread`.
 
+- **Vision fallback (2E)** : avec `TEYSSIR_OCR_PROVIDER=tesseract`, Ollama Vision ne tourne que si le titre/barcode Tess est faible (calligraphie arabe, photo téléphone sans code-barres, titre « garbage »). ISBN Vision refusé sans checksum. Voir `docs/LOCAL-AI.md` (Vision fallback gate).
+
 Sans configuration, la saisie du livre reste **manuelle** (aucune erreur, juste pas d'auto-remplissage).
 </details>
 

@@ -246,6 +246,8 @@ VISION_MODEL = os.environ.get("TEYSSIR_VISION_MODEL", "qwen2.5vl:3b")
 VISION_TIMEOUT = int(os.environ.get("TEYSSIR_VISION_TIMEOUT", "45"))
 # Shorter timeout when vision is only a Tesseract fallback (skip if Ollama is slow/down).
 VISION_FALLBACK_TIMEOUT = float(os.environ.get("TEYSSIR_VISION_FALLBACK_TIMEOUT", "28"))
+# Max image edge (px) before base64→Ollama; phone photos are huge and starve the timeout budget.
+VISION_IMAGE_MAX_EDGE = int(os.environ.get("TEYSSIR_VISION_IMAGE_MAX_EDGE", "1280"))
 # Optional text LLM (Ollama). ERP must run when this is false or Ollama is down.
 USE_LLM = os.environ.get("USE_LLM", os.environ.get("TEYSSIR_USE_LLM", "false")).strip().lower() in (
     "1", "true", "yes", "on",
