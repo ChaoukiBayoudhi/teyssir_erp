@@ -22,9 +22,9 @@ class GeneralLedgerTests(TestCase):
         self.product = Product.objects.create(
             sku="PEN", name_fr="Stylo", tax_rate=tva7, sale_price=Decimal("0.850"),
         )
-        receive_goods(product_id=self.product.id, qty=Decimal("100"), unit_cost=Decimal("0.400"))
+        receive_goods(product_id=self.product.id, qty=100, unit_cost=Decimal("0.400"))
         sale = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
-        SaleLine.objects.create(sale=sale, product=self.product, qty=Decimal("3"),
+        SaleLine.objects.create(sale=sale, product=self.product, qty=3,
                                 unit_price=Decimal("0.850"), tax_rate=Decimal("7.00"))
         finalize_sale(sale, payment_method="CASH")
         self.sale = sale
@@ -58,9 +58,13 @@ class GeneralLedgerTests(TestCase):
         from teyssir.purchasing.models import Supplier
         from teyssir.purchasing.services import receive_direct
 
+        from teyssir.customers.services import charge_account
+
         receive_direct(supplier=Supplier.objects.create(name="Sup"),
                        items=[{"product_id": self.product.id, "qty": "50", "unit_cost": "0.400"}])
-        post_payment(Customer.objects.create(name="Cust"), Decimal("5.000"))
+        cust = Customer.objects.create(name="Cust")
+        charge_account(cust, Decimal("5.000"), "SALE", "setup")
+        post_payment(cust, Decimal("5.000"))
 
         counts = post_all_to_gl()
         self.assertEqual(counts, {
@@ -113,7 +117,7 @@ class GeneralLedgerTests(TestCase):
     def test_sale_without_payment_is_skipped_by_batch(self):
         from teyssir.ledger.services import post_sales_to_gl
         orphan = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
-        SaleLine.objects.create(sale=orphan, product=self.product, qty=Decimal("1"),
+        SaleLine.objects.create(sale=orphan, product=self.product, qty=1,
                                 unit_price=Decimal("0.850"), tax_rate=Decimal("7.00"))
         finalize_sale(orphan)  # no payment_method
         # Batch must not raise; only the paid self.sale posts (already posted in other tests = 0 new)

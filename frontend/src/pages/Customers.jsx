@@ -57,8 +57,18 @@ export default function Customers({ onBack, onLogout }) {
   const pay = async () => {
     if (!selected || !payAmount) return;
     setError("");
+    const amount = Number(payAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setError(t("amountMustBePositive"));
+      return;
+    }
+    const owed = Number(selected.balance);
+    if (Number.isFinite(owed) && amount > owed + 1e-9) {
+      setError(t("paymentExceedsBalance", { balance: selected.balance }));
+      return;
+    }
     try {
-      await customerPayment(selected.id, payAmount);
+      await customerPayment(selected.id, String(payAmount));
       setPayAmount("");
       await load();
       const fresh = (await listCustomers()).find((x) => x.id === selected.id);
@@ -99,8 +109,9 @@ export default function Customers({ onBack, onLogout }) {
                 {customers.map((c) => (
                   <ListItemButton key={c.id} selected={selected?.id === c.id} onClick={() => open(c)}>
                     <ListItemText primary={c.name} secondary={c.phone} />
-                    <Chip size="small" color={Number(c.balance) > 0 ? "warning" : "default"}
-                          label={`${c.balance} DT`} />
+                    <Chip size="small"
+                          color={Number(c.balance) > 0 ? "warning" : Number(c.balance) < 0 ? "info" : "default"}
+                          label={`${Number(c.balance) < 0 ? t("credit") + " " : ""}${Math.abs(Number(c.balance)).toFixed(3)} DT`} />
                   </ListItemButton>
                 ))}
               </List>
@@ -112,8 +123,13 @@ export default function Customers({ onBack, onLogout }) {
               <Paper sx={{ p: 2 }}>
                 <Stack direction="row" justifyContent="space-between" alignItems="baseline">
                   <Typography variant="h6">{selected.name}</Typography>
-                  <Typography variant="h6" color={Number(selected.balance) > 0 ? "warning.main" : "text.secondary"}>
-                    {t("balance")}: {selected.balance} DT
+                  <Typography variant="h6" color={
+                    Number(selected.balance) > 0 ? "warning.main"
+                      : Number(selected.balance) < 0 ? "info.main" : "text.secondary"
+                  }>
+                    {Number(selected.balance) < 0
+                      ? `${t("credit")}: ${Math.abs(Number(selected.balance)).toFixed(3)} DT`
+                      : `${t("balance")}: ${selected.balance} DT`}
                   </Typography>
                 </Stack>
                 <Divider sx={{ my: 1.5 }} />
@@ -145,8 +161,11 @@ export default function Customers({ onBack, onLogout }) {
 
                 <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
                   <TextField size="small" type="number" label={t("amount")} value={payAmount}
-                             onChange={(e) => setPayAmount(e.target.value)} />
-                  <Button variant="contained" onClick={pay} disabled={!payAmount}>
+                             onChange={(e) => setPayAmount(e.target.value)}
+                             inputProps={{ min: 0.001, step: "0.001" }} />
+                  <Button variant="contained" onClick={pay}
+                          disabled={!payAmount || Number(payAmount) <= 0
+                            || Number(selected.balance) <= 0}>
                     {t("recordPayment")}
                   </Button>
                 </Stack>

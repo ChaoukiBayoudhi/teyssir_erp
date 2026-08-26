@@ -6,6 +6,7 @@ from django.db import transaction
 
 from teyssir.catalog.models import Product
 from teyssir.core.money import to_money
+from teyssir.core.qty import to_qty
 from teyssir.inventory.models import StockMovement
 from teyssir.inventory.services import apply_movement
 
@@ -22,10 +23,10 @@ def receive_goods(*, product_id, qty, unit_cost, supplier=None, ref_id=""):
 
     Returns the product's updated cost_avg and qty_on_hand.
     """
-    qty = Decimal(qty)
+    qty = to_qty(qty, allow_negative=False)
     unit_cost = to_money(unit_cost)
     product = Product.objects.select_for_update().get(pk=product_id)
-    old_qty = product.qty_on_hand or Decimal("0")
+    old_qty = int(product.qty_on_hand or 0)
     old_avg = product.cost_avg or Decimal("0")
     total_qty = old_qty + qty
     new_avg = to_money((old_qty * old_avg + qty * unit_cost) / total_qty) if total_qty > 0 else unit_cost
@@ -49,7 +50,7 @@ def create_po(*, supplier, items, terminal="", created_by=None, status=PurchaseO
     )
     for it in items:
         PurchaseOrderLine.objects.create(
-            po=po, product_id=it["product_id"], qty_ordered=Decimal(str(it["qty"])),
+            po=po, product_id=it["product_id"], qty_ordered=to_qty(it["qty"]),
             unit_cost=to_money(it["unit_cost"]), origin_terminal=terminal,
         )
     return po
@@ -73,7 +74,7 @@ def receive_po(*, po, items=None, terminal=""):
             for ln in po.lines.all() if (ln.qty_ordered - ln.qty_received) > 0
         ]
     for it in items:
-        qty = Decimal(str(it["qty"]))
+        qty = to_qty(it["qty"])
         if qty <= 0:
             continue
         cost = to_money(it["unit_cost"])
@@ -84,7 +85,7 @@ def receive_po(*, po, items=None, terminal=""):
                       supplier=po.supplier, ref_id=str(gr.id))
         line = po.lines.filter(product_id=it["product_id"]).first()
         if line:
-            line.qty_received = (line.qty_received or Decimal("0")) + qty
+            line.qty_received = int(line.qty_received or 0) + qty
             line.save(update_fields=["qty_received"])
 
     fully = all((ln.qty_received or 0) >= ln.qty_ordered for ln in po.lines.all())

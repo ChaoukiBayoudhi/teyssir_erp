@@ -8,11 +8,12 @@ import { useTranslation } from "react-i18next";
 import { catalogSearch, productDetail, listCategories } from "../api";
 import ImageViewer from "../components/ImageViewer.jsx";
 import LangToggle from "../LangToggle.jsx";
+import { fmtQty } from "../format.js";
 
 function StockChip({ row, t }) {
   if (row.out_of_stock) return <Chip size="small" color="error" label={t("outOfStock")} />;
-  if (row.low_stock) return <Chip size="small" color="warning" label={`${t("lowStock")} · ${row.qty_on_hand}`} />;
-  return <Chip size="small" color="success" variant="outlined" label={row.qty_on_hand} />;
+  if (row.low_stock) return <Chip size="small" color="warning" label={`${t("lowStock")} · ${fmtQty(row.qty_on_hand)}`} />;
+  return <Chip size="small" color="success" variant="outlined" label={fmtQty(row.qty_on_hand)} />;
 }
 
 export default function Catalog({ onBack, onLogout, onNewProduct }) {
@@ -165,7 +166,7 @@ export default function Catalog({ onBack, onLogout, onNewProduct }) {
                   <Info label={t("sku")} value={detail.sku} />
                   <Info label={t("category")} value={detail.category} />
                   <Info label={t("price")} value={`${detail.sale_price} · TVA ${detail.tax_rate_percent}%`} />
-                  <Info label={t("stock")} value={`${detail.qty_on_hand} (${t("lowStock")} ≤ ${detail.reorder_point})`} />
+                  <Info label={t("stock")} value={`${fmtQty(detail.qty_on_hand)} (${t("lowStock")} ≤ ${fmtQty(detail.reorder_point)})`} />
                   {detail.barcodes?.length > 0 && (
                     <Info label={t("barcodes")} value={detail.barcodes.map((b) => b.value).join(", ")} />
                   )}

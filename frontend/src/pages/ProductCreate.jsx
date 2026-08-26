@@ -6,6 +6,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { barcodeLookup, createProduct, listCategories, listTaxRates } from "../api";
 import LangToggle from "../LangToggle.jsx";
+import { fmtQty } from "../format.js";
 
 const EMPTY = { name_fr: "", name_ar: "", category: "", tax_rate: "", sale_price: "",
                 initial_qty: "", reorder_point: "" };
@@ -121,7 +122,7 @@ export default function ProductCreate({ onBack, onLogout }) {
           </Box>
           {existing && (
             <Alert severity="info" sx={{ mt: 1 }}>
-              {t("alreadyExists")} : <b>{existing.name_fr}</b> — {existing.sale_price} · {t("stock")} {existing.qty_on_hand}
+              {t("alreadyExists")} : <b>{existing.name_fr}</b> — {existing.sale_price} · {t("stock")} {fmtQty(existing.qty_on_hand)}
             </Alert>
           )}
         </Paper>
@@ -156,9 +157,9 @@ export default function ProductCreate({ onBack, onLogout }) {
                     </Select>
                   </FormControl>
                 </Grid>
-                <Grid item xs={4}><TextField label={t("price")} type="number" value={form.sale_price} onChange={(e) => set("sale_price", e.target.value)} fullWidth inputProps={{ step: "0.001" }} /></Grid>
-                <Grid item xs={4}><TextField label={t("initialQty")} type="number" value={form.initial_qty} onChange={(e) => set("initial_qty", e.target.value)} fullWidth /></Grid>
-                <Grid item xs={4}><TextField label={t("reorderPoint")} type="number" value={form.reorder_point} onChange={(e) => set("reorder_point", e.target.value)} fullWidth /></Grid>
+                <Grid item xs={4}><TextField label={t("price")} type="number" value={form.sale_price} onChange={(e) => set("sale_price", e.target.value)} fullWidth inputProps={{ min: 0, step: "0.001" }} /></Grid>
+                <Grid item xs={4}><TextField label={t("initialQty")} type="number" value={form.initial_qty} onChange={(e) => set("initial_qty", e.target.value)} fullWidth inputProps={{ min: 0, step: 1 }} /></Grid>
+                <Grid item xs={4}><TextField label={t("reorderPoint")} type="number" value={form.reorder_point} onChange={(e) => set("reorder_point", e.target.value)} fullWidth inputProps={{ min: 0, step: 1 }} /></Grid>
               </Grid>
               <Button variant="contained" size="large" disabled={busy || !form.name_fr.trim()} onClick={save}>
                 {t("register")}

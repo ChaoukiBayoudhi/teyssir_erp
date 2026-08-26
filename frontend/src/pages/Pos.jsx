@@ -147,6 +147,10 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
 
   const pay = async () => {
     setError("");
+    if (totals.total < 0) {
+      setError(t("totalCannotBeNegative"));
+      return;
+    }
     if (method === "ACCOUNT" && !customerId) {
       setError(t("customerRequired"));
       return;
@@ -168,9 +172,23 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
       setCart([]);
       setGlobalDiscountPct(0);
       setCustomerId("");
+      // Open text receipt preview in a new tab (thermal already printed server-side).
+      if (res.receipt_url && res.sale_id) {
+        try {
+          const headers = {};
+          const tok = localStorage.getItem("teyssir_token");
+          if (tok) headers.Authorization = `Token ${tok}`;
+          const r = await fetch(res.receipt_url, { headers });
+          if (r.ok) {
+            const text = await r.text();
+            const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+            window.open(URL.createObjectURL(blob), "_blank", "noopener");
+          }
+        } catch { /* preview is best-effort */ }
+      }
     } catch (err) {
       if (err.offline) {
-        setPendingCount(enqueue(payload)); // node unreachable — hold and replay later
+        setPendingCount(enqueue(payload));
         setCart([]);
         setGlobalDiscountPct(0);
         setQueued(true);
@@ -264,7 +282,7 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
                   <TextField
                     size="small" type="number" label={t("qty")} value={l.qty}
                     onChange={(e) => setQty(l.product.id, parseInt(e.target.value || "1", 10))}
-                    sx={{ width: 72 }} inputProps={{ min: 1 }}
+                    sx={{ width: 72 }} inputProps={{ min: 1, step: 1 }}
                   />
                   <TextField
                     size="small" type="number" label={t("discPct")} value={l.discountPct}
@@ -306,7 +324,8 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
                   </Select>
                 )}
                 <Button
-                  variant="contained" size="large" fullWidth disabled={!cart.length} onClick={pay}
+                  variant="contained" size="large" fullWidth
+                  disabled={!cart.length || totals.total < 0} onClick={pay}
                 >
                   {t("pay")}
                 </Button>
@@ -321,7 +340,7 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
         anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
       >
         <Alert severity="success" variant="filled" onClose={() => setDone(null)}>
-          {done && `${t("done")} — ${t("invoice")} ${done.invoice_number} · ${done.total_display} DT`}
+          {done && `${t("done")} — ${t("invoice")} ${done.invoice_number} · ${done.total_display} DT${done.printed ? " · ✓" : ""}`}
         </Alert>
       </Snackbar>
 

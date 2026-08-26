@@ -1,6 +1,6 @@
 from django.db import models
 
-from teyssir.core.models import MONEY, QTY, SyncableModel, TimeStampedModel, UUIDModel
+from teyssir.core.models import MONEY, SyncableModel, TimeStampedModel, UUIDModel
 
 
 class TaxRate(SyncableModel):
@@ -36,9 +36,9 @@ class Product(SyncableModel):
 
     cost_avg = models.DecimalField(default=0, **MONEY)        # weighted average cost (§14.2)
     sale_price = models.DecimalField(default=0, **MONEY)
-    qty_on_hand = models.DecimalField(default=0, **QTY)        # cached fold over the ledger
-    reorder_point = models.DecimalField(default=0, **QTY)
-    reorder_qty = models.DecimalField(default=0, **QTY)
+    qty_on_hand = models.IntegerField(default=0)               # cached fold over the ledger (pieces)
+    reorder_point = models.IntegerField(default=0)
+    reorder_qty = models.IntegerField(default=0)
 
     is_book = models.BooleanField(default=False)
     isbn = models.CharField(max_length=13, blank=True, default="")

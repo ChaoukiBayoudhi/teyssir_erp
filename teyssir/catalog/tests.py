@@ -133,12 +133,12 @@ class CatalogBrowseApiTests(TestCase):
             "title": "Le Petit Prince", "isbn13": "9782070612758", "publisher": "Gallimard",
             "authors": ["Antoine de Saint-Exupéry"]}, sale_price="12.500")
         self.book.category = self.cat
-        self.book.qty_on_hand = Decimal("5"); self.book.reorder_point = Decimal("3")
+        self.book.qty_on_hand = 5; self.book.reorder_point = 3
         self.book.save()
         self.pen = Product.objects.create(sku="PEN-9", name_fr="Stylo Bic",
-                                          sale_price=Decimal("0.850"), qty_on_hand=Decimal("0"))
+                                          sale_price=Decimal("0.850"), qty_on_hand=0)
         self.cah = Product.objects.create(sku="CAH-9", name_fr="Cahier", sale_price=Decimal("1.200"),
-                                          qty_on_hand=Decimal("2"), reorder_point=Decimal("5"))
+                                          qty_on_hand=2, reorder_point=5)
 
     def _skus(self, url, params=None):
         return {x["sku"] for x in self.client.get(url, params or {}).json()["results"]}
@@ -172,7 +172,7 @@ class CatalogBrowseApiTests(TestCase):
         self.assertEqual(d["book"]["publisher"], "Gallimard")
         self.assertEqual(d["book"]["contributors"][0]["name"], "Antoine de Saint-Exupéry")
         self.assertTrue(any(b["value"] == "9782070612758" for b in d["barcodes"]))
-        self.assertEqual(d["qty_on_hand"], "5.000")
+        self.assertEqual(d["qty_on_hand"], "5")
 
 
 class ProductRegisterApiTests(TestCase):
@@ -195,7 +195,7 @@ class ProductRegisterApiTests(TestCase):
         r = self.client.get("/api/v1/catalog/lookup", {"barcode": "6191234567890"})
         self.assertTrue(r.json()["found"])                        # scannable afterwards
         self.assertEqual(r.json()["product"]["id"], pid)
-        self.assertEqual(r.json()["product"]["qty_on_hand"], "50.000")   # opening stock applied
+        self.assertEqual(r.json()["product"]["qty_on_hand"], "50")   # opening stock applied
         self.assertFalse(r.json()["product"]["is_book"])          # a supply, not a book
         self.assertTrue(Barcode.objects.filter(value="6191234567890").exists())
 

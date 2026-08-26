@@ -33,6 +33,14 @@ def to_money(value) -> Decimal:
     return Decimal(value).quantize(STORE_Q, rounding=ROUND_HALF_UP)
 
 
+def require_non_negative_money(value, *, label="amount") -> Decimal:
+    """Like ``to_money`` but rejects negatives (prices, payments, qty×price bases)."""
+    amount = to_money(value)
+    if amount < 0:
+        raise ValueError(f"{label} cannot be negative ({amount})")
+    return amount
+
+
 def to_millimes(value) -> int:
     """Convert a TND amount to an integer millime count (exact, no float)."""
     return int(to_money(value) * MILLIMES_PER_DT)

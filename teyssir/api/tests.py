@@ -20,7 +20,7 @@ class ApiTests(TestCase):
             sku="PEN", name_fr="Stylo", tax_rate=self.tva7, sale_price=Decimal("0.850"),
         )
         Barcode.objects.create(product=self.product, value="6191234567890", symbology="EAN13")
-        apply_movement(product_id=self.product.id, qty=Decimal("10"), reason=StockMovement.RECEIPT)
+        apply_movement(product_id=self.product.id, qty=10, reason=StockMovement.RECEIPT)
         self.user = User.objects.create_user("cashier", password="pw-strong-123")
         # Checkout is gated by create_sale (RBAC §10).
         from django.contrib.auth.models import Permission
@@ -61,8 +61,15 @@ class ApiTests(TestCase):
         self.assertTrue(data["invoice_number"].startswith("C1-"))
         self.assertEqual(data["total"], "3.729")        # 2.550 + TVA7%(0.179) + timbre 1.000
         self.assertEqual(data["total_display"], "3.73")  # 2-dp display
+        self.assertIn("sale_id", data)
+        self.assertIn("printed", data)
+        self.assertTrue(data["receipt_url"].endswith(f"/receipt"))
+        # Receipt preview endpoint
+        rr = self.client.get(data["receipt_url"])
+        self.assertEqual(rr.status_code, 200)
+        self.assertIn(data["invoice_number"], rr.content.decode("utf-8"))
         self.product.refresh_from_db()
-        self.assertEqual(self.product.qty_on_hand, Decimal("7.000"))
+        self.assertEqual(self.product.qty_on_hand, 7)
 
     def test_checkout_requires_customer_for_account(self):
         body = {"terminal": "C1", "payment_method": "ACCOUNT",

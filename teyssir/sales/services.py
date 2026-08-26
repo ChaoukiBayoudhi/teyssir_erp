@@ -92,6 +92,8 @@ def finalize_sale(sale: Sale, *, doc_type=Invoice.FACTURE, when=None, payment_me
     sale.tax_total = to_money(tax_total)
     sale.timbre_amount_snapshot = invoice.timbre_amount_snapshot
     sale.total = to_money(subtotal + tax_total + invoice.timbre_amount_snapshot)
+    if sale.total < 0:
+        raise DiscountError(f"sale total cannot be negative ({sale.total})")
     sale.status = Sale.FINALIZED
     sale.save(update_fields=[
         "subtotal", "tax_total", "timbre_amount_snapshot", "total", "status", "updated_at",

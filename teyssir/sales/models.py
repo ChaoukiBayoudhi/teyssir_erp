@@ -2,7 +2,7 @@ from django.conf import settings
 from django.db import models
 
 from teyssir.catalog.models import Product
-from teyssir.core.models import MONEY, QTY, SyncableModel
+from teyssir.core.models import MONEY, SyncableModel
 
 
 class CashSession(SyncableModel):
@@ -49,7 +49,7 @@ class Sale(SyncableModel):
 class SaleLine(SyncableModel):
     sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name="lines")
     product = models.ForeignKey(Product, on_delete=models.PROTECT)
-    qty = models.DecimalField(default=1, **QTY)
+    qty = models.IntegerField(default=1)
     unit_price = models.DecimalField(default=0, **MONEY)
     discount = models.DecimalField(default=0, **MONEY)
     tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
@@ -101,7 +101,7 @@ class Return(SyncableModel):
 class ReturnLine(SyncableModel):
     ret = models.ForeignKey(Return, on_delete=models.CASCADE, related_name="lines")
     product = models.ForeignKey(Product, on_delete=models.PROTECT)
-    qty = models.DecimalField(default=1, **QTY)
+    qty = models.IntegerField(default=1)
     unit_price = models.DecimalField(default=0, **MONEY)
     tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     line_total = models.DecimalField(default=0, **MONEY)
