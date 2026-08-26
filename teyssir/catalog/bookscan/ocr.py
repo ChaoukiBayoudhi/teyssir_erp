@@ -39,6 +39,8 @@ _TESSERACT_CANDIDATES = (
 _TITLE_MAX_EDGE = 1200
 _PROBE_MAX_EDGE = 800
 _BARCODE_MIN_EDGE = 900
+# Compact CNP stickers need a stronger upscale than wide price bands.
+_STICKER_MIN_EDGE = 1400
 
 
 def configure_tesseract(pytesseract) -> str | None:
@@ -733,15 +735,17 @@ def _preprocess_variants(
             return None
         return img.crop(clamped.as_tuple())
 
-    title_roi = price_roi = barcode_roi = None
+    title_roi = price_roi = barcode_roi = white_roi = None
     if prepare is not None:
         title_roi = _crop_box(getattr(prepare, "title_band", None))
         price_roi = _crop_box(getattr(prepare, "price_band", None))
         barcode_roi = _crop_box(getattr(prepare, "barcode_band", None))
-        white = _crop_box(getattr(prepare, "white_label", None))
-        if white is not None and (barcode_roi is None or barcode_roi.height < white.height):
+        white_roi = _crop_box(getattr(prepare, "white_label", None))
+        if white_roi is not None and (
+            barcode_roi is None or barcode_roi.height < white_roi.height
+        ):
             # Prefer white sticker for barcode OCR when present
-            barcode_roi = barcode_roi or white
+            barcode_roi = barcode_roi or white_roi
 
     mx, my = int(w * 0.12), int(h * 0.12)
     crop = title_roi or (
@@ -767,8 +771,8 @@ def _preprocess_variants(
         im = im.filter(ImageFilter.MedianFilter(size=3))
         return ImageEnhance.Sharpness(im).enhance(1.5).convert("RGB")
 
-    def _band_up(im, *, threshold=False):
-        im = _upscale_min_edge(im, _BARCODE_MIN_EDGE)
+    def _band_up(im, *, threshold=False, min_edge: int | None = None):
+        im = _upscale_min_edge(im, min_edge or _BARCODE_MIN_EDGE)
         g = ImageOps.autocontrast(ImageOps.grayscale(im))
         g = ImageEnhance.Contrast(g).enhance(2.2)
         if threshold:
@@ -780,10 +784,30 @@ def _preprocess_variants(
     if role == "front":
         yield "title_color", _title_prep(crop, color=True)
 
+    def _yield_sticker_price():
+        """Compact CNP/PVP white sticker first — avoids barcode digit bleed on price."""
+        if role not in ("back", "auto") or white_roi is None:
+            return
+        # Full sticker + stronger upscale/threshold (reads ثمن … 4,900 د.ت)
+        yield "white_label", _band_up(white_roi, min_edge=_STICKER_MIN_EDGE)
+        yield "white_label_thr", _band_up(
+            white_roi, threshold=True, min_edge=_STICKER_MIN_EDGE,
+        )
+        wh, ww = white_roi.height, white_roi.width
+        if wh > 40:
+            # Bottom half often holds the price line below the bars
+            bot = white_roi.crop((0, int(wh * 0.45), ww, wh))
+            yield "white_label_price", _band_up(bot, min_edge=_STICKER_MIN_EDGE)
+            yield "white_label_price_thr", _band_up(
+                bot, threshold=True, min_edge=_STICKER_MIN_EDGE,
+            )
+
     identity_known = isbn_found or has_product_barcode
     if identity_known:
-        if role in ("back", "auto") and lower is not None:
-            yield "price_band", _band_up(lower)
+        if role in ("back", "auto"):
+            yield from _yield_sticker_price()
+            if lower is not None:
+                yield "price_band", _band_up(lower)
         elif role == "front":
             yield "title_gray", _title_prep(crop)
         return
@@ -792,6 +816,8 @@ def _preprocess_variants(
 
     # Price / barcode bands — upscale only (no rotation fan-out)
     if role in ("back", "auto"):
+        # Prefer compact sticker OCR before wide price_band (History 34.900 FP)
+        yield from _yield_sticker_price()
         if lower is not None:
             yield "price_band", _band_up(lower)
             yield "price_thr", _band_up(lower, threshold=True)
@@ -1310,15 +1336,18 @@ class TesseractOcrProvider(OcrProvider):
                     if isbn and not barcode_isbn:
                         barcode_isbn = isbn
                         isbn_source = "digit_ocr"
-                    # Price only from sticker / price / barcode bands — not title mush
+                    # Price only from sticker / price / barcode bands — not title mush.
+                    # Prefer text OCR (PVP/ثمن/د.ت) over digit-only — digit OCR glues
+                    # barcode fragments onto prices (History 34.900 vs 4.900).
                     price = None
                     if label.startswith(("price", "barcode")) or "white_label" in label:
-                        price = extract_price_dt(digit_blob) if digit_blob else None
-                        if not price:
-                            pass_text = _ocr_text(pytesseract, im, langs)
-                            price = extract_price_dt(pass_text) or extract_price_dt(
-                                f"{digit_blob}\n{pass_text}"
-                            )
+                        # Sparse sticker lines read better with PSM 11 (sparse text)
+                        psm = 11 if "white_label" in label else 6
+                        pass_text = _ocr_text(pytesseract, im, langs, psm=psm)
+                        price = (
+                            extract_price_dt(pass_text)
+                            or extract_price_dt(f"{pass_text}\n{digit_blob}")
+                        )
                     if isbn or price or barcode_isbn or product_bc:
                         if not pass_text:
                             pass_text = _ocr_text(pytesseract, im, langs)
@@ -1328,7 +1357,8 @@ class TesseractOcrProvider(OcrProvider):
                             combined, isbn_hint=isbn or barcode_isbn, role=role,
                             mean_conf=mean_conf,
                         )
-                        if not draft.price and price:
+                        # Prefer band-local sticker price over combined digit-soup FPs
+                        if price:
                             draft.price = price
                             draft.raw["price_detected"] = True
                         draft = _apply_isbn(draft)
