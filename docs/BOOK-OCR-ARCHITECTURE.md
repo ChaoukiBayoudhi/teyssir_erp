@@ -95,9 +95,46 @@ Minimal clicks: scan → (auto-fill) → review → save. Show **OCR/source conf
 preview/crop/rotate (client-side canvas), and validate before save. Bilingual AR/FR + RTL like the
 rest of the PWA.
 
+## Phase 2F — books_photos regression harness
+
+Ground-truth fixtures live in `fixtures/bookscan/expected/*.json` (Books A–D: Beauty,
+Le premier, History CNP, Math CNP). Each fixture lists photo filename needles, expected
+`title_contains` / `languages` / `isbn13` / `barcode_raw` / `price` (with `allow_empty`),
+and **honesty** rules (619 never ISBN, digit-OCR confidence cap, no high conf without
+barcode/metadata).
+
+```text
+# Offline Tess (Vision skipped) — macOS / Linux
+TEYSSIR_OCR_VISION_FALLBACK=false python manage.py bookscan_regression
+python manage.py bookscan_regression --json
+python manage.py bookscan_regression --honesty-only   # ISBN/conf rules only
+python manage.py test teyssir.catalog.tests.BookScanRegressionFixtureTests
+TEYSSIR_BOOKSCAN_REGRESSION=1 python manage.py test \
+  teyssir.catalog.tests.BookScanRegressionFixtureTests.test_live_books_photos_regression_optional
+```
+
+### Win11 (PowerShell, Hub)
+
+```powershell
+cd C:\teyssir_erp   # or your clone path
+.\.venv\Scripts\Activate.ps1
+$env:TEYSSIR_OCR_PROVIDER = "tesseract"
+$env:TEYSSIR_OCR_VISION_FALLBACK = "false"
+# Optional: full Tesseract path if NSSM PATH is thin
+# $env:TEYSSIR_TESSERACT_CMD = "C:\Program Files\Tesseract-OCR\tesseract.exe"
+python manage.py bookscan_regression --json
+# Optional Vision (slow; needs Ollama + vision model):
+# $env:TEYSSIR_OCR_VISION_FALLBACK = "true"
+# python manage.py bookscan_regression --vision --json
+```
+
+Place phone photos under `books_photos\` (same filenames as the Mac corpus). Missing
+`libzbar` is OK — barcode fields stay empty (`allow_empty`); honesty rules still apply.
+
 ## Status / phasing
 - **Phase A (this milestone):** models + migration, provider abstractions (`OcrProvider`,
   `BookMetadataProvider` + OpenLibrary), `scan_book` + create services, scan/create/image API,
   ImageField storage, tests (mocked providers).
 - **Phase B:** PWA Book-Creation camera page (capture, barcode, review, crop).
 - **Phase C (later):** Tesseract/Vision-LLM provider, async via Celery, hub media replication, MinIO.
+- **Phase 2F:** `fixtures/bookscan/expected` + `manage.py bookscan_regression`.

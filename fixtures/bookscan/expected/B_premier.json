@@ -1,0 +1,28 @@
+{
+  "id": "B_premier",
+  "label": "Le premier en première année secondaire",
+  "images": {
+    "front": {"needles": ["12.40"], "exclude": ["#2", "#3"]},
+    "back": {"needles": ["12.40", "#2"], "exclude": []}
+  },
+  "expect": {
+    "title_contains": ["Le premier"],
+    "title_allow_empty": true,
+    "languages": ["fr", "ar"],
+    "languages_mode": "includes_any",
+    "languages_allow_empty": true,
+    "isbn13": "9789973352743",
+    "isbn13_allow_empty": true,
+    "barcode_raw": "9789973352743",
+    "barcode_raw_allow_empty": true,
+    "barcode_kind": "isbn13",
+    "price": "17.000",
+    "price_allow_empty": true
+  },
+  "honesty": {
+    "never_isbn13_prefix": ["619"],
+    "digit_ocr_confidence_max": 0.35,
+    "high_confidence_requires": "barcode_isbn_or_metadata",
+    "max_confidence_without_strong_id": 0.55
+  }
+}
