@@ -119,30 +119,14 @@ WSGI_APPLICATION = "teyssir.wsgi.application"
 # --- Database: hub=PostgreSQL, till=SQLite (spec §7) --------------------------
 # Engine defaults from the role but can be overridden with TEYSSIR_DB (e.g. run a hub on
 # SQLite for local/dev/CI without a PostgreSQL server).
+from teyssir.core.db import database_config as _database_config
+
 DB_BACKEND = os.environ.get("TEYSSIR_DB", "postgres" if ROLE == "hub" else "sqlite").lower()
-if DB_BACKEND == "postgres":
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": os.environ.get("POSTGRES_DB", "teyssir"),
-            "USER": os.environ.get("POSTGRES_USER", "teyssir"),
-            "PASSWORD": os.environ.get("POSTGRES_PASSWORD", ""),
-            "HOST": os.environ.get("POSTGRES_HOST", "127.0.0.1"),
-            "PORT": os.environ.get("POSTGRES_PORT", "5432"),
-        }
-    }
-else:
-    default_name = "teyssir_hub.sqlite3" if ROLE == "hub" else f"teyssir_{TERMINAL}.sqlite3"
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / os.environ.get("TEYSSIR_SQLITE_NAME", default_name),
-            # transaction_mode=IMMEDIATE makes every atomic() take the write lock at BEGIN, so
-            # concurrent writes (waitress serves with multiple threads) WAIT on busy_timeout instead
-            # of failing with "database is locked" on a read->write upgrade. `timeout` = busy_timeout.
-            "OPTIONS": {"timeout": 20, "transaction_mode": "IMMEDIATE"},
-        }
-    }
+DATABASES = {
+    "default": _database_config(
+        role=ROLE, backend=DB_BACKEND, base_dir=BASE_DIR, terminal=TERMINAL, environ=os.environ,
+    )
+}
 
 # --- Auth / security (spec §18) ----------------------------------------------
 AUTH_USER_MODEL = "accounts.User"

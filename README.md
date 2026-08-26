@@ -16,6 +16,8 @@ double-entry accounting &amp; VAT, camera book registration (OCR), federated mul
   · 🏗️ <a href="docs/ARCHITECTURE.md">Architecture</a>
   · 📊 <a href="docs/IMPLEMENTATION-PROGRESS.md">Progress</a>
   · 📖 <a href="docs/BOOK-OCR-ARCHITECTURE.md">Book&nbsp;OCR</a>
+  · 🗄️ <a href="docs/POSTGRESQL-SETUP.md">PostgreSQL</a>
+  · 🧪 <a href="docs/INSTALLATION-QA.md">Install&nbsp;QA</a>
 </p>
 
 ---
@@ -38,8 +40,10 @@ Full guide: **[docs/INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md)** · kit: [depl
 Set-ExecutionPolicy -Scope Process Bypass -Force
 .\deploy\windows\install.ps1 -Role hub          # note the printed SYNC KEY
 .\deploy\windows\install.ps1 -Role till -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey <hub-key>
-.\deploy\windows\start-teyssir.bat              # open http://localhost:8000
+.\deploy\windows\start-teyssir.bat              # then open http://localhost:8000
 ```
+
+Hub install (elevated PowerShell recommended) auto-detects/installs **Python 3.12** if missing, creates `.venv`, installs PostgreSQL when possible (SQLite fallback), and seeds RBAC/fiscal data. Tills never install PostgreSQL. The script is **safe to re-run**. Full QA notes: [docs/INSTALLATION-QA.md](docs/INSTALLATION-QA.md).
 
 ---
 
@@ -70,12 +74,23 @@ python manage.py runserver               # http://127.0.0.1:8000/health/
 
 ## Run the hub (PostgreSQL)
 
-Set `TEYSSIR_ROLE=hub` and the `POSTGRES_*` vars, uncomment `psycopg[binary]` in
-`requirements.txt`, then `migrate`. Same codebase, different node profile (spec §20).
+Set `TEYSSIR_ROLE=hub` and the `POSTGRES_*` vars, then `migrate`. Same codebase, different node
+profile (spec §20). On Windows, `install.ps1 -Role hub` does this for you.
 
 ## Node roles
 
 | Role | DB | Purpose |
 |------|----|---------|
-| `hub` ("Teyssir Hub", PC-1) | PostgreSQL | source of truth, sync master, backups, reporting |
-| `till` (C1/C2/C3) | SQLite | offline-capable POS; syncs to the hub |
+| `hub` ("Teyssir Hub", PC-1) | **PostgreSQL** (SQLite fallback) | source of truth, sync master, backups, reporting |
+| `till` (C1/C2/C3) | **SQLite** | offline-capable POS; syncs to the hub |
+
+## Database architecture
+
+| Node | Engine | Why |
+|------|--------|-----|
+| Hub | PostgreSQL | Concurrent tills, UTF-8, durable central store |
+| Till | SQLite | Works offline; no extra service on the cash PC |
+
+Hub `.env`: `TEYSSIR_ROLE=hub`, `TEYSSIR_DB=postgres`, plus `POSTGRES_DB/USER/PASSWORD/HOST/PORT`.
+Tills: `TEYSSIR_ROLE=till`, `TEYSSIR_DB=sqlite`. The driver `psycopg[binary]` is in `requirements.txt`.
+Windows Hub: PostgreSQL is installed automatically — [docs/POSTGRESQL-SETUP.md](docs/POSTGRESQL-SETUP.md).
