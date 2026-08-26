@@ -51,11 +51,17 @@ def _receipt_model(sale, store_name="Teyssir Library"):
     }
 
 
-def render_sale_receipt(sale, store_name="Teyssir Library"):
-    """Return the ESC/POS byte stream for a sale's receipt."""
+def render_sale_receipt(sale, store_name="Teyssir Library", *, duplicate=False, kick=True):
+    """Return the ESC/POS byte stream for a sale's receipt.
+
+    ``duplicate=True`` marks a reprint (DUPLICATA) without creating a new sale.
+    ``kick=False`` skips the cash-drawer pulse (preferred on reprints).
+    """
     m = _receipt_model(sale, store_name)
     p = Escpos()
     p.align("center").bold(True).size(2, 2).line(m["store"]).size(1, 1).bold(False)
+    if duplicate:
+        p.bold(True).line("*** DUPLICATA ***").bold(False)
     if m["matricule_fiscal"]:
         p.line(f"MF: {m['matricule_fiscal']}")
     p.feed().align("left")
@@ -76,14 +82,18 @@ def render_sale_receipt(sale, store_name="Teyssir Library"):
     p.bold(True).size(1, 2).row("TOTAL TTC", f"{display(m['total'])} DT").size(1, 1).bold(False)
     for method, amount in m["payments"]:
         p.row(method, f"{display(amount)} DT")
-    p.feed().align("center").line("Merci de votre visite").feed(3).cut().kick()
+    p.feed().align("center").line("Merci de votre visite").feed(3).cut()
+    if kick:
+        p.kick()
     return p.bytes()
 
 
-def render_text(sale, store_name="Teyssir Library", width=42):
+def render_text(sale, store_name="Teyssir Library", width=42, *, duplicate=False):
     """Plain-text preview of the same receipt (no control bytes) — handy for tests/UI."""
     m = _receipt_model(sale, store_name)
     out = [m["store"].center(width), ""]
+    if duplicate:
+        out.append("*** DUPLICATA ***".center(width))
     if m["matricule_fiscal"]:
         out.append(f"MF: {m['matricule_fiscal']}")
     out += [f"Facture: {m['number']}", f"Caisse:  {m['terminal']}", "-" * width]

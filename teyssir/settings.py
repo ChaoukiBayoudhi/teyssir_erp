@@ -234,7 +234,7 @@ MONEY_DISPLAY_DP = 2  # display 2 decimals
 # --- Store / fiscal identity (printed on receipts/factures, spec §13.5) ------
 STORE_MATRICULE_FISCAL = os.environ.get("TEYSSIR_MATRICULE_FISCAL", "")
 # Receipt printer target for this node: dummy | file:/path | tcp:host:port (spec §6)
-# (read at send time from TEYSSIR_PRINTER env)
+# Read at send time from TEYSSIR_PRINTER (client LAN IP — never hardcode a shop address).
 
 # --- Logging -----------------------------------------------------------------
 # The node runs headless (waitress). Persist warnings/errors to a rotating file so a shop problem

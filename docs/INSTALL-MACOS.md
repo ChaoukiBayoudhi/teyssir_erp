@@ -196,3 +196,14 @@ Time Machine. Le Hub contient déjà la consolidation de toutes les caisses.
 ---
 
 <p align="center"><sub>Teyssir — logiciel de gestion de librairie · 100&nbsp;% outils libres et gratuits · testé sur MacBook Pro M1.</sub></p>
+
+
+## Receipt printer (LAN)
+
+Set `TEYSSIR_PRINTER` to `tcp:HOST:9100` (or `dummy` / `file:/path`). Discover helpers:
+
+- Windows: `deploy/windows/Discover-Printer.ps1`
+- macOS: `deploy/macos/discover-printer.sh`
+- Cross-platform: `python deploy/discover_printer.py`
+
+Installer `-Printer` / `--printer` / discover flags land fully when Windows/macOS UX install slices are merged.

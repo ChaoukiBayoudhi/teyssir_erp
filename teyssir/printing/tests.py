@@ -64,3 +64,10 @@ class ReceiptTests(TestCase):
         m = _receipt_model(sale)
         printed_tax = sum((t for _, (_b, t) in m["by_rate"]), Decimal("0"))
         self.assertEqual(printed_tax, sale.tax_total)
+
+    def test_duplicate_receipt_marks_duplicata_without_kick(self):
+        data = render_sale_receipt(self.sale, duplicate=True, kick=False)
+        self.assertIn(b"DUPLICATA", data)
+        self.assertNotIn(b"\x1bp", data)  # no drawer kick on reprint
+        txt = render_text(self.sale, duplicate=True)
+        self.assertIn("DUPLICATA", txt)

@@ -38,6 +38,7 @@ Full guide: **[docs/INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md)** · kit: [depl
 Set-ExecutionPolicy -Scope Process Bypass -Force
 .\deploy\windows\install.ps1 -Role hub          # note the printed SYNC KEY
 .\deploy\windows\install.ps1 -Role till -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey <hub-key>
+# Optional receipt printer on the shop LAN:  -Printer tcp:192.168.1.100:9100  or  -DiscoverPrinter
 .\deploy\windows\start-teyssir.bat              # open http://localhost:8000
 ```
 
