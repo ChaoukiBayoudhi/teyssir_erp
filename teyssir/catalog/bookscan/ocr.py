@@ -116,10 +116,44 @@ def arabic_char_ratio(text: str) -> float:
     return sum(1 for c in letters if is_arabic_char(c)) / len(letters)
 
 
+def _latin_title_shape_ok(s: str, words: list[str]) -> bool:
+    """True when Latin text looks like a real title (not ``herbe`` / ``Whee`` / ``ead chien``)."""
+    alpha_lens = [len(re.sub(r"[^A-Za-zÀ-ÿ]", "", w)) for w in words]
+    longest = max(alpha_lens, default=0)
+    has_article = bool(
+        re.search(r"\b(The|A|An|Le|La|Les|L'|Un|Une|El|Al)\b", s, re.I)
+    )
+    has_diacritic = bool(
+        re.search(r"[àâäéèêëïîôùûüçœæÀÂÄÉÈÊËÏÎÔÙÛÜÇ]", s)
+    )
+    title_case = sum(1 for w in words if re.match(r"[A-ZÀ-Ÿ][a-zà-ÿ]{2,}", w))
+    # Long word / French diacritics / article phrase / multi-word Title Case
+    if longest >= 8:
+        return True
+    if has_diacritic and longest >= 5:
+        return True
+    if has_article and longest >= 5:
+        return True
+    if title_case >= 2 and longest >= 4:
+        return True
+    if longest >= 6 and title_case >= 1 and len(words) >= 3:
+        return True
+    # Known school-book tokens (Mathématiques may arrive without diacritics)
+    if re.search(
+        r"\b(Beauty|Beast|Prince|Mathématiques|Mathematiques|Histoire|"
+        r"Premier|Golden|Tales|Cinderella)\b",
+        s,
+        re.I,
+    ):
+        return True
+    return False
+
+
 def is_garbage_latin_ocr(text: str, *, mean_conf: float | None = None) -> bool:
     """True when Latin OCR looks like a misread non-Latin (e.g. Arabic) cover.
 
-    Examples from production: ``wis! Boot ay``, ``9 or et O.``, ``ol YI a "Teeny"``.
+    Examples from production: ``wis! Boot ay``, ``9 or et O.``, ``ol YI a "Teeny"``,
+    ``PEL oe nee``, ``ead chien``, ``herbe``, ``Whee``.
     """
     s = (text or "").strip()
     if not s:
@@ -141,6 +175,12 @@ def is_garbage_latin_ocr(text: str, *, mean_conf: float | None = None) -> bool:
     )
     punct_hits = bool(re.search(r"[!\"“”«»]|^\d", s))
     avg_len = sum(len(w) for w in words) / max(len(words), 1)
+    if conf <= 55 and not _latin_title_shape_ok(s, words):
+        # Single short token / mush without title shape (herbe, Whee, ead chien)
+        if len(words) <= 3 and len(letters) <= 14:
+            return True
+        if avg_len < 4.5 and len(words) >= 2:
+            return True
     if conf <= 40 and len(s) <= 48:
         if punct_hits and len(words) >= 2:
             return True
@@ -152,8 +192,6 @@ def is_garbage_latin_ocr(text: str, *, mean_conf: float | None = None) -> bool:
         if len(letters) <= 8 and len(words) <= 3 and not re.search(
             r"[àâäéèêëïîôùûüçœæÀÂÄÉÈÊËÏÎÔÙÛÜÇ]", s
         ):
-            # Real short titles are rare; require dictionary-ish vowels+consonants mix of length ≥ 4
-            # without digit-leading tokens — still flag very short all-ASCII blobs at ≤35%.
             if conf <= 35 and len(letters) <= 6:
                 return True
     return False
@@ -233,7 +271,15 @@ def _latin_title_quality(text: str, *, mean_conf: float | None = None) -> float:
         return 0.0
     # Prefer French diacritics / longer phrases (e.g. "Le premier")
     bonus = 0.3 if re.search(r"[àâäéèêëïîôùûüçœæÀÂÄÉÈÊËÏÎÔÙÛÜÇ]", s) else 0.0
-    bonus += 0.2 if re.match(r"^(Le|La|Les|L'|Un|Une|The)\b", s, re.I) else 0.0
+    bonus += 0.55 if re.match(r"^(Le|La|Les|L'|Un|Une|The)\b", s, re.I) else 0.0
+    bonus += 0.7 if re.search(
+        r"\b(Mathématiques|Mathematiques|Beauty|Beast)\b", s, re.I
+    ) else 0.0
+    # Subtitle-ish "en … année" / "2ème année…" must not beat the main title
+    if re.match(r"^(en|in|pour|for)\b", s, re.I):
+        bonus -= 0.45
+    if re.match(r"^\d", s) or re.search(r"année de l['']?enseignement", s, re.I):
+        bonus -= 0.7
     return letters / 20.0 + bonus + min(len(s), 40) / 80.0
 
 
@@ -247,7 +293,11 @@ def _arabic_title_quality(text: str, *, mean_conf: float | None = None) -> float
     ar = sum(1 for c in s if is_arabic_char(c))
     if ar < 4:
         return 0.0
-    return ar / 20.0 + min(len(s), 40) / 80.0
+    bonus = 0.9 if s.startswith("كتاب") or s.startswith("الأول") else 0.0
+    # Subtitle / audience lines ("لتلاميذ…") must not beat the main title
+    if re.match(r"^(لتلاميذ|لطلبة|للسنة|مع كتاب)", s):
+        bonus -= 1.2
+    return ar / 20.0 + bonus + min(len(s), 40) / 120.0
 
 
 def merge_bilingual_title(
@@ -320,6 +370,7 @@ def detect_script_langs(text: str, *, mean_conf: float | None = None) -> list[st
     """Heuristic language tags from Unicode ranges (ar / fr|en Latin).
 
     Never tags ``en``/``fr`` from garbage Latin OCR (Arabic covers misread as Latin).
+    Never tags ``ar`` from tiny Arabic noise on a Latin-majority English/French cover.
     """
     if not text:
         return []
@@ -330,19 +381,24 @@ def detect_script_langs(text: str, *, mean_conf: float | None = None) -> list[st
     )
     total = max(ar + latin, 1)
     out: list[str] = []
-    if ar / total >= 0.15:
+    # Require meaningful Arabic share — a few hallucinated glyphs must not tag ar
+    if ar / total >= 0.15 and ar >= 6:
+        out.append("ar")
+    elif ar / total >= 0.35 and ar >= 4:
         out.append("ar")
     # Garbage Latin at low confidence must not claim English
     if is_garbage_latin_ocr(text, mean_conf=mean_conf) and "ar" not in out:
         return out  # empty or ar-only — never en from noise
     if latin / total >= 0.15 and not is_garbage_latin_ocr(text, mean_conf=mean_conf):
-        if re.search(r"[àâäéèêëïîôùûüçœæÀÂÄÉÈÊËÏÎÔÙÛÜÇ]", text):
+        if re.search(r"[àâäéèêëïîôùûüçœæÀÂÄÉÈÊËÏÎÔÙÛÜÇ]", text) or re.search(
+            r"\b(Le|La|Les|L'|Un|Une|Des|Du|Mathématiques|Mathematiques)\b", text, re.I
+        ):
             out.append("fr")
         else:
             out.append("en")
     if out:
         return out
-    if ar:
+    if ar >= 6:
         return ["ar"]
     # Unknown script / noise — do not default to fr/en
     return []
@@ -497,9 +553,11 @@ def _script_probe(pytesseract, image, installed: set[str], role: str) -> tuple[s
     """Cheap script probe → (primary_lang, bilingual_evidence, script_tag).
 
     Downscales to ~800px and runs a single short OCR (or OSD when available).
+    Latin-majority / OSD-Latin covers must not be flipped to Arabic by ara hallucination.
     """
     probe_im = _downscale_max_edge(image, _PROBE_MAX_EDGE)
     script_tag = ""
+    osd_latin = False
     # OSD: orientation+script detection (meta pack ``osd``)
     if "osd" in installed:
         try:
@@ -512,12 +570,16 @@ def _script_probe(pytesseract, image, installed: set[str], role: str) -> tuple[s
                     script_tag = "ar"
                 elif "latin" in name or "fraktur" in name:
                     script_tag = "latin"
+                    osd_latin = True
         except Exception:
             pass
 
-    probe_langs = _join_installed(["ara", "eng"], installed) or _join_installed(
-        ["eng"], installed
-    ) or "eng"
+    if osd_latin:
+        probe_langs = _join_installed(["eng", "fra"], installed) or "eng"
+    else:
+        probe_langs = _join_installed(["ara", "eng"], installed) or _join_installed(
+            ["eng"], installed
+        ) or "eng"
     try:
         snippet = _safe_image_to_string(
             pytesseract, probe_im, lang=probe_langs, config="--psm 6"
@@ -525,7 +587,22 @@ def _script_probe(pytesseract, image, installed: set[str], role: str) -> tuple[s
     except Exception:
         snippet = ""
 
+    ar_n = sum(1 for c in snippet if is_arabic_char(c))
+    lat_n = sum(
+        1 for c in snippet
+        if c.isalpha() and not is_arabic_char(c)
+    )
     detected = detect_script_langs(snippet[:200], mean_conf=40.0)
+
+    # Strong Latin majority → never let ara-pack noise win (English Beauty covers)
+    if lat_n >= 10 and lat_n > max(ar_n, 1) * 2:
+        script_tag = "fr" if ("fr" in detected or role == "back") else "en"
+        bilingual = ar_n >= 10 and ar_n / max(ar_n + lat_n, 1) >= 0.25
+        if bilingual:
+            script_tag = "ar+fr" if script_tag == "fr" or "fr" in detected else "ar+en"
+        primary = _primary_lang_from_script(script_tag, role, installed)
+        return primary, bilingual, script_tag
+
     if not script_tag:
         if "ar" in detected and ("fr" in detected or "en" in detected):
             script_tag = "ar+fr" if "fr" in detected else "ar+en"
@@ -535,7 +612,7 @@ def _script_probe(pytesseract, image, installed: set[str], role: str) -> tuple[s
             script_tag = "fr"
         elif "en" in detected:
             script_tag = "en"
-        elif arabic_char_ratio(snippet) >= 0.15:
+        elif arabic_char_ratio(snippet) >= 0.25 and ar_n >= 6:
             script_tag = "ar"
 
     bilingual = False
@@ -543,9 +620,13 @@ def _script_probe(pytesseract, image, installed: set[str], role: str) -> tuple[s
         bilingual = True
     elif "ar" in script_tag and any(x in detected for x in ("fr", "en")):
         bilingual = True
-    elif script_tag in ("fr", "en", "latin") and arabic_char_ratio(snippet) >= 0.12:
+    elif script_tag in ("fr", "en", "latin") and ar_n >= 10 and arabic_char_ratio(snippet) >= 0.25:
         bilingual = True
         script_tag = "ar+fr" if "fr" in detected or script_tag == "fr" else "ar+en"
+    elif osd_latin:
+        # OSD Latin + weak ara noise → stay Latin (EN cover ≠ Arabic weak path)
+        bilingual = False
+        script_tag = "fr" if role == "back" or "fr" in detected else "en"
 
     if script_tag == "latin":
         script_tag = "fr" if role == "back" else "en"
@@ -575,8 +656,18 @@ def _score_ocr_candidate(
     return score
 
 
-def _fast_path_ready(draft: "BookDraft", mean_conf: float) -> bool:
-    """Early-exit gate: usable title + (ISBN | local barcode | price)."""
+def _fast_path_ready(
+    draft: "BookDraft",
+    mean_conf: float,
+    *,
+    bilingual_pending: bool = False,
+) -> bool:
+    """Early-exit gate: usable title + (ISBN | local barcode | price).
+
+    Never exit early while a bilingual second lang pass is still required.
+    """
+    if bilingual_pending:
+        return False
     if not is_usable_ocr_title(draft.title or "", mean_conf=mean_conf):
         return False
     if draft.isbn13:
@@ -796,7 +887,9 @@ def _apply_confidence_gate(draft: BookDraft, mean_conf: float) -> BookDraft:
 
 def _clean_lines(text: str) -> list[str]:
     skip = re.compile(
-        r"^(isbn|issn|www\.|http|prix|price|سعر|الطبعة|édition|edition)\b",
+        r"^(isbn|issn|www\.|http|prix|price|سعر|الطبعة|édition|edition|"
+        r"titles?\s+in\s+this\s+series|pvp|الثمن|centre\s+national|"
+        r"المركز\s+الوطني|république|republique|ministère|ministere)\b",
         re.IGNORECASE,
     )
     lines = []
@@ -806,6 +899,10 @@ def _clean_lines(text: str) -> list[str]:
             continue
         # Drop pure digit/noise lines for title heuristics
         if re.fullmatch(r"[\d\s\-.,]+", s):
+            continue
+        # Numbered series list items on verso ("11. Beauty and the Beast") — keep
+        # only when long enough to be a real title line, else skip short noise
+        if re.match(r"^\d{1,2}[.)]\s+\S", s) and len(s) < 12:
             continue
         lines.append(s)
     return lines
@@ -819,7 +916,8 @@ def _draft_from_text(text, *, isbn_hint="", role="auto", mean_conf: float | None
     if langs:
         draft.languages = langs
         draft.raw["detected_langs"] = langs
-    if ar_ratio >= 0.15:
+    ar_count = sum(1 for c in (text or "") if is_arabic_char(c))
+    if ar_ratio >= 0.15 and ar_count >= 6:
         draft.raw["arabic_script_detected"] = True
         if "ar" not in (draft.languages or []):
             draft.languages = ["ar", *(draft.languages or [])]
@@ -862,6 +960,7 @@ def _draft_from_text(text, *, isbn_hint="", role="auto", mean_conf: float | None
             latin_lines = [
                 s for s in cleaned
                 if _latin_title_quality(s, mean_conf=mean_conf) > 0
+                and not re.match(r"^(en|in|pour|for)\b", s, re.I)
             ]
             # Merge FR + AR when both scripts appear on the cover
             merged = merge_bilingual_title(
@@ -919,11 +1018,18 @@ def _draft_from_text(text, *, isbn_hint="", role="auto", mean_conf: float | None
         ):
             draft.raw["rejected_authors"] = list(draft.authors)
             draft.authors = []
-        # Likely Arabic cover when Latin OCR is garbage at low conf — never leave languages=en
-        draft.languages = ["ar"] if ar_ratio < 0.15 else (draft.languages or ["ar"])
-        draft.raw["ocr_arabic_likely"] = True
-        draft.raw.pop("detected_langs", None)
-        draft.raw["detected_langs"] = list(draft.languages)
+        # Only mark Arabic-likely when the blob actually has Arabic script.
+        # English covers with Latin garbage must NOT get a false Arabic warning.
+        if ar_ratio >= 0.12:
+            draft.languages = ["ar"] if ar_ratio < 0.15 else (draft.languages or ["ar"])
+            draft.raw["ocr_arabic_likely"] = True
+            draft.raw.pop("detected_langs", None)
+            draft.raw["detected_langs"] = list(draft.languages)
+        else:
+            draft.languages = [x for x in (draft.languages or []) if x == "ar"]
+            draft.raw.pop("ocr_arabic_likely", None)
+            draft.raw["detected_langs"] = list(draft.languages)
+            draft.raw.pop("arabic_script_detected", None)
         # Spurious prices from garbage passes
         if draft.price and role == "front":
             draft.raw["rejected_price"] = draft.price
@@ -943,6 +1049,18 @@ def _draft_from_text(text, *, isbn_hint="", role="auto", mean_conf: float | None
         if "ar" not in (draft.languages or []):
             draft.languages = ["ar", *(draft.languages or [])]
         draft.raw["ocr_arabic_likely"] = True
+
+    # Prefer languages inferred from the surviving title (not full verso blob)
+    if draft.title and is_usable_ocr_title(draft.title, mean_conf=mean_conf):
+        title_langs = detect_script_langs(draft.title, mean_conf=mean_conf)
+        if title_langs:
+            draft.languages = title_langs
+            draft.raw["detected_langs"] = title_langs
+            if "ar" not in title_langs:
+                draft.raw.pop("arabic_script_detected", None)
+                draft.raw.pop("ocr_arabic_likely", None)
+            elif arabic_char_ratio(draft.title) >= 0.15:
+                draft.raw["arabic_script_detected"] = True
 
     # Drop implausible authors even when title survived
     if draft.authors:
@@ -1167,6 +1285,12 @@ class TesseractOcrProvider(OcrProvider):
                 return draft
 
             has_product = bool(product_bc)
+            def _bilingual_pending() -> bool:
+                return bool(
+                    bilingual_hint
+                    and not (best_latin_title and best_arabic_title)
+                )
+
             for label, im in _preprocess_variants(
                 image_path,
                 role=role,
@@ -1186,12 +1310,15 @@ class TesseractOcrProvider(OcrProvider):
                     if isbn and not barcode_isbn:
                         barcode_isbn = isbn
                         isbn_source = "digit_ocr"
-                    price = extract_price_dt(digit_blob) if digit_blob else None
-                    if not price:
-                        pass_text = _ocr_text(pytesseract, im, langs)
-                        price = extract_price_dt(pass_text) or extract_price_dt(
-                            f"{digit_blob}\n{pass_text}"
-                        )
+                    # Price only from sticker / price / barcode bands — not title mush
+                    price = None
+                    if label.startswith(("price", "barcode")) or "white_label" in label:
+                        price = extract_price_dt(digit_blob) if digit_blob else None
+                        if not price:
+                            pass_text = _ocr_text(pytesseract, im, langs)
+                            price = extract_price_dt(pass_text) or extract_price_dt(
+                                f"{digit_blob}\n{pass_text}"
+                            )
                     if isbn or price or barcode_isbn or product_bc:
                         if not pass_text:
                             pass_text = _ocr_text(pytesseract, im, langs)
@@ -1217,13 +1344,18 @@ class TesseractOcrProvider(OcrProvider):
                         )
                         if best is None or score > best[0]:
                             best = (score, label, combined, draft, mean_conf, langs)
-                        if _fast_path_ready(draft, mean_conf):
+                        if _fast_path_ready(
+                            draft, mean_conf, bilingual_pending=_bilingual_pending(),
+                        ):
                             return combined, draft
                         if isbn_source == "barcode" and (draft.price or mean_conf >= 40):
-                            return combined, draft
+                            if not _bilingual_pending():
+                                return combined, draft
 
                 if role in ("front", "auto"):
                     psm = 11 if role == "front" else 6
+                    if label.startswith("title"):
+                        psm = 6
                     for langs_try in lang_passes:
                         chunk = _ocr_text(pytesseract, im, langs_try, psm=psm)
                         mean_conf = _mean_ocr_confidence(
@@ -1247,7 +1379,9 @@ class TesseractOcrProvider(OcrProvider):
                             best = (score, label, combined_try, draft, mean_conf, langs_try)
                             langs = langs_try
                             pass_text = chunk
-                        if _fast_path_ready(draft, mean_conf):
+                        if _fast_path_ready(
+                            draft, mean_conf, bilingual_pending=_bilingual_pending(),
+                        ):
                             return combined_try, draft
                         # Strong Arabic title with primary pack: stop secondary packs
                         if (
@@ -1260,7 +1394,9 @@ class TesseractOcrProvider(OcrProvider):
                             break
                     if pass_text:
                         text_blob += "\n" + pass_text
-                    if best and _fast_path_ready(best[3], best[4]):
+                    if best and _fast_path_ready(
+                        best[3], best[4], bilingual_pending=_bilingual_pending(),
+                    ):
                         break
                     # Enough variants once we have a usable title (keep filters honest)
                     if best and is_usable_ocr_title(

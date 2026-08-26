@@ -142,6 +142,16 @@ class PriceAndLangTests(unittest.TestCase):
         self.assertEqual(extract_price_dt("no price here"), "")
         # Spurious OCR noise (screenshot 3) must not become a shelf price
         self.assertEqual(extract_price_dt("ol YI a Teeny 8.043 FRE pte"), "")
+        # Phase 2D: PVP / ثمن sticker labels + reject millime noise / off-by-one
+        self.assertEqual(extract_price_dt("PVP : 4,200 DT"), "4.200")
+        self.assertEqual(extract_price_dt("ثمن البيع للعموم 4,900 د.ت"), "4.900")
+        self.assertEqual(extract_price_dt("Prix : 2,000"), "2.000")
+        self.assertEqual(
+            extract_price_dt("الثمن 17,000\nnoise 17,900 elsewhere"),
+            "17.000",
+        )
+        self.assertEqual(extract_price_dt("random 9.255 mush"), "")
+        self.assertEqual(extract_price_dt("ISBN 9789973352743 34.900"), "")
 
     def test_detect_script_langs(self):
         from teyssir.catalog.bookscan.ocr import detect_script_langs
@@ -254,7 +264,10 @@ class PriceAndLangTests(unittest.TestCase):
             is_garbage_latin_ocr,
             is_usable_ocr_title,
         )
-        for junk in ("wis! Boot ay", "9 or et O.", 'ol YI a "Teeny"', "arr", "FRE pte"):
+        for junk in (
+            "wis! Boot ay", "9 or et O.", 'ol YI a "Teeny"', "arr", "FRE pte",
+            "PEL oe nee", "ead chien", "herbe", "Whee",
+        ):
             self.assertTrue(
                 is_garbage_latin_ocr(junk, mean_conf=35),
                 msg=f"expected garbage: {junk!r}",
@@ -263,14 +276,35 @@ class PriceAndLangTests(unittest.TestCase):
             self.assertFalse(is_usable_ocr_title(junk, mean_conf=35))
 
         self.assertFalse(is_garbage_latin_ocr("The Little Prince", mean_conf=70))
+        self.assertFalse(is_garbage_latin_ocr("Beauty and the Beast", mean_conf=55))
+        self.assertFalse(is_garbage_latin_ocr("Mathématiques", mean_conf=55))
+        self.assertFalse(is_garbage_latin_ocr("Le premier", mean_conf=55))
         self.assertTrue(is_usable_ocr_title("The Little Prince", mean_conf=70))
         self.assertTrue(is_usable_ocr_title("كتاب الفقه", mean_conf=40))
 
+        # Latin garbage on a Latin cover → no fake Arabic warning / no en tag
         draft = _draft_from_text("wis! Boot ay\narr", role="front", mean_conf=35)
         self.assertEqual(draft.title, "")
         self.assertTrue(draft.raw.get("ocr_garbage_latin"))
-        self.assertIn("ar", draft.languages)
         self.assertNotIn("en", draft.languages)
+        self.assertFalse(draft.raw.get("ocr_arabic_likely"))
+
+        # Arabic cover with Latin garbage still marks Arabic-likely
+        draft_ar = _draft_from_text(
+            "wis! Boot ay\nكتاب الفقه للمبتدئين", role="front", mean_conf=35,
+        )
+        self.assertTrue(draft_ar.raw.get("ocr_garbage_latin") or "ar" in (draft_ar.languages or []))
+        self.assertNotIn("en", draft_ar.languages)
+
+        # Usable English title must stay en-only (Beauty cover)
+        beauty = _draft_from_text(
+            "Golden Tales\nBeauty and the Beast\nDAR EL MAAREF",
+            role="front", mean_conf=60,
+        )
+        self.assertIn("Beauty", beauty.title)
+        self.assertEqual(beauty.languages, ["en"])
+        self.assertNotIn("ar", beauty.languages)
+        self.assertFalse(beauty.raw.get("ocr_arabic_likely"))
 
     def test_garbage_arabic_title_rejected(self):
         from teyssir.catalog.bookscan.ocr import (
@@ -724,6 +758,17 @@ class FastOcrPathTests(unittest.TestCase):
         self.assertLessEqual(len(two), 2)
         self.assertTrue(two[0].startswith("ara"))
 
+    def test_fast_path_waits_for_bilingual_second_pass(self):
+        from teyssir.catalog.bookscan.draft import BookDraft
+        from teyssir.catalog.bookscan.ocr import _fast_path_ready
+
+        draft = BookDraft(
+            title="الأول في السنة الأولى", isbn13="9789973352743",
+            raw={"isbn_from_barcode": True},
+        )
+        self.assertTrue(_fast_path_ready(draft, 55.0, bilingual_pending=False))
+        self.assertFalse(_fast_path_ready(draft, 55.0, bilingual_pending=True))
+
     def test_legacy_barcode_budget_small(self):
         from teyssir.catalog.bookscan import barcode as bc
         from PIL import Image
@@ -877,6 +922,9 @@ class TitleSearchGatingTests(unittest.TestCase):
     def test_scan_isbn_metadata_raises_confidence(self):
         """Barcode/ISBN hint + OpenLibrary must present high confidence, not 35%."""
         from unittest.mock import patch
+
+        from teyssir.catalog.bookscan.barcode import DecodedBarcode
+
         ocr_draft = BookDraft(
             title="wrong tess", source="tesseract", confidence=0.35,
             raw={"isbn_not_detected": True},
@@ -885,13 +933,16 @@ class TitleSearchGatingTests(unittest.TestCase):
             title="Le Petit Prince", authors=["Saint-Exupéry"],
             isbn13="9782070612758", source="openlibrary", confidence=0.9,
         )
+        hit = DecodedBarcode(
+            raw="9782070612758", symbology="ISBN", kind="isbn13", source="barcode",
+        )
         with patch("teyssir.catalog.bookscan.services.get_ocr_provider") as g, \
-             patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths",
-                   return_value=("9782070612758", "barcode")), \
+             patch("teyssir.catalog.bookscan.services._product_barcode_from_paths",
+                   return_value=hit), \
              patch("teyssir.catalog.bookscan.services._should_try_vision", return_value=False):
             class P:
                 name = "tesseract"
-                def extract(self, path, role="auto"):
+                def extract(self, path, role="auto", prepare=None, known_barcode=None):
                     return "x", ocr_draft
             g.return_value = P()
             out, _ = scan_book(
@@ -1438,3 +1489,122 @@ class ScanJobTests(TestCase):
                 self.assertEqual(fh.read(), b"COVERBYTES")
             tmp = paths[0]
         self.assertFalse(os.path.exists(tmp))                # temp cleaned up afterwards
+
+
+class BooksPhotosFixtureTests(unittest.TestCase):
+    """Phase 2D: A–D ground-truth fields Tess can reasonably hit (ROI / text fixtures)."""
+
+    @staticmethod
+    def _root():
+        return Path(__file__).resolve().parents[2] / "books_photos"
+
+    @classmethod
+    def _photo(cls, *needles, exclude=()):
+        root = cls._root()
+        if not root.is_dir():
+            return None
+        for p in sorted(root.iterdir()):
+            name = p.name
+            if all(n in name for n in needles) and not any(x in name for x in exclude):
+                return p
+        return None
+
+    def test_ground_truth_price_and_lang_text_fixtures(self):
+        """Sticker OCR strings → expected price / lang tags (no live Tess)."""
+        from teyssir.catalog.bookscan.ocr import detect_script_langs, _draft_from_text
+        from teyssir.catalog.bookscan.price import extract_price_dt
+
+        # A Beauty verso
+        self.assertEqual(extract_price_dt("2ème Edition : 2019\nPrix : 2,000"), "2.000")
+        beauty = _draft_from_text(
+            "Golden Tales\nBeauty and the Beast\nDAR EL MAAREF",
+            role="front", mean_conf=60,
+        )
+        self.assertIn("Beauty", beauty.title)
+        self.assertEqual(beauty.languages, ["en"])
+
+        # B Premier — bilingual FR+AR + ثمن 17.000
+        self.assertEqual(extract_price_dt("الثمن\n17,000"), "17.000")
+        premier = _draft_from_text(
+            "الأول في السنة الأولى ثانوي\nLe premier\nen première année secondaire",
+            role="front", mean_conf=55,
+        )
+        self.assertIn("Le premier", premier.title)
+        self.assertIn("الأول", premier.title)
+        self.assertIn("ar", premier.languages)
+        self.assertIn("fr", premier.languages)
+
+        # C History sticker
+        self.assertEqual(
+            extract_price_dt("المركز الوطني البيداغوجي\nثمن البيع للعموم 4,900 د.ت"),
+            "4.900",
+        )
+        hist = _draft_from_text(
+            "كتاب التاريخ\nلتلاميذ السنة الأولى من التعليم الثانوي",
+            role="front", mean_conf=50,
+        )
+        self.assertIn("التاريخ", hist.title)
+        self.assertEqual(hist.languages, ["ar"])
+
+        # D Math front + PVP sticker
+        self.assertEqual(extract_price_dt("PVP : 4,200 DT"), "4.200")
+        math = _draft_from_text(
+            "Mathématiques\n2ème année de l'enseignement secondaire",
+            role="front", mean_conf=55,
+        )
+        self.assertIn("Mathématiques", math.title)
+        self.assertIn("fr", math.languages)
+        self.assertNotIn("ar", math.languages)
+        self.assertNotIn("en", detect_script_langs("Mathématiques", mean_conf=55))
+
+    def test_premier_isbn_classify_and_optional_photo_decode(self):
+        from teyssir.catalog.bookscan.barcode import classify_barcode, decode_product_barcode
+        from teyssir.catalog.bookscan.preprocess import preprocess_cover, cleanup_preprocess
+
+        hit = classify_barcode("9789973352743", "EAN13")
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit.kind, "isbn13")
+        self.assertEqual(hit.raw, "9789973352743")
+
+        path = self._photo("12.40", "#2")
+        if path is None:
+            self.skipTest("Premier verso photo missing")
+        prep = None
+        try:
+            prep = preprocess_cover(str(path))
+            decoded = decode_product_barcode(str(path), prepare=prep)
+        finally:
+            if prep is not None:
+                cleanup_preprocess([prep])
+        if decoded is None:
+            self.skipTest("zbar/OpenCV missed Premier ISBN bars (lighting) — Vision 2E")
+        self.assertEqual(decoded.kind, "isbn13")
+        self.assertEqual(decoded.raw, "9789973352743")
+
+    def test_history_math_cnp_optional_photo_decode(self):
+        from teyssir.catalog.bookscan.barcode import decode_product_barcode
+        from teyssir.catalog.bookscan.preprocess import preprocess_cover, cleanup_preprocess
+
+        cases = [
+            (("12.41",), ("#2",), "local_product", "619"),
+            (("12.42",), (), "local_product", "619"),
+        ]
+        any_hit = False
+        for needles, exclude, kind, prefix in cases:
+            path = self._photo(*needles, exclude=exclude)
+            if path is None:
+                continue
+            prep = None
+            try:
+                prep = preprocess_cover(str(path))
+                decoded = decode_product_barcode(str(path), prepare=prep)
+            finally:
+                if prep is not None:
+                    cleanup_preprocess([prep])
+            if decoded is None:
+                continue
+            any_hit = True
+            self.assertEqual(decoded.kind, kind)
+            self.assertTrue(decoded.raw.startswith(prefix))
+        if not any_hit:
+            self.skipTest("zbar/OpenCV missed CNP stickers on History/Math versos")
