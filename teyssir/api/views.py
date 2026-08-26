@@ -815,3 +815,13 @@ def me(request):
         "store_code": settings.STORE_CODE,
         "role": settings.ROLE,
     })
+
+@api_view(["GET"])
+@permission_classes([capability("configure_system")])
+def diagnostics(request):
+    """GET /api/v1/diagnostics — admin/owner node health for the Diagnostics UI."""
+    from teyssir.core.diagnostics import collect_diagnostics
+
+    ping = request.query_params.get("ping", "1") not in ("0", "false", "no")
+    return Response(collect_diagnostics(ping_llm=ping))
+

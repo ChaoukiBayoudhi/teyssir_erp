@@ -5,20 +5,51 @@ import re
 
 from teyssir.core.money import to_money
 
+# Millime retail style: 12.500 / 12,500 (exactly 3 fractional digits).
+# Reject implausible millime tails (e.g. 8.043 from OCR noise on Arabic covers).
+_BARE_MILLIME_RE = re.compile(r"\b(\d{1,3}[.,](\d{3}))\b")
+_PLAUSIBLE_MILLIME_ENDS = frozenset(
+    {
+        "000", "100", "200", "250", "300", "400", "500",
+        "600", "700", "750", "800", "900",
+    }
+)
+
+
+def _plausible_bare_millime(frac: str) -> bool:
+    """Tunisian shelf prices almost always end in 0 or 5; odd tails are OCR noise."""
+    if frac in _PLAUSIBLE_MILLIME_ENDS:
+        return True
+    return frac.endswith(("0", "5"))
+
+
 # Require currency cue OR millime-style decimals — avoid bare ISBN digits.
 _PRICE_RES = [
     # Explicit currency / label
     re.compile(
-        r"(?:prix|price|سعر|الثمن)\s*[:=]?\s*"
-        r"(\d{1,4}(?:[.,]\d{1,3})?)\s*(?:dt|d\.?t\.?|tnd|د\.?\s*ت\.?|دينار)?\b",
+        r"(?:prix|price|سعر|الثمن|ttc|ht)\s*[:=]?\s*"
+        r"(\d{1,4}(?:[.,]\d{1,3})?)\s*(?:dt|d\.?t\.?|tnd|د\.?\s*ت\.?|دينار|€|eur|euros?)?\b",
         re.IGNORECASE,
     ),
     re.compile(
         r"\b(\d{1,4}(?:[.,]\d{1,3})?)\s*(?:dt|d\.?t\.?|tnd|د\.?\s*ت\.?|دينار)\b",
         re.IGNORECASE,
     ),
-    # Millime retail style: 12.500 / 12,500 (exactly 3 fractional digits)
-    re.compile(r"\b(\d{1,3}[.,]\d{3})\b"),
+    # Currency then amount (DT 14.900 / د.ت 12,500)
+    re.compile(
+        r"(?:dt|d\.?t\.?|tnd|د\.?\s*ت\.?|دينار)\s*[:=]?\s*"
+        r"(\d{1,4}(?:[.,]\d{1,3})?)\b",
+        re.IGNORECASE,
+    ),
+    # Euro on imported / bilingual covers
+    re.compile(
+        r"(?:€|eur|euros?)\s*(\d{1,4}(?:[.,]\d{1,3})?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(\d{1,4}(?:[.,]\d{1,3})?)\s*(?:€|eur|euros?)\b",
+        re.IGNORECASE,
+    ),
 ]
 
 
@@ -40,6 +71,19 @@ def extract_price_dt(text: str) -> str:
             if amount >= 1900 and amount <= 2100 and "." not in raw:
                 continue
             candidates.append(str(amount))
+    # Bare millime only when plausible (filters OCR noise like 8.043)
+    for m in _BARE_MILLIME_RE.finditer(text):
+        frac = m.group(2)
+        if not _plausible_bare_millime(frac):
+            continue
+        raw = m.group(1).replace(",", ".")
+        try:
+            amount = to_money(raw)
+        except Exception:
+            continue
+        if amount <= 0 or amount > 500:
+            continue
+        candidates.append(str(amount))
     if not candidates:
         return ""
     # Prefer amounts with millime precision (3 dp) when present

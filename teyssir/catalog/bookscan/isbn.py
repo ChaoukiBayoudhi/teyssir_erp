@@ -57,7 +57,11 @@ def to_isbn13(raw: str) -> str:
 
 
 def extract_isbns(text: str) -> list[str]:
-    """Find candidate ISBN-13 values in OCR / free text (best first)."""
+    """Find candidate ISBN-13 values in OCR / free text (best first).
+
+    Only checksum-valid bookland (978/979) ISBNs are returned. Invalid check
+    digits are rejected — never surface OCR digit soup as an ISBN.
+    """
     found: list[str] = []
     seen: set[str] = set()
 
@@ -73,6 +77,7 @@ def extract_isbns(text: str) -> list[str]:
         _add(m.group(1))
     for m in _DIGIT_BLOB_RE.finditer(re.sub(r"[-\s]", "", text or "")):
         _add(m.group(1))
+    # Prefer 978/979 already enforced by to_isbn13; stable order = discovery order
     return found
 
 
@@ -80,3 +85,8 @@ def extract_isbn(text: str) -> str:
     """First validated ISBN-13 found in text, or ''."""
     hits = extract_isbns(text)
     return hits[0] if hits else ""
+
+
+def is_valid_isbn13(raw: str) -> bool:
+    """True when raw normalizes to a checksum-valid ISBN-13 (978/979)."""
+    return bool(to_isbn13(raw))

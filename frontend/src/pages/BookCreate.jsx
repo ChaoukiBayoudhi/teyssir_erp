@@ -7,14 +7,97 @@ import { useTranslation } from "react-i18next";
 import { scanBook, pollScanJob, createBook, listCategories, listTaxRates } from "../api";
 import LangToggle from "../LangToggle.jsx";
 
+/** ISBN-13 check digit (bookland 978/979 only). Reject OCR digit soup before hinting. */
+function isbn13CheckOk(raw) {
+  const s = String(raw || "").replace(/[-\s]/g, "");
+  if (!/^97[89]\d{10}$/.test(s)) return false;
+  let total = 0;
+  for (let i = 0; i < 12; i++) {
+    total += (i % 2 === 0 ? 1 : 3) * parseInt(s[i], 10);
+  }
+  const check = (10 - (total % 10)) % 10;
+  return check === parseInt(s[12], 10);
+}
+
 async function detectIsbn(file) {
   if (!("BarcodeDetector" in window)) return "";
   try {
-    const det = new window.BarcodeDetector({ formats: ["ean_13"] });
+    const det = new window.BarcodeDetector({
+      formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128"],
+    });
     const bmp = await createImageBitmap(file);
-    const codes = await det.detect(bmp);
-    const ean = codes.find((c) => /^97[89]\d{10}$/.test(c.rawValue));
-    return ean ? ean.rawValue : "";
+    const tryDetect = async (source) => {
+      const codes = await det.detect(source);
+      // Prefer checksum-valid bookland EAN-13
+      const bookland = codes.filter((c) => isbn13CheckOk(c.rawValue));
+      if (bookland.length) return bookland[0].rawValue;
+      // Reject invalid-checksum 978/979 blobs (common OCR / misread)
+      return "";
+    };
+    let hit = await tryDetect(bmp);
+    if (hit) {
+      bmp.close?.();
+      return hit;
+    }
+    // Small / angled verso barcodes: bands, corners, rotations, contrast, upscale
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    const w = bmp.width;
+    const h = bmp.height;
+    const crops = [
+      { sx: 0, sy: Math.floor(h * 0.55), sw: w, sh: Math.floor(h * 0.45) },
+      { sx: 0, sy: Math.floor(h * 0.72), sw: w, sh: Math.floor(h * 0.28) },
+      { sx: Math.floor(w * 0.1), sy: Math.floor(h * 0.7), sw: Math.floor(w * 0.8), sh: Math.floor(h * 0.3) },
+      { sx: Math.floor(w * 0.45), sy: Math.floor(h * 0.65), sw: Math.floor(w * 0.55), sh: Math.floor(h * 0.35) },
+      { sx: 0, sy: Math.floor(h * 0.65), sw: Math.floor(w * 0.55), sh: Math.floor(h * 0.35) },
+      { sx: Math.floor(w * 0.45), sy: 0, sw: Math.floor(w * 0.55), sh: Math.floor(h * 0.35) },
+      { sx: 0, sy: 0, sw: Math.floor(w * 0.55), sh: Math.floor(h * 0.35) },
+    ];
+    const angles = [-12, 12, -20, 20, 90, 180, 270];
+    for (const c of crops) {
+      if (c.sw < 20 || c.sh < 20) continue;
+      for (const scale of [2, 3]) {
+        canvas.width = c.sw * scale;
+        canvas.height = c.sh * scale;
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(bmp, c.sx, c.sy, c.sw, c.sh, 0, 0, canvas.width, canvas.height);
+        // Boost contrast for faded ink
+        try {
+          const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const d = id.data;
+          for (let i = 0; i < d.length; i += 4) {
+            const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+            const v = g < 140 ? 0 : 255;
+            d[i] = d[i + 1] = d[i + 2] = v;
+          }
+          ctx.putImageData(id, 0, 0);
+        } catch { /* ignore */ }
+        hit = await tryDetect(canvas);
+        if (hit) break;
+        // Non-binarized upscale too
+        ctx.drawImage(bmp, c.sx, c.sy, c.sw, c.sh, 0, 0, canvas.width, canvas.height);
+        hit = await tryDetect(canvas);
+        if (hit) break;
+        for (const angle of angles) {
+          const rot = document.createElement("canvas");
+          const rad = (angle * Math.PI) / 180;
+          const rw = Math.abs(canvas.width * Math.cos(rad)) + Math.abs(canvas.height * Math.sin(rad));
+          const rh = Math.abs(canvas.width * Math.sin(rad)) + Math.abs(canvas.height * Math.cos(rad));
+          rot.width = Math.ceil(rw) || 1;
+          rot.height = Math.ceil(rh) || 1;
+          const rctx = rot.getContext("2d");
+          rctx.translate(rot.width / 2, rot.height / 2);
+          rctx.rotate(rad);
+          rctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+          hit = await tryDetect(rot);
+          if (hit) break;
+        }
+        if (hit) break;
+      }
+      if (hit) break;
+    }
+    bmp.close?.();
+    return hit || "";
   } catch {
     return "";
   }
@@ -29,8 +112,69 @@ async function detectIsbnFromImages(files) {
   return "";
 }
 
+/** Client-side blur (Laplacian variance) + contrast check before OCR. */
+async function assessImageQuality(file) {
+  const bmp = await createImageBitmap(file);
+  const w = Math.min(bmp.width, 320);
+  const h = Math.round((bmp.height / bmp.width) * w);
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(bmp, 0, 0, w, h);
+  bmp.close?.();
+  const { data } = ctx.getImageData(0, 0, w, h);
+  const gray = new Float32Array(w * h);
+  let min = 255;
+  let max = 0;
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    const g = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    gray[p] = g;
+    if (g < min) min = g;
+    if (g > max) max = g;
+  }
+  // Laplacian kernel approximation on interior pixels
+  let sum = 0;
+  let sumSq = 0;
+  let n = 0;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      const lap = gray[i - w] + gray[i + w] + gray[i - 1] + gray[i + 1] - 4 * gray[i];
+      sum += lap;
+      sumSq += lap * lap;
+      n++;
+    }
+  }
+  const mean = sum / Math.max(n, 1);
+  const variance = sumSq / Math.max(n, 1) - mean * mean;
+  const contrast = max - min;
+  return {
+    blurScore: variance,
+    contrast,
+    blurry: variance < 80,
+    lowContrast: contrast < 40,
+  };
+}
+
+async function assessCapturesQuality(files) {
+  const results = [];
+  for (const f of files) {
+    try {
+      results.push(await assessImageQuality(f));
+    } catch {
+      results.push({ blurry: false, lowContrast: false });
+    }
+  }
+  return {
+    blurry: results.some((r) => r.blurry),
+    lowContrast: results.some((r) => r.lowContrast),
+  };
+}
+
 const EMPTY = {
-  isbn13: "", title: "", subtitle: "", authors: "", translators: "", publisher: "",
+  isbn13: "", barcode_raw: "", barcode_symbology: "", barcode_kind: "",
+  title: "", subtitle: "", authors: "", translators: "", publisher: "",
   series: "", edition: "", pub_year: "", pages: "", languages: "", subject: "",
   description: "", sale_price: "", category: "", tax_rate: "",
 };
@@ -57,12 +201,24 @@ export default function BookCreate({ onBack, onLogout }) {
   const [taxes, setTaxes] = useState([]);
 
   const stopCamera = () => {
-    const s = streamRef.current || stream;
-    if (s) s.getTracks().forEach((tk) => tk.stop());
+    const s = streamRef.current;
+    if (s) {
+      try { s.getTracks().forEach((tk) => { try { tk.stop(); } catch { /* already stopped */ } }); } catch { /* ignore */ }
+    }
     streamRef.current = null;
     setStream(null);
-    if (videoRef.current) videoRef.current.srcObject = null;
+    if (videoRef.current) {
+      try { videoRef.current.srcObject = null; } catch { /* ignore */ }
+    }
   };
+
+  // Attach stream after <video> mounts (getUserMedia often resolves before React paints it).
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+      videoRef.current.play?.().catch(() => {});
+    }
+  }, [stream]);
 
   useEffect(() => {
     listCategories().then(setCats).catch(() => {});
@@ -118,6 +274,10 @@ export default function BookCreate({ onBack, onLogout }) {
   const capture = () => {
     const v = videoRef.current;
     if (!v) return;
+    if (!v.videoWidth || !v.videoHeight) {
+      setError(t("cameraNotReady"));
+      return;
+    }
     const canvas = document.createElement("canvas");
     canvas.width = v.videoWidth || 720;
     canvas.height = v.videoHeight || 960;
@@ -151,18 +311,32 @@ export default function BookCreate({ onBack, onLogout }) {
     stopCamera();
   };
 
-  const analyze = async () => {
+  const analyze = async ({ force = false } = {}) => {
     const files = images.filter(Boolean);
     if (!files.length) return;
+    // Always release the webcam before / during OCR (dock Camera stays open otherwise).
+    stopCamera();
+    setCaptureStep("ready");
     setBusy(true);
     setBusyLabel(t("analyzingBook"));
     setError("");
     setInfo("");
     try {
+      if (!force) {
+        setBusyLabel(t("checkingImageQuality"));
+        const q = await assessCapturesQuality(files);
+        if (q.blurry || q.lowContrast) {
+          setError(t("imageBlurryRetry"));
+          setBusy(false);
+          setBusyLabel("");
+          return;
+        }
+      }
       setBusyLabel(t("detectingIsbn"));
-      const isbn = await detectIsbnFromImages(files);
+      const detected = await detectIsbnFromImages(files);
+      const isbnHint = detected && isbn13CheckOk(detected) ? detected : "";
       setBusyLabel(t("runningOcr"));
-      let d = await scanBook(files, isbn);
+      let d = await scanBook(files, isbnHint);
       if (d.status === "pending") {
         setBusyLabel(t("waitingOcr"));
         d = await pollScanJob(d.job_id);
@@ -172,44 +346,100 @@ export default function BookCreate({ onBack, onLogout }) {
       }
       setDraft(d);
 
-      const resolvedIsbn = d.isbn13 || isbn || "";
-      const isbnMissing = !resolvedIsbn || d.raw?.isbn_not_detected;
-      if (isbnMissing && d.title) {
-        setError(`${t("isbnNotDetected")}\n${t("noIsbnTitleAssist")}`);
+      const serverIsbn = d.isbn13 && isbn13CheckOk(d.isbn13) ? d.isbn13 : "";
+      const resolvedIsbn = serverIsbn
+        || (!d.raw?.isbn_unconfirmed && !d.raw?.isbn_not_detected && isbnHint ? isbnHint : "");
+      const isbnMissing = !resolvedIsbn;
+      const priceMissing = !d.price;
+      const ocrErr = d.raw?.ocr_error || d.raw?.back?.ocr_error;
+      const lowConf = d.raw?.ocr_low_confidence || (d.confidence != null && d.confidence < 0.35);
+      const garbageLatin = !!(d.raw?.ocr_garbage_latin || d.raw?.ocr_arabic_likely || d.raw?.ocr_title_unusable);
+      const garbageArabic = !!(d.raw?.ocr_garbage_arabic);
+      const garbageOcr = garbageLatin || garbageArabic;
+      const missingAra = !!(d.raw?.tess_missing_ara || (d.raw?.tess_missing_langs || []).includes?.("ara"));
+      const weakTitleSearch = d.raw?.title_search_weak || (d.raw?.title_search && isbnMissing);
+      const metaOk = !!(resolvedIsbn && (d.source === "openlibrary" || d.source === "googlebooks" || d.confidence >= 0.8));
+      let warn = "";
+      let note = "";
+      if (ocrErr) {
+        warn = `${t("ocrUnavailable")}\n${ocrErr}\n${t("imageBlurryRetry")}`;
+      } else if (garbageOcr || missingAra) {
+        warn = missingAra ? t("ocrMissingAra") : t("ocrArabicWeak");
+        if (d.raw?.rejected_title || d.raw?.suggested_title) {
+          note = `${t("ocrGarbageTitleHint")} — ${d.raw.rejected_title || d.raw.suggested_title}`;
+        }
+        if (isbnMissing) {
+          note = note ? `${note}\n${t("barcodeCloseupHint")}` : t("barcodeCloseupHint");
+        }
+      } else if (lowConf && !d.title && !resolvedIsbn) {
+        warn = t("imageBlurryRetry");
+      } else if (lowConf && !metaOk) {
+        note = `${t("ocrWeak")}${d.raw?.suggested_title ? ` — ${d.raw.suggested_title}` : ""}`;
+        if (isbnMissing) {
+          note = `${note}\n${t("barcodeCloseupHint")}`;
+        }
+      } else if (isbnMissing && d.title) {
+        warn = `${t("isbnNotDetected")}\n${t("noIsbnTitleAssist")}\n${t("barcodeCloseupHint")}`;
       } else if (isbnMissing) {
-        setError(`${t("isbnNotDetected")}\n${t("isbnManualHint")}`);
+        warn = `${t("isbnNotDetected")}\n${t("isbnManualHint")}\n${t("barcodeCloseupHint")}`;
       } else if (d.raw?.metadata_miss && !d.title) {
-        setError(t("metadataMiss"));
+        warn = t("metadataMiss");
       } else if (d.source === "manual" || d.raw?.ocr_available === false) {
-        setError(t("ocrUnavailable"));
+        warn = t("ocrUnavailable");
+      } else if (!d.title && !resolvedIsbn) {
+        warn = t("ocrEmptyManual");
+      } else if (weakTitleSearch) {
+        note = t("titleSearchWeak");
       } else if (d.raw?.title_search) {
-        setInfo(t("titleSearchHit"));
+        note = t("titleSearchHit");
       }
+      if (!isbnMissing && priceMissing) {
+        note = note ? `${note}\n${t("priceNotDetected")}` : t("priceNotDetected");
+      }
+      if (d.raw?.suggested_isbn && isbnMissing) {
+        note = note
+          ? `${note}\n${t("isbnManualHint")} (${d.raw.suggested_isbn})`
+          : `${t("isbnManualHint")} (${d.raw.suggested_isbn})`;
+      }
+      setError(warn);
+      setInfo(note);
 
       const livre = cats.find((c) => /livre|book|كتاب|manuel/i.test(c.name_fr || ""));
       const tva7 = taxes.find((x) => Number(x.rate_percent) === 7);
+      // Do not present garbage OCR as a confident title; keep languages=ar when likely Arabic
+      const safeTitle = garbageOcr ? "" : (d.title || d.raw?.suggested_title || "");
+      const safeAuthors = garbageOcr ? "" : (d.authors || []).join(", ");
+      let langList = d.languages || [];
+      if (garbageOcr && !langList.includes("ar")) {
+        langList = ["ar"];
+      }
       setForm((prev) => ({
         ...EMPTY,
         isbn13: resolvedIsbn,
-        title: d.title || "",
+        barcode_raw: d.barcode_raw || "",
+        barcode_symbology: d.barcode_symbology || "",
+        barcode_kind: d.barcode_kind || "",
+        title: safeTitle,
         subtitle: d.subtitle || "",
-        authors: (d.authors || []).join(", "),
+        authors: safeAuthors,
         translators: (d.translators || []).join(", "),
         publisher: d.publisher || "",
         series: d.series || "",
         edition: d.edition || "",
         pub_year: d.pub_year || "",
         pages: d.pages || "",
-        languages: (d.languages || []).join(", "),
+        languages: langList.join(", "),
         subject: d.subject || "",
         description: d.description || "",
-        sale_price: d.price || "",
+        sale_price: garbageLatin && !d.raw?.price_detected ? "" : (d.price || ""),
         category: prev.category || livre?.id || "",
         tax_rate: prev.tax_rate || tva7?.id || "",
       }));
     } catch (err) {
-      setError(String(err.message || err));
+      const msg = String(err.message || err);
+      setError(/ocr|tesseract|empty|fail|échec/i.test(msg) ? `${t("imageBlurryRetry")}\n${msg}` : msg);
     } finally {
+      stopCamera();
       setBusy(false);
       setBusyLabel("");
     }
@@ -320,7 +550,10 @@ export default function BookCreate({ onBack, onLogout }) {
                     {captureStep === "back" ? t("startCameraBack") : t("startCamera")}
                   </Button>
                 ) : (
-                  <Button variant="contained" onClick={capture}>{captureLabel}</Button>
+                  <>
+                    <Button variant="contained" onClick={capture}>{captureLabel}</Button>
+                    <Button variant="outlined" color="error" onClick={stopCamera}>{t("stopCamera")}</Button>
+                  </>
                 )}
                 <Button variant="outlined" onClick={() => fileRef.current?.click()}>{t("choosePhotos")}</Button>
                 <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple hidden
@@ -333,9 +566,15 @@ export default function BookCreate({ onBack, onLogout }) {
                          e.target.value = "";
                        }} />
                 <Button variant="contained" color="secondary"
-                        disabled={!readyFiles || busy} onClick={analyze}>
+                        disabled={!readyFiles || busy} onClick={() => analyze({ force: false })}>
                   {t("analyze")}
                 </Button>
+                {readyFiles > 0 && error && /floue|blur|contraste|Image floue/i.test(error) && (
+                  <Button variant="outlined" color="warning" disabled={busy}
+                          onClick={() => analyze({ force: true })}>
+                    {t("analyzeAnyway")}
+                  </Button>
+                )}
                 {readyFiles > 0 && (
                   <Button color="inherit" onClick={resetCaptures}>{t("resetCaptures")}</Button>
                 )}
@@ -367,6 +606,7 @@ export default function BookCreate({ onBack, onLogout }) {
               </Stack>
               <Grid container spacing={1.5}>
                 <Grid item xs={12} sm={6}>{F("ISBN", "isbn13")}</Grid>
+                <Grid item xs={12} sm={6}>{F("Code-barres", "barcode_raw")}</Grid>
                 <Grid item xs={12} sm={6}>{F(t("priceF") + " (DT)", "sale_price", {
                   type: "number", inputProps: { min: 0, step: "0.001" },
                 })}</Grid>

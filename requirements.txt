@@ -4,12 +4,18 @@ djangorestframework>=3.15
 python-dotenv>=1.0
 argon2-cffi>=23.1            # Argon2id password hashing (spec §18)
 Pillow>=10                   # product/book images (ImageField)
+opencv-python-headless>=4.8  # book-cover preprocess: quad crop, deskew, CLAHE, white-label ROIs
+                            #   (Pillow-only fallback exists in bookscan.preprocess if cv2 missing)
 waitress>=3.0               # production WSGI server (Windows-friendly, pure Python)
 whitenoise>=6.6             # serve the built PWA + static on one port (no Nginx/Caddy needed)
 pdf2docx>=0.5               # PDF -> Word (.docx) converter (free/OSS; brings PyMuPDF)
 
 # --- Book registration / OCR (docs/BOOK-OCR-ARCHITECTURE.md) ---
 pytesseract>=0.3            # offline OCR; needs the `tesseract` binary + ara/fra/eng language data
+pyzbar>=0.1.9               # EAN-13/ISBN barcode decode from verso photos (needs libzbar)
+                            #   macOS: brew install zbar
+                            #   Debian/Ubuntu: apt install libzbar0
+                            #   Windows: bundle libzbar DLL or skip (OCR digit fallback still works)
                             #   macOS: brew install tesseract  + ara/fra traineddata in tessdata/
                             #   Linux: apt install tesseract-ocr tesseract-ocr-ara tesseract-ocr-fra
 # Vision-LLM OCR (OCR_PROVIDER=vision) is free/offline via Ollama (no Python dep — uses urllib):
