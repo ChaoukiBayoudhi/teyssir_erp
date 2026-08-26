@@ -162,3 +162,11 @@ class PdfToDocxTests(TestCase):
     def test_requires_a_file(self):
         r = self._client().post("/api/v1/tools/pdf-to-docx", {}, format="multipart")
         self.assertEqual(r.status_code, 400)
+
+class HealthPrinterTests(TestCase):
+    def test_health_reports_printer_target(self):
+        from django.test import Client
+        body = Client().get("/health/").json()
+        self.assertIn("printer", body)
+        self.assertIn("target", body["printer"])
+
