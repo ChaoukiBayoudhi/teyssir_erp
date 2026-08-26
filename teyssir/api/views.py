@@ -55,29 +55,30 @@ CanViewReports = capability("view_financial_reports")
 
 
 class ProductViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
-    """Catalog read + search + barcode lookup for the POS (spec §12/§13)."""
+    """Catalog read + search + barcode lookup for the POS (spec §12/§13).
+
+    Query params:
+      - ``search`` / ``q``: unified ranked search (name FR/AR, SKU, reference, ISBN, barcode)
+      - ``barcode``: exact barcode / SKU / reference / ISBN (scanner path)
+    """
 
     serializer_class = ProductSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
+        from teyssir.catalog.search import lookup_by_code, search_products
+
         qs = Product.objects.filter(active=True).select_related("tax_rate")
         barcode = self.request.query_params.get("barcode")
-        search = self.request.query_params.get("search")
+        search = (
+            self.request.query_params.get("search")
+            or self.request.query_params.get("q")
+            or ""
+        )
         if barcode:
-            code = barcode.strip()
-            ids = Barcode.objects.filter(value=code).values_list("product_id", flat=True)
-            return qs.filter(
-                Q(id__in=list(ids)) | Q(sku__iexact=code) | Q(reference__iexact=code)
-                | Q(isbn=code)
-            ).distinct()
-        if search:
-            q = search.strip()
-            bc_ids = Barcode.objects.filter(value__icontains=q).values_list("product_id", flat=True)
-            qs = qs.filter(
-                Q(name_fr__icontains=q) | Q(name_ar__icontains=q) | Q(sku__icontains=q)
-                | Q(reference__icontains=q) | Q(isbn__icontains=q) | Q(id__in=list(bc_ids))
-            ).distinct()
+            return lookup_by_code(barcode, base=qs).order_by("name_fr")[:50]
+        if search.strip():
+            return search_products(search, base=qs)
         return qs.order_by("name_fr")[:50]
 
 
@@ -112,23 +113,14 @@ class CatalogSearchView(APIView):
 
         from django.db.models import F
 
-        from teyssir.catalog.models import Barcode, BookContributor, Product, ProductImage
+        from teyssir.catalog.models import Product, ProductImage
+        from teyssir.catalog.search import catalog_text_filter
 
         qs = Product.objects.filter(active=True).select_related("category")
 
-        q = (request.query_params.get("q") or "").strip()
+        q = (request.query_params.get("q") or request.query_params.get("search") or "").strip()
         if q:
-            barcode_ids = list(Barcode.objects.filter(value__icontains=q)
-                               .values_list("product_id", flat=True))
-            author_ids = list(BookContributor.objects.filter(contributor__name__icontains=q)
-                              .values_list("book__product_id", flat=True))
-            qs = qs.filter(
-                Q(name_fr__icontains=q) | Q(name_ar__icontains=q) | Q(sku__icontains=q)
-                | Q(reference__icontains=q) | Q(isbn__icontains=q) | Q(internal_code__icontains=q)
-                | Q(book__isbn13__icontains=q) | Q(book__publisher__icontains=q)
-                | Q(book__subtitle__icontains=q)
-                | Q(id__in=barcode_ids) | Q(id__in=author_ids)
-            ).distinct()
+            qs = catalog_text_filter(qs, q)
 
         if request.query_params.get("category"):
             qs = qs.filter(category_id=request.query_params["category"])
@@ -180,13 +172,12 @@ class BarcodeLookupView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from teyssir.catalog.search import lookup_by_code
+
         code = (request.query_params.get("barcode") or request.query_params.get("q") or "").strip()
         if not code:
             return Response({"found": False, "barcode": code})
-        bc = Barcode.objects.filter(value=code).select_related("product").first()
-        p = bc.product if bc else Product.objects.filter(
-            Q(sku__iexact=code) | Q(reference__iexact=code) | Q(isbn=code), active=True
-        ).first()
+        p = lookup_by_code(code).select_related("tax_rate").first()
         if not p:
             return Response({"found": False, "barcode": code})
         return Response({"found": True, "barcode": code, "product": {
