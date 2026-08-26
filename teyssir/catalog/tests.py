@@ -523,6 +523,190 @@ class BarcodeIsbnTests(unittest.TestCase):
         self.assertIsInstance(barcode_engine_available(), bool)
 
 
+class NonIsbnBarcodeRetentionTests(TestCase):
+    """Phase 2B: keep Tunisian CNP / GTIN barcodes without inventing ISBN."""
+
+    # Ground-truth CNP EAN-13 (checksum-valid) for Book C History sticker
+    HISTORY_CNP = "6192202606921"
+    # Checksum-valid stand-in for Book D Math (printed digits + check)
+    MATH_CNP = "6192202502353"
+
+    def test_classify_cnp_619_is_local_product_not_isbn(self):
+        from teyssir.catalog.bookscan.barcode import classify_barcode
+        from teyssir.catalog.bookscan.isbn import to_isbn13
+
+        hit = classify_barcode(self.HISTORY_CNP, "EAN13")
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit.kind, "local_product")
+        self.assertEqual(hit.raw, self.HISTORY_CNP)
+        self.assertEqual(to_isbn13(self.HISTORY_CNP), "")
+        self.assertNotEqual(hit.kind, "isbn13")
+
+    def test_classify_bookland_is_isbn13(self):
+        from teyssir.catalog.bookscan.barcode import classify_barcode
+
+        hit = classify_barcode("9789973352743", "EAN13")
+        self.assertEqual(hit.kind, "isbn13")
+        self.assertEqual(hit.raw, "9789973352743")
+        self.assertEqual(hit.symbology, "ISBN")
+
+    def test_decode_retains_cnp_ean_from_rendered_image(self):
+        try:
+            import barcode
+            from barcode.writer import ImageWriter
+        except Exception:
+            self.skipTest("python-barcode not available")
+
+        from teyssir.catalog.bookscan.barcode import decode_isbn_barcode, decode_product_barcode
+        from teyssir.catalog.bookscan.isbn import to_isbn13
+
+        buf = BytesIO()
+        barcode.get_barcode_class("ean13")(self.HISTORY_CNP[:12], writer=ImageWriter()).write(buf)
+        buf.seek(0)
+        bc = Image.open(buf).convert("RGB")
+        # Phone-like: small angled barcode on a large page (ROI path matters)
+        page = Image.new("RGB", (900, 1200), (40, 90, 50))
+        sticker = Image.new("RGB", (280, 160), (250, 250, 250))
+        small = bc.resize((220, 90))
+        sticker.paste(small, (30, 40))
+        page.paste(sticker, (560, 980))
+        path = os.path.join(tempfile.mkdtemp(), "history_cnp.png")
+        page.save(path)
+
+        hit = decode_product_barcode(path)
+        self.assertIsNotNone(hit, "zbar should retain CNP EAN-13")
+        self.assertEqual(hit.raw, self.HISTORY_CNP)
+        self.assertEqual(hit.kind, "local_product")
+        self.assertEqual(decode_isbn_barcode(path), "")
+        self.assertEqual(to_isbn13(hit.raw), "")
+
+    def test_create_book_c_history_barcode_no_isbn(self):
+        """Book C History: no ISBN, CNP barcode searchable, price 4.900."""
+        from teyssir.catalog.search import lookup_by_code
+
+        product = create_book_from_draft(
+            data={
+                "title": "كتاب التاريخ",
+                "isbn13": "",
+                "barcode_raw": self.HISTORY_CNP,
+                "barcode_symbology": "EAN13",
+                "barcode_kind": "local_product",
+                "languages": ["ar"],
+                "publisher": "Centre National Pédagogique",
+            },
+            sale_price="4.900",
+        )
+        self.assertEqual(product.sku, self.HISTORY_CNP)
+        self.assertEqual(product.isbn, "")
+        book = Book.objects.get(product=product)
+        self.assertEqual(book.isbn13, "")
+        self.assertTrue(
+            Barcode.objects.filter(value=self.HISTORY_CNP, product=product).exists()
+        )
+        found = lookup_by_code(self.HISTORY_CNP).filter(pk=product.pk).first()
+        self.assertIsNotNone(found)
+        self.assertEqual(str(product.sale_price), "4.900")
+
+    def test_create_book_d_math_barcode_and_side_code(self):
+        """Book D Math: no ISBN, CNP + side code 222231, price 4.200."""
+        from teyssir.catalog.search import lookup_by_code
+
+        product = create_book_from_draft(
+            data={
+                "title": "الرياضيات",
+                "isbn13": "",
+                "barcode_raw": self.MATH_CNP,
+                "barcode_symbology": "EAN13",
+                "barcode_kind": "local_product",
+                "extra_barcodes": [{"value": "222231", "symbology": "CODE128"}],
+                "languages": ["ar"],
+            },
+            sale_price="4.200",
+        )
+        self.assertEqual(product.isbn, "")
+        self.assertTrue(Barcode.objects.filter(value=self.MATH_CNP, product=product).exists())
+        self.assertTrue(Barcode.objects.filter(value="222231", product=product).exists())
+        self.assertIsNotNone(lookup_by_code(self.MATH_CNP).filter(pk=product.pk).first())
+        self.assertIsNotNone(lookup_by_code("222231").filter(pk=product.pk).first())
+        self.assertEqual(str(product.sale_price), "4.200")
+
+    def test_scan_keeps_cnp_barcode_fields_without_isbn(self):
+        try:
+            import barcode
+            from barcode.writer import ImageWriter
+        except Exception:
+            self.skipTest("python-barcode not available")
+
+        from unittest.mock import patch
+
+        from teyssir.catalog.bookscan.draft import BookDraft
+
+        buf = BytesIO()
+        barcode.get_barcode_class("ean13")(self.HISTORY_CNP[:12], writer=ImageWriter()).write(buf)
+        buf.seek(0)
+        bc = Image.open(buf).convert("RGB").resize((200, 80))
+        page = Image.new("RGB", (700, 1000), "white")
+        page.paste(bc, (250, 880))
+        path = os.path.join(tempfile.mkdtemp(), "cnp_scan.png")
+        page.save(path)
+
+        empty = BookDraft(
+            title="كتاب التاريخ",
+            source="tesseract",
+            confidence=0.4,
+            languages=["ar"],
+            price="4.900",
+            raw={"isbn_not_detected": True, "price_detected": True},
+        )
+        with patch("teyssir.catalog.bookscan.services.get_ocr_provider") as g, \
+             patch("teyssir.catalog.bookscan.services._should_try_vision", return_value=False):
+            class P:
+                name = "tesseract"
+
+                def extract(self, p, role="auto"):
+                    return "كتاب التاريخ", empty
+            g.return_value = P()
+            out, _ = scan_book([path], isbn="", enrich=lambda i: None)
+
+        self.assertEqual(out.barcode_raw, self.HISTORY_CNP)
+        self.assertEqual(out.barcode_kind, "local_product")
+        self.assertEqual(out.isbn13, "")
+        self.assertTrue(out.raw.get("barcode_detected"))
+        self.assertTrue(out.raw.get("barcode_non_isbn"))
+        self.assertFalse(out.raw.get("isbn_from_barcode"))
+
+    def test_digit_ocr_never_fills_barcode_raw(self):
+        """Digit-OCR ISBN path must not promote OCR digits as barcode_*."""
+        from unittest.mock import patch
+
+        from teyssir.catalog.bookscan.draft import BookDraft
+
+        suspect = "9787723827435"
+        ocr_draft = BookDraft(
+            title="test",
+            isbn13=suspect,
+            source="tesseract",
+            confidence=0.85,
+            raw={"isbn_from_digit_ocr": True, "isbn_detected": True},
+        )
+        with patch("teyssir.catalog.bookscan.services.get_ocr_provider") as g, \
+             patch("teyssir.catalog.bookscan.services._product_barcode_from_paths",
+                   return_value=None), \
+             patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths",
+                   return_value=(suspect, "digit_ocr")), \
+             patch("teyssir.catalog.bookscan.services._should_try_vision", return_value=False):
+            class P:
+                name = "tesseract"
+
+                def extract(self, path, role="auto"):
+                    return "test", ocr_draft
+            g.return_value = P()
+            out, _ = scan_book(["/tmp/fake.png"], isbn="", enrich=lambda i: None)
+        self.assertEqual(out.barcode_raw, "")
+        self.assertNotEqual(out.raw.get("barcode_source"), "digit_ocr")
+        self.assertLess(out.confidence or 0, 0.5)
+
+
 class TitleSearchGatingTests(unittest.TestCase):
     def test_title_similarity_jaccard(self):
         from teyssir.catalog.bookscan.metadata import title_similarity

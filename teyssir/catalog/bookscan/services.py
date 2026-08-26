@@ -9,11 +9,35 @@ from django.db import transaction
 
 from teyssir.core.money import require_non_negative_money
 
-from .barcode import decode_isbn_with_source
+from .barcode import DecodedBarcode, decode_isbn_with_source, decode_product_barcode
 from .draft import BookDraft
 from .isbn import to_isbn13
 from .metadata import enrich_by_isbn, enrich_by_title
 from .ocr import get_ocr_provider
+
+
+def _apply_barcode_hit(draft: BookDraft, hit: DecodedBarcode | None) -> None:
+    """Attach Phase 2B barcode fields; set isbn13 only for bookland hits."""
+    if not hit:
+        return
+    draft.barcode_raw = hit.raw
+    draft.barcode_symbology = hit.symbology
+    draft.barcode_kind = hit.kind
+    draft.raw = {
+        **(draft.raw or {}),
+        "barcode_detected": True,
+        "barcode_source": hit.source,
+    }
+    if hit.kind == "isbn13":
+        draft.isbn13 = hit.raw
+        draft.raw["isbn_from_barcode"] = True
+        draft.raw["isbn_detected"] = True
+        draft.raw.pop("isbn_not_detected", None)
+    else:
+        # Never invent ISBN from CNP 619… / other non-bookland codes
+        draft.raw["barcode_non_isbn"] = True
+        if draft.isbn13 and not to_isbn13(draft.isbn13):
+            draft.isbn13 = ""
 
 
 def _merge_cover_drafts(front: BookDraft, back: BookDraft | None) -> BookDraft:
@@ -21,7 +45,8 @@ def _merge_cover_drafts(front: BookDraft, back: BookDraft | None) -> BookDraft:
     out = BookDraft(source=front.source or (back.source if back else ""), confidence=0.0)
     # Bibliographic identity from front
     for key in ("title", "subtitle", "publisher", "series", "edition", "subject",
-                "description", "isbn13", "isbn10", "price"):
+                "description", "isbn13", "isbn10", "price",
+                "barcode_raw", "barcode_symbology", "barcode_kind"):
         setattr(out, key, getattr(front, key) or "")
     out.authors = list(front.authors or [])
     out.translators = list(front.translators or [])
@@ -31,11 +56,15 @@ def _merge_cover_drafts(front: BookDraft, back: BookDraft | None) -> BookDraft:
     out.raw = {**(front.raw or {}), "covers": {"front": True}}
 
     if back:
-        # Back wins for ISBN + price; fills empty bib fields
+        # Back wins for ISBN + price + product barcode; fills empty bib fields
         if back.isbn13:
             out.isbn13 = back.isbn13
         if back.price:
             out.price = back.price
+        if back.barcode_raw:
+            out.barcode_raw = back.barcode_raw
+            out.barcode_symbology = back.barcode_symbology or out.barcode_symbology
+            out.barcode_kind = back.barcode_kind or out.barcode_kind
         if back.isbn10 and not out.isbn10:
             out.isbn10 = back.isbn10
         for key in ("title", "subtitle", "publisher", "subject", "description"):
@@ -53,12 +82,17 @@ def _merge_cover_drafts(front: BookDraft, back: BookDraft | None) -> BookDraft:
         out.raw["covers"] = {"front": True, "back": True}
         out.raw["back"] = {k: back.raw.get(k) for k in
                            ("isbn_detected", "isbn_not_detected", "price_detected",
-                            "isbn_from_barcode", "isbn_from_digit_ocr", "ocr_langs")
+                            "isbn_from_barcode", "isbn_from_digit_ocr", "ocr_langs",
+                            "barcode_detected", "barcode_non_isbn", "barcode_source")
                            if back.raw}
         if back.raw.get("isbn_from_barcode"):
             out.raw["isbn_from_barcode"] = True
         if back.raw.get("isbn_from_digit_ocr"):
             out.raw["isbn_from_digit_ocr"] = True
+        if back.raw.get("barcode_detected"):
+            out.raw["barcode_detected"] = True
+        if back.raw.get("barcode_non_isbn"):
+            out.raw["barcode_non_isbn"] = True
 
     from .ocr import is_usable_ocr_title, merge_bilingual_title
 
@@ -103,11 +137,32 @@ def _merge_cover_drafts(front: BookDraft, back: BookDraft | None) -> BookDraft:
     return out
 
 
+def _product_barcode_from_paths(image_paths, prepared=None) -> DecodedBarcode | None:
+    """Real decoder hit (ISBN or non-ISBN) across frames; prefer verso, prefer ISBN."""
+    if not image_paths:
+        return None
+    order = list(reversed(range(len(image_paths))))
+    fallback: DecodedBarcode | None = None
+    for i in order:
+        prep = None
+        if prepared and 0 <= i < len(prepared):
+            prep = prepared[i]
+        hit = decode_product_barcode(image_paths[i], prepare=prep)
+        if not hit:
+            continue
+        if hit.kind == "isbn13":
+            return hit
+        if fallback is None:
+            fallback = hit
+    return fallback
+
+
 def _barcode_isbn_from_paths(image_paths, prepared=None) -> tuple[str, str]:
     """Try barcode (+ digit OCR) on all images (prefer last = verso).
 
     Returns ``(isbn13, source)`` with ``source`` in ``barcode`` | ``digit_ocr`` | ``''``.
-    Prefers a real pyzbar hit over digit OCR across all frames.
+    Prefers a real pyzbar ISBN hit over digit OCR across all frames.
+    Non-ISBN product codes are handled by :func:`_product_barcode_from_paths`.
     When ``prepared`` (list of CoverPreprocessResult) is given, ROI bands are tried first.
     """
     if not image_paths:
@@ -201,12 +256,24 @@ def _scan_book_prepared(
     enrich_title,
 ):
     """Inner scan on already-preprocessed paths (+ optional ROI metadata)."""
-    # ISBN-first: real barcode beats OCR digits and wrong title-only OL hits.
+    # Product barcode first (Phase 2B): retain ISBN and non-ISBN (CNP 619…).
+    # Digit OCR never fills barcode_* ; isbn13 only when bookland check OK.
+    product_bc: DecodedBarcode | None = None
     barcode_isbn = ""
     isbn_source = ""
-    if not isbn and image_paths:
-        barcode_isbn, isbn_source = _barcode_isbn_from_paths(image_paths, prepared)
-        isbn = barcode_isbn
+    if image_paths:
+        product_bc = _product_barcode_from_paths(image_paths, prepared)
+        if product_bc and product_bc.kind == "isbn13" and not isbn:
+            barcode_isbn = product_bc.raw
+            isbn_source = "barcode"
+            isbn = barcode_isbn
+        elif not isbn:
+            # ISBN-only digit-OCR fallback (never promotes non-ISBN / 619 as ISBN)
+            barcode_isbn, isbn_source = _barcode_isbn_from_paths(image_paths, prepared)
+            if barcode_isbn and isbn_source == "barcode":
+                isbn = barcode_isbn
+            elif barcode_isbn and isbn_source == "digit_ocr":
+                isbn = barcode_isbn
 
     texts, front, back = _extract_pair(provider, image_paths)
     if not isbn and front.isbn13:
@@ -235,6 +302,18 @@ def _scan_book_prepared(
 
     ocr_draft = _merge_cover_drafts(front, back) if image_paths else front
     ocr_text = "\n---\n".join(texts)
+
+    # Attach product barcode (ISBN or CNP/GTIN). Prefer path-level zbar hit.
+    if product_bc:
+        _apply_barcode_hit(ocr_draft, product_bc)
+    elif not ocr_draft.barcode_raw:
+        for side in (back, front):
+            if side and side.barcode_raw:
+                ocr_draft.barcode_raw = side.barcode_raw
+                ocr_draft.barcode_symbology = side.barcode_symbology
+                ocr_draft.barcode_kind = side.barcode_kind
+                break
+
     if isbn:
         ocr_draft.isbn13 = ocr_draft.isbn13 or isbn
         ocr_draft.raw["isbn_detected"] = True
@@ -366,6 +445,14 @@ def _scan_book_prepared(
         # Never advertise high confidence without ISBN from fuzzy title alone
         if draft.raw.get("title_search") and not draft.isbn13:
             draft.confidence = min(draft.confidence or 0.4, 0.45)
+
+    # Ensure barcode fields survive metadata merge
+    if product_bc and not draft.barcode_raw:
+        _apply_barcode_hit(draft, product_bc)
+    elif ocr_draft.barcode_raw and not draft.barcode_raw:
+        draft.barcode_raw = ocr_draft.barcode_raw
+        draft.barcode_symbology = ocr_draft.barcode_symbology
+        draft.barcode_kind = ocr_draft.barcode_kind
 
     return draft, ocr_text
 
@@ -539,8 +626,23 @@ def create_book_from_draft(*, data, image_ids=(), sale_price="0", origin_termina
         Barcode, Book, BookContributor, Contributor, Product, ProductImage,
     )
 
-    isbn13 = to_isbn13(data.get("isbn13") or "") or (data.get("isbn13") or "").strip()
-    sku = (data.get("sku") or isbn13 or f"BK-{uuid.uuid4().hex[:10]}").strip()
+    # ISBN only when bookland 978/979 checksum OK — never promote 619… to isbn13
+    isbn13 = to_isbn13(data.get("isbn13") or "") or ""
+    barcode_raw = (data.get("barcode_raw") or "").strip()
+    barcode_symbology = (data.get("barcode_symbology") or "").strip()
+    barcode_kind = (data.get("barcode_kind") or "").strip()
+    # If client sent a 619 code as isbn13 by mistake, keep it as local barcode only
+    raw_isbn_field = (data.get("isbn13") or "").strip()
+    if not isbn13 and raw_isbn_field:
+        digits = "".join(ch for ch in raw_isbn_field if ch.isdigit())
+        if digits.startswith("619") and not barcode_raw:
+            barcode_raw = digits[:13] if len(digits) >= 13 else digits
+            barcode_kind = barcode_kind or "local_product"
+            barcode_symbology = barcode_symbology or "EAN13"
+
+    sku = (
+        data.get("sku") or isbn13 or barcode_raw or f"BK-{uuid.uuid4().hex[:10]}"
+    ).strip()
     tax_rate_id = data.get("tax_rate") or _default_book_tax_rate_id()
     category_id = data.get("category") or _default_book_category_id()
     product = Product.objects.create(
@@ -551,6 +653,11 @@ def create_book_from_draft(*, data, image_ids=(), sale_price="0", origin_termina
         category_id=category_id or None,
         origin_terminal=origin_terminal,
     )
+    raw_meta = dict(data.get("raw") or {})
+    if barcode_raw:
+        raw_meta.setdefault("barcode_raw", barcode_raw)
+        raw_meta.setdefault("barcode_symbology", barcode_symbology)
+        raw_meta.setdefault("barcode_kind", barcode_kind)
     book = Book.objects.create(
         product=product, isbn13=isbn13, isbn10=data.get("isbn10", ""),
         subtitle=data.get("subtitle", ""), publisher=data.get("publisher", ""),
@@ -560,7 +667,7 @@ def create_book_from_draft(*, data, image_ids=(), sale_price="0", origin_termina
         cover_type=data.get("cover_type", ""), subject=data.get("subject", ""),
         keywords=data.get("keywords", []), description=data.get("description", ""),
         source_provider=data.get("source", ""), ocr_confidence=data.get("confidence") or 0.0,
-        raw_metadata=data.get("raw", {}),
+        raw_metadata=raw_meta,
     )
     for role, key in [(BookContributor.AUTHOR, "authors"), (BookContributor.TRANSLATOR, "translators")]:
         for i, name in enumerate(data.get(key, [])):
@@ -578,4 +685,25 @@ def create_book_from_draft(*, data, image_ids=(), sale_price="0", origin_termina
 
     if isbn13:
         Barcode.objects.get_or_create(value=isbn13, symbology="ISBN", defaults={"product": product})
+    if barcode_raw and barcode_raw != isbn13:
+        sym = barcode_symbology or (
+            "EAN13" if barcode_raw.isdigit() and len(barcode_raw) in (12, 13) else "CODE128"
+        )
+        if barcode_kind == "isbn13":
+            sym = "ISBN"
+        Barcode.objects.get_or_create(
+            value=barcode_raw, symbology=sym, defaults={"product": product},
+        )
+    # Optional secondary local codes (e.g. Math CNP side code 222231)
+    for extra in data.get("extra_barcodes") or []:
+        if isinstance(extra, dict):
+            val = (extra.get("value") or "").strip()
+            sym = (extra.get("symbology") or "CODE128").strip() or "CODE128"
+        else:
+            val = str(extra or "").strip()
+            sym = "CODE128"
+        if val and val not in (isbn13, barcode_raw):
+            Barcode.objects.get_or_create(
+                value=val, symbology=sym, defaults={"product": product},
+            )
     return product

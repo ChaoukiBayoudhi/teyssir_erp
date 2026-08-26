@@ -835,7 +835,7 @@ class TesseractOcrProvider(OcrProvider):
             return "", draft
 
         try:
-            from .barcode import decode_isbn_with_source
+            from .barcode import decode_isbn_with_source, decode_product_barcode
 
             digit_blob = ""
             text_blob = ""
@@ -853,15 +853,25 @@ class TesseractOcrProvider(OcrProvider):
             best_arabic_title = ""
             best_arabic_score = 0.0
 
-            # Barcode-first (EAN-13 = ISBN): beats Tesseract on small/angled verso photos.
+            # Barcode-first: ISBN when bookland; else retain CNP/GTIN (Phase 2B).
             # Never treat digit-OCR as barcode — checksum-valid OCR can still be wrong.
             barcode_isbn = ""
             isbn_source = ""  # barcode | digit_ocr | ""
+            product_bc = None
             if role in ("back", "auto"):
-                barcode_isbn, isbn_source = decode_isbn_with_source(image_path)
-                if barcode_isbn:
+                product_bc = decode_product_barcode(image_path)
+                if product_bc and product_bc.kind == "isbn13":
+                    barcode_isbn = product_bc.raw
+                    isbn_source = "barcode"
                     digit_blob = barcode_isbn
-                    used.append("barcode" if isbn_source == "barcode" else "digit_ocr")
+                    used.append("barcode")
+                elif product_bc:
+                    used.append("barcode_non_isbn")
+                else:
+                    barcode_isbn, isbn_source = decode_isbn_with_source(image_path)
+                    if barcode_isbn:
+                        digit_blob = barcode_isbn
+                        used.append("barcode" if isbn_source == "barcode" else "digit_ocr")
 
             def _annotate(draft, label, mean_conf, langs_used):
                 draft.raw["ocr_pass"] = label
@@ -876,6 +886,13 @@ class TesseractOcrProvider(OcrProvider):
                 return _apply_confidence_gate(draft, mean_conf)
 
             def _apply_isbn(draft):
+                if product_bc and product_bc.kind != "isbn13":
+                    draft.barcode_raw = product_bc.raw
+                    draft.barcode_symbology = product_bc.symbology
+                    draft.barcode_kind = product_bc.kind
+                    draft.raw["barcode_detected"] = True
+                    draft.raw["barcode_non_isbn"] = True
+                    draft.raw["barcode_source"] = product_bc.source
                 if not barcode_isbn:
                     return draft
                 draft.isbn13 = barcode_isbn
@@ -885,6 +902,11 @@ class TesseractOcrProvider(OcrProvider):
                     draft.raw["isbn_from_barcode"] = True
                     draft.raw.pop("isbn_from_digit_ocr", None)
                     draft.confidence = max(draft.confidence or 0, 0.85)
+                    if product_bc and product_bc.kind == "isbn13":
+                        draft.barcode_raw = product_bc.raw
+                        draft.barcode_symbology = product_bc.symbology
+                        draft.barcode_kind = "isbn13"
+                        draft.raw["barcode_detected"] = True
                 else:
                     draft.raw["isbn_from_digit_ocr"] = True
                     draft.raw.pop("isbn_from_barcode", None)

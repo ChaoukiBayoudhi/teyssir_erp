@@ -173,7 +173,8 @@ async function assessCapturesQuality(files) {
 }
 
 const EMPTY = {
-  isbn13: "", title: "", subtitle: "", authors: "", translators: "", publisher: "",
+  isbn13: "", barcode_raw: "", barcode_symbology: "", barcode_kind: "",
+  title: "", subtitle: "", authors: "", translators: "", publisher: "",
   series: "", edition: "", pub_year: "", pages: "", languages: "", subject: "",
   description: "", sale_price: "", category: "", tax_rate: "",
 };
@@ -415,6 +416,9 @@ export default function BookCreate({ onBack, onLogout }) {
       setForm((prev) => ({
         ...EMPTY,
         isbn13: resolvedIsbn,
+        barcode_raw: d.barcode_raw || "",
+        barcode_symbology: d.barcode_symbology || "",
+        barcode_kind: d.barcode_kind || "",
         title: safeTitle,
         subtitle: d.subtitle || "",
         authors: safeAuthors,
@@ -602,6 +606,7 @@ export default function BookCreate({ onBack, onLogout }) {
               </Stack>
               <Grid container spacing={1.5}>
                 <Grid item xs={12} sm={6}>{F("ISBN", "isbn13")}</Grid>
+                <Grid item xs={12} sm={6}>{F("Code-barres", "barcode_raw")}</Grid>
                 <Grid item xs={12} sm={6}>{F(t("priceF") + " (DT)", "sale_price", {
                   type: "number", inputProps: { min: 0, step: "0.001" },
                 })}</Grid>
