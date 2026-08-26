@@ -2,7 +2,7 @@ from django.conf import settings
 from django.db import models
 
 from teyssir.catalog.models import Product
-from teyssir.core.models import MONEY, QTY, SyncableModel
+from teyssir.core.models import MONEY, SyncableModel
 
 
 class Quotation(SyncableModel):
@@ -28,7 +28,7 @@ class Quotation(SyncableModel):
 class QuotationLine(SyncableModel):
     quotation = models.ForeignKey(Quotation, on_delete=models.CASCADE, related_name="lines")
     product = models.ForeignKey(Product, on_delete=models.PROTECT)
-    qty = models.DecimalField(default=1, **QTY)
+    qty = models.IntegerField(default=1)
     unit_price = models.DecimalField(default=0, **MONEY)
     tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     line_total = models.DecimalField(default=0, **MONEY)
@@ -45,7 +45,7 @@ class Reservation(SyncableModel):
     product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name="reservations")
     customer_id = models.CharField(max_length=64, blank=True, default="")
     terminal = models.CharField(max_length=8, blank=True, default="")
-    qty = models.DecimalField(default=1, **QTY)
+    qty = models.IntegerField(default=1)
     status = models.CharField(max_length=10, choices=STATUS, default=HELD)
     expires_at = models.DateTimeField(null=True, blank=True)
     created_by = models.ForeignKey(

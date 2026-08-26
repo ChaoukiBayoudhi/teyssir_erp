@@ -1,7 +1,7 @@
 from django.db import models
 
 from teyssir.catalog.models import Product
-from teyssir.core.models import MONEY, QTY, SyncableModel
+from teyssir.core.models import MONEY, SyncableModel
 
 
 class StockMovement(SyncableModel):
@@ -20,7 +20,7 @@ class StockMovement(SyncableModel):
     REASONS = [(x, x) for x in (RECEIPT, SALE, RETURN, ADJUST, TRANSFER, STOCKTAKE)]
 
     product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name="movements")
-    qty = models.DecimalField(**QTY)  # signed: + in, - out
+    qty = models.IntegerField()  # signed: + in, - out (whole pieces)
     reason = models.CharField(max_length=12, choices=REASONS)
     unit_cost = models.DecimalField(default=0, **MONEY)
     ref_type = models.CharField(max_length=24, blank=True, default="")

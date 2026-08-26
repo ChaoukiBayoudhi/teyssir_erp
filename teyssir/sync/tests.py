@@ -67,7 +67,7 @@ class SyncTests(TestCase):
         self.assertEqual(Sale.objects.count(), 1)
         self.assertEqual(StockMovement.objects.filter(reason="SALE").count(), 1)
         self.product.refresh_from_db()
-        self.assertEqual(self.product.qty_on_hand, Decimal("9.000"))  # 10 received - 1 sold
+        self.assertEqual(self.product.qty_on_hand, 9)  # 10 received - 1 sold
 
     def test_push_requires_sync_key(self):
         r = APIClient().post("/api/v1/sync/push", {"entries": []}, format="json")
@@ -95,9 +95,9 @@ class SyncTests(TestCase):
         entries = [as_entry(e) for e in SyncOutbox.objects.order_by("seq")]
         result = apply_push(entries)           # hub merges both tills' movements
         self.product.refresh_from_db()
-        self.assertEqual(self.product.qty_on_hand, Decimal("-1.000"))   # fold: 1 - 1 - 1
+        self.assertEqual(self.product.qty_on_hand, -1)   # fold: 1 - 1 - 1
         self.assertEqual(len(result["reconciliation_warnings"]), 1)
-        self.assertEqual(result["reconciliation_warnings"][0]["on_hand"], "-1.000")
+        self.assertEqual(result["reconciliation_warnings"][0]["on_hand"], "-1")
 
     def test_config_snapshot_propagates_fiscal_stamp(self):
         # hub raises the timbre to 1.500
@@ -157,6 +157,22 @@ class SyncTests(TestCase):
         replicated = Book.objects.get(pk=book.pk)
         self.assertEqual(replicated.contributors.first().contributor.name, "Saint-Exupéry")
 
+    def test_master_pull_preserves_local_qty_on_hand(self):
+        """Hub Product snapshot must not clobber the till's stock cache (fold over movements)."""
+        self.product.qty_on_hand = 42
+        self.product.sale_price = Decimal("0.900")  # hub price change
+        self.product.save(update_fields=["qty_on_hand", "sale_price", "updated_at"])
+        collected = collect_master_changes()
+
+        # Simulate till local stock after offline sales, while hub still has old price/qty in payload
+        Product.objects.filter(pk=self.product.pk).update(
+            qty_on_hand=7, sale_price=Decimal("0.850"),
+        )
+        apply_master_changes(collected["records"], config=collected["config"])
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.qty_on_hand, 7)  # local fold preserved
+        self.assertEqual(self.product.sale_price, Decimal("0.900"))   # hub price applied
+
     def test_fetch_missing_media_downloads_cover_files(self):
         import tempfile
         from io import BytesIO
@@ -198,9 +214,9 @@ class CloudForwardingTests(TestCase):
     def _incoming_from_a_till(self):
         """Make a finalized sale, serialize its outbox entries, then clear the local outbox to
         simulate entries that arrived at the store hub over HTTP (not authored locally)."""
-        apply_movement(product_id=self.product.id, qty=Decimal("10"), reason=StockMovement.RECEIPT)
+        apply_movement(product_id=self.product.id, qty=10, reason=StockMovement.RECEIPT)
         sale = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
-        SaleLine.objects.create(sale=sale, product=self.product, qty=Decimal("1"),
+        SaleLine.objects.create(sale=sale, product=self.product, qty=1,
                                 unit_price=Decimal("0.850"), tax_rate=Decimal("7.00"))
         finalize_sale(sale, when=WHEN)
         entries = [{"id": str(e.id), "entity": e.entity, "entity_id": e.entity_id, "op": e.op,

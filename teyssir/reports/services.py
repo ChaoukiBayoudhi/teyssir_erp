@@ -64,7 +64,7 @@ def sales_report(date_from, date_to, store=None):
         "margin_pct": str(margin),
         "best_sellers": [
             {"sku": b["product__sku"], "name": b["product__name_fr"],
-             "qty": str(Decimal(b["qty"]).quantize(Decimal("0.001"))),
+             "qty": str(int(b["qty"] or 0)),
              "revenue": str(to_money(b["revenue"]))}
             for b in best
         ],

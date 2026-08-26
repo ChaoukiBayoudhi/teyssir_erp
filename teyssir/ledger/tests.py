@@ -22,9 +22,9 @@ class GeneralLedgerTests(TestCase):
         self.product = Product.objects.create(
             sku="PEN", name_fr="Stylo", tax_rate=tva7, sale_price=Decimal("0.850"),
         )
-        receive_goods(product_id=self.product.id, qty=Decimal("100"), unit_cost=Decimal("0.400"))
+        receive_goods(product_id=self.product.id, qty=100, unit_cost=Decimal("0.400"))
         sale = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
-        SaleLine.objects.create(sale=sale, product=self.product, qty=Decimal("3"),
+        SaleLine.objects.create(sale=sale, product=self.product, qty=3,
                                 unit_price=Decimal("0.850"), tax_rate=Decimal("7.00"))
         finalize_sale(sale, payment_method="CASH")
         self.sale = sale
@@ -58,12 +58,18 @@ class GeneralLedgerTests(TestCase):
         from teyssir.purchasing.models import Supplier
         from teyssir.purchasing.services import receive_direct
 
+        from teyssir.customers.services import charge_account
+
         receive_direct(supplier=Supplier.objects.create(name="Sup"),
                        items=[{"product_id": self.product.id, "qty": "50", "unit_cost": "0.400"}])
-        post_payment(Customer.objects.create(name="Cust"), Decimal("5.000"))
+        cust = Customer.objects.create(name="Cust")
+        charge_account(cust, Decimal("5.000"), "SALE", "setup")
+        post_payment(cust, Decimal("5.000"))
 
         counts = post_all_to_gl()
-        self.assertEqual(counts, {"sales": 1, "receipts": 1, "purchase_invoices": 0, "payments": 1})
+        self.assertEqual(counts, {
+            "sales": 1, "returns": 0, "receipts": 1, "purchase_invoices": 0, "payments": 1,
+        })
 
         fs = financial_statements()
         self.assertTrue(fs["balance_sheet"]["balanced"])              # A = L + Equity
@@ -85,3 +91,36 @@ class GeneralLedgerTests(TestCase):
         self.assertEqual(vd["tva_collected"], "0.179")
         self.assertEqual(vd["tva_deductible"], "19.000")
         self.assertEqual(vd["net_payable"], "-18.821")   # VAT credit carried forward
+
+    def test_return_reverses_vat_in_gl(self):
+        from teyssir.ledger.services import post_all_to_gl, post_return_to_gl, vat_declaration
+        from teyssir.sales.services import process_return
+        import datetime
+
+        FiscalStampConfig.objects.get_or_create(doc_type="AVOIR", defaults={"amount": Decimal("0")})
+        ret = process_return(
+            original_sale=self.sale,
+            items=[{"product_id": self.product.id, "qty": "3",
+                    "unit_price": "0.850", "tax_rate": "7.00"}],
+            refund_method="CASH",
+        )
+        entry = post_return_to_gl(ret)
+        agg = entry.lines.aggregate(d=Sum("debit"), c=Sum("credit"))
+        self.assertEqual(agg["d"], agg["c"])
+
+        post_all_to_gl()
+        today = datetime.date.today()
+        vd = vat_declaration(today, today)
+        # Sale collected 0.179; full return reverses it → net collected 0
+        self.assertEqual(vd["tva_collected"], "0.000")
+
+    def test_sale_without_payment_is_skipped_by_batch(self):
+        from teyssir.ledger.services import post_sales_to_gl
+        orphan = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
+        SaleLine.objects.create(sale=orphan, product=self.product, qty=1,
+                                unit_price=Decimal("0.850"), tax_rate=Decimal("7.00"))
+        finalize_sale(orphan)  # no payment_method
+        # Batch must not raise; only the paid self.sale posts (already posted in other tests = 0 new)
+        # Clear prior postings for this check:
+        JournalEntry.objects.all().delete()
+        self.assertEqual(post_sales_to_gl(), 1)  # only self.sale has CASH payment
