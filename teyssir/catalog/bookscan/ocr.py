@@ -1442,7 +1442,9 @@ _VISION_PROMPT = (
     "title, subtitle, authors (list), translators (list), publisher, series, edition, "
     "languages (ISO codes list, e.g. [\"ar\",\"fr\"]), pub_year (int), pages (int), "
     "isbn13, subject, description, price (string in TND if printed). "
-    "Preserve the original script for Arabic text."
+    "Preserve the original script for Arabic text. "
+    "CRITICAL: Never invent or guess an ISBN. Set isbn13 to empty string unless the digits "
+    "are clearly printed on the cover/verso; do not fabricate check digits."
 )
 
 _VISION_KEYS = {
@@ -1495,15 +1497,32 @@ def _draft_from_vision_json(raw):
     return draft
 
 
+def _vision_image_b64(image_path: str) -> str:
+    """JPEG-encode a downscaled cover for Ollama (phone photos are multi‑MB otherwise)."""
+    import io
+
+    from PIL import Image
+
+    max_edge = int(getattr(settings, "VISION_IMAGE_MAX_EDGE", 1280) or 1280)
+    with Image.open(image_path) as im:
+        im = im.convert("RGB")
+        im = _downscale_max_edge(im, max_edge)
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG", quality=85, optimize=True)
+        return base64.b64encode(buf.getvalue()).decode()
+
+
 class VisionLlmOcrProvider(OcrProvider):
     """Structured multilingual extraction via a local Ollama vision model (free, offline, no key)."""
 
     name = "vision"
 
-    def __init__(self, transport=None):
+    def __init__(self, transport=None, timeout=None):
         self._transport = transport
+        self._timeout = timeout
 
     def _ollama(self, image_b64):
+        timeout = self._timeout if self._timeout is not None else settings.VISION_TIMEOUT
         body = json.dumps({
             "model": settings.VISION_MODEL,
             "prompt": _VISION_PROMPT,
@@ -1515,18 +1534,21 @@ class VisionLlmOcrProvider(OcrProvider):
             f"{settings.OLLAMA_URL}/api/generate", data=body,
             headers={"Content-Type": "application/json"}, method="POST",
         )
-        with urllib.request.urlopen(req, timeout=settings.VISION_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.load(resp).get("response", "")
 
     def extract(self, image_path, role="auto", prepare=None, known_barcode=None):
         try:
-            with open(image_path, "rb") as fh:
-                image_b64 = base64.b64encode(fh.read()).decode()
+            image_b64 = _vision_image_b64(image_path)
             raw = (self._transport or self._ollama)(image_b64)
         except Exception:
             return ManualOcrProvider().extract(image_path, role=role, prepare=prepare)
         text, draft = raw, _draft_from_vision_json(raw)
-        draft.raw = {**(draft.raw or {}), "cover_role": role}
+        draft.raw = {
+            **(draft.raw or {}),
+            "cover_role": role,
+            "vision_downscaled": True,
+        }
         return text, draft
 
 

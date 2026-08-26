@@ -69,6 +69,30 @@ TEYSSIR_SCAN_EXECUTOR=thread
 .\deploy\windows\install.ps1 -Role hub -SkipLlm          # no Ollama at all
 ```
 
+
+## Vision fallback gate (Phase 2E)
+
+Default OCR stays **Tesseract**. Local Ollama Vision runs only as a gated fallback when the
+Tess path is weak (Arabic calligraphy, garbage Latin misreads, phone photos with no barcode
+and no usable title). Strong barcode+title paths skip Vision.
+
+| Env | Default | Role |
+|-----|---------|------|
+| `TEYSSIR_OCR_VISION_FALLBACK` | `true` | Enable/disable the gate |
+| `TEYSSIR_VISION_FALLBACK_TIMEOUT` | `28` | Soft budget (s) for fallback calls |
+| `TEYSSIR_VISION_TIMEOUT` | `45` | Hard cap (s) |
+| `TEYSSIR_VISION_IMAGE_MAX_EDGE` | `1280` | Downscale before base64→Ollama |
+
+Vision **never** invents an ISBN: only checksum-valid bookland 978/979 is kept.
+
+### Win11 / local Ollama tips
+
+1. Keep `TEYSSIR_OCR_PROVIDER=tesseract` for day-to-day speed; pull vision only if needed:
+   `.\deploy\windows\Install-LocalLlm.ps1 -Model mistral -PullVision`
+2. Ensure Ollama is running as the same user as the Teyssir service (or allow `127.0.0.1:11434`).
+3. First Vision call loads the model (~tens of seconds); use `TEYSSIR_SCAN_EXECUTOR=thread`.
+4. If Vision times out, Tess draft is kept — set a lower `TEYSSIR_VISION_FALLBACK_TIMEOUT` on weak PCs.
+
 ## Troubleshooting
 
 ### Model not loading / `ollama pull` hangs
