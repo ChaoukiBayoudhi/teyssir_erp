@@ -78,11 +78,30 @@ def _merge_cover_drafts(front: BookDraft, back: BookDraft | None) -> BookDraft:
             out.authors = list(back.authors)
         # Union language tags from both covers (bilingual FR+AR)
         if back.languages:
-            merged_langs = list(out.languages or [])
-            for lang in back.languages:
-                if lang not in merged_langs:
-                    merged_langs.append(lang)
-            out.languages = merged_langs
+            from .ocr import arabic_char_ratio, is_usable_ocr_title
+
+            front_latin_only = (
+                is_usable_ocr_title(front.title or "")
+                and arabic_char_ratio(front.title or "") < 0.12
+                and "ar" not in (front.languages or [])
+            )
+            if front_latin_only:
+                # EN/FR front must not inherit false Arabic from verso noise
+                merged_langs = list(front.languages or [])
+                for lang in back.languages:
+                    if lang == "ar":
+                        continue
+                    if lang not in merged_langs:
+                        merged_langs.append(lang)
+                out.languages = merged_langs
+                out.raw.pop("arabic_script_detected", None)
+                out.raw.pop("ocr_arabic_likely", None)
+            else:
+                merged_langs = list(out.languages or [])
+                for lang in back.languages:
+                    if lang not in merged_langs:
+                        merged_langs.append(lang)
+                out.languages = merged_langs
         out.raw["covers"] = {"front": True, "back": True}
         out.raw["back"] = {k: back.raw.get(k) for k in
                            ("isbn_detected", "isbn_not_detected", "price_detected",

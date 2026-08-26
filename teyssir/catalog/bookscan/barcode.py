@@ -27,9 +27,9 @@ if TYPE_CHECKING:
 _LEGACY_TILTS = (-12, 12)
 _LEGACY_CARDINALS = (90, 270)
 
-# Budgeted ROI variants (upscale barcode bands; no 4× / sharp / binary fan-out).
+# Budgeted ROI variants (upscale barcode bands; no sharp / binary fan-out).
 _ROI_TILTS = (-12, 12)
-_ROI_SCALES = (2.0, 3.0)
+_ROI_SCALES = (2.0, 3.0, 4.0)
 # Hard cap on region×variant decode attempts after ROI miss (Phase 2C).
 _LEGACY_FALLBACK_BUDGET = 6
 
@@ -274,6 +274,7 @@ def _roi_band_regions(img, prepare: "CoverPreprocessResult | None") -> Iterator[
 
     w, h = img.size
     # Prefer sticker → barcode_band → price_band (title unused for barcodes)
+    # Phase 2D: barcode_band before price for ISBN-978 verso stickers (Premier)
     order = ("white_label", "barcode_band", "price_band")
     boxes = {name: box for name, box in iter_roi_crops(prepare)}
     for name in order:
@@ -289,6 +290,10 @@ def _roi_band_regions(img, prepare: "CoverPreprocessResult | None") -> Iterator[
         if name == "white_label" and crop.height > 40:
             cw, ch = crop.size
             yield "white_label_mid", crop.crop((0, int(ch * 0.15), cw, int(ch * 0.85)))
+        # Tight lower barcode strip on barcode_band (ISBN bars sit near bottom)
+        if name == "barcode_band" and crop.height > 50:
+            cw, ch = crop.size
+            yield "barcode_band_lower", crop.crop((0, int(ch * 0.35), cw, ch))
 
 
 def _roi_variants(region) -> Iterator[tuple[str, object]]:
@@ -344,7 +349,7 @@ def decode_product_barcode(
     if best:
         return best
 
-    # Phase 2A/2B/2C: preprocess ROIs first (white PVP/CNP stickers on Tunisian covers)
+    # Phase 2A/2B/2C/2D: preprocess ROIs first (white PVP/CNP stickers + ISBN bands)
     seen: set[str] = set()
     for rlabel, region in _roi_band_regions(img, prepare):
         for vlabel, variant in _roi_variants(region):
@@ -352,8 +357,12 @@ def decode_product_barcode(
             if key in seen:
                 continue
             seen.add(key)
-            # pyzbar only on variants — OpenCV already tried on full frame
-            hit = _pick_best(_decode_hits(variant, allow_opencv=False))
+            # OpenCV on a few upscales of barcode/sticker ROIs (phone photos need it);
+            # keep pyzbar-only on tilts to avoid explosion.
+            allow_cv = vlabel in ("raw", "x3", "x4") and (
+                rlabel.startswith("barcode") or rlabel.startswith("white_label")
+            )
+            hit = _pick_best(_decode_hits(variant, allow_opencv=allow_cv))
             if hit:
                 return hit
 
@@ -368,7 +377,9 @@ def decode_product_barcode(
                 continue
             seen.add(key)
             tries += 1
-            hit = _pick_best(_decode_hits(variant, allow_opencv=False))
+            # One OpenCV chance on the first lower-band x3
+            allow_cv = tries <= 2 and vlabel in ("x3", "contrast")
+            hit = _pick_best(_decode_hits(variant, allow_opencv=allow_cv))
             if hit:
                 return hit
     return None
