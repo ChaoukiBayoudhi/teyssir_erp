@@ -1,6 +1,8 @@
 """Book-scan orchestration: ISBN-first (barcode → enrich), multi-cover merge, title fallback."""
 from __future__ import annotations
 
+import logging
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from concurrent.futures import as_completed
@@ -14,6 +16,8 @@ from .draft import BookDraft
 from .isbn import to_isbn13
 from .metadata import enrich_by_isbn, enrich_by_title
 from .ocr import get_ocr_provider
+
+logger = logging.getLogger("teyssir.ocr")
 
 
 def _apply_barcode_hit(draft: BookDraft, hit: DecodedBarcode | None) -> None:
@@ -181,7 +185,9 @@ def _barcode_isbn_from_paths(image_paths, prepared=None) -> tuple[str, str]:
     return digit_fallback
 
 
-def _extract_pair(provider, image_paths):
+def _extract_pair(
+    provider, image_paths, prepared=None, known_barcode=None, *, barcode_searched=False,
+):
     """OCR front (+ optional back) in parallel when two covers are present."""
     texts: list[str] = []
     front = BookDraft(raw={"isbn_not_detected": True})
@@ -191,15 +197,32 @@ def _extract_pair(provider, image_paths):
         return texts, front, back
 
     role0 = "front" if len(image_paths) > 1 else "auto"
+    prep0 = prepared[0] if prepared and len(prepared) > 0 else None
+    prep1 = prepared[1] if prepared and len(prepared) > 1 else None
+    # When services already ran barcode decode, pass False-ish sentinel via empty tuple
+    kb = known_barcode if known_barcode is not None else (
+        False if barcode_searched else None
+    )
+
+    def _call(path, role, prep):
+        try:
+            return provider.extract(
+                path, role=role, prepare=prep, known_barcode=kb,
+            )
+        except TypeError:
+            try:
+                return provider.extract(path, role=role, prepare=prep)
+            except TypeError:
+                return provider.extract(path, role=role)
 
     if len(image_paths) == 1:
-        t0, front = provider.extract(image_paths[0], role=role0)
+        t0, front = _call(image_paths[0], role0, prep0)
         texts.append(t0 or "")
         return texts, front, back
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        fut_front = pool.submit(provider.extract, image_paths[0], role0)
-        fut_back = pool.submit(provider.extract, image_paths[1], "back")
+        fut_front = pool.submit(_call, image_paths[0], role0, prep0)
+        fut_back = pool.submit(_call, image_paths[1], "back", prep1)
         results = {}
         for fut in as_completed([fut_front, fut_back]):
             results[fut] = fut.result()
@@ -258,6 +281,8 @@ def _scan_book_prepared(
     """Inner scan on already-preprocessed paths (+ optional ROI metadata)."""
     # Product barcode first (Phase 2B): retain ISBN and non-ISBN (CNP 619…).
     # Digit OCR never fills barcode_* ; isbn13 only when bookland check OK.
+    # Phase 2C: skip digit-OCR ISBN hunt when a non-ISBN product barcode is already retained.
+    t_scan = time.perf_counter()
     product_bc: DecodedBarcode | None = None
     barcode_isbn = ""
     isbn_source = ""
@@ -267,15 +292,28 @@ def _scan_book_prepared(
             barcode_isbn = product_bc.raw
             isbn_source = "barcode"
             isbn = barcode_isbn
-        elif not isbn:
-            # ISBN-only digit-OCR fallback (never promotes non-ISBN / 619 as ISBN)
-            barcode_isbn, isbn_source = _barcode_isbn_from_paths(image_paths, prepared)
-            if barcode_isbn and isbn_source == "barcode":
-                isbn = barcode_isbn
-            elif barcode_isbn and isbn_source == "digit_ocr":
-                isbn = barcode_isbn
+        elif not isbn and not product_bc:
+            # Already ran zbar/OpenCV product decode — digit-OCR ISBN only (no re-fan-out)
+            from .barcode import ocr_isbn_digits_from_image
 
-    texts, front, back = _extract_pair(provider, image_paths)
+            order = list(reversed(range(len(image_paths))))
+            for i in order:
+                prep = None
+                if prepared and 0 <= i < len(prepared):
+                    prep = prepared[i]
+                dig = ocr_isbn_digits_from_image(image_paths[i], prepare=prep)
+                if dig:
+                    barcode_isbn, isbn_source = dig, "digit_ocr"
+                    isbn = dig
+                    break
+
+    texts, front, back = _extract_pair(
+        provider,
+        image_paths,
+        prepared=prepared,
+        known_barcode=product_bc,
+        barcode_searched=bool(image_paths),
+    )
     if not isbn and front.isbn13:
         isbn = to_isbn13(front.isbn13) or ""
         if isbn and front.raw.get("isbn_from_barcode"):
@@ -454,6 +492,19 @@ def _scan_book_prepared(
         draft.barcode_symbology = ocr_draft.barcode_symbology
         draft.barcode_kind = ocr_draft.barcode_kind
 
+    scan_ms = int((time.perf_counter() - t_scan) * 1000)
+    draft.raw = {**(draft.raw or {}), "scan_ms": scan_ms}
+    # Prefer per-cover ocr_ms when present
+    if ocr_draft.raw.get("ocr_ms") and "ocr_ms" not in (draft.raw or {}):
+        draft.raw["ocr_ms"] = ocr_draft.raw["ocr_ms"]
+    logger.info(
+        "scan_book done ms=%s title=%r isbn=%s barcode=%s conf=%s",
+        scan_ms,
+        (draft.title or "")[:40],
+        draft.isbn13 or "",
+        draft.barcode_raw or "",
+        draft.confidence,
+    )
     return draft, ocr_text
 
 

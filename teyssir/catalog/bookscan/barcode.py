@@ -10,6 +10,8 @@ crops first (budgeted variants) before the broader region search.
 Phase 2B: retain non-ISBN product barcodes (Tunisian CNP ``619…``, other GTIN/EAN/UPC/Code128).
 ``isbn13`` is set only for checksum-valid bookland 978/979. Digit OCR never fills
 ``barcode_*`` fields and must never invent an ISBN from a ``619`` code.
+
+Phase 2C: ROI-first decode with a tiny legacy fallback budget (no region×variant explosion).
 """
 from __future__ import annotations
 
@@ -21,13 +23,15 @@ from .isbn import extract_isbn, to_isbn13
 if TYPE_CHECKING:
     from .preprocess import CoverPreprocessResult
 
-# Small tilts + cardinal rotations for handheld / sideways verso shots.
-_TILT_ROTATIONS = (-8, 8, -15, 15, -25, 25)
-_CARDINAL_ROTATIONS = (90, 180, 270)
+# Legacy fallback only (after ROI miss) — keep tiny.
+_LEGACY_TILTS = (-12, 12)
+_LEGACY_CARDINALS = (90, 270)
 
-# Budgeted ROI-first variants (avoid unbounded explosion when preprocess ROIs exist).
-_ROI_TILTS = (-12, 12, -20, 20)
-_ROI_SCALES = (1.0, 2.0, 3.0, 4.0)
+# Budgeted ROI variants (upscale barcode bands; no 4× / sharp / binary fan-out).
+_ROI_TILTS = (-12, 12)
+_ROI_SCALES = (2.0, 3.0)
+# Hard cap on region×variant decode attempts after ROI miss (Phase 2C).
+_LEGACY_FALLBACK_BUDGET = 6
 
 # pyzbar type → catalog symbology label
 _SYMBOLOGY_MAP = {
@@ -194,11 +198,13 @@ def _opencv_decode_all(image) -> list[DecodedBarcode]:
     return out
 
 
-def _decode_hits(image) -> list[DecodedBarcode]:
+def _decode_hits(image, *, allow_opencv: bool = True) -> list[DecodedBarcode]:
     hits = _pyzbar_decode_all(image)
     if hits:
         return hits
-    return _opencv_decode_all(image)
+    if allow_opencv:
+        return _opencv_decode_all(image)
+    return []
 
 
 def _pyzbar_decode(image) -> list[str]:
@@ -207,26 +213,18 @@ def _pyzbar_decode(image) -> list[str]:
 
 
 def _barcode_regions(img) -> Iterator[tuple[str, object]]:
-    """Yield (label, PIL image) candidate crops where EAN barcodes usually sit."""
+    """Small set of verso crops for legacy fallback (Phase 2C — no corner explosion)."""
     from PIL import ImageOps
 
     w, h = img.size
-    yield "full", img
     if h > 60:
-        yield "lower40", img.crop((0, int(h * 0.55), w, h))
         yield "lower30", img.crop((0, int(h * 0.68), w, h))
-        yield "lower20", img.crop((0, int(h * 0.78), w, h))
-    if w > 80 and h > 60:
-        yield "lower_center", img.crop((int(w * 0.15), int(h * 0.55), int(w * 0.85), h))
     if w > 100 and h > 80:
-        yield "bottom_band", img.crop((0, int(h * 0.78), w, h))
-        # Corner placements (common on Arabic / school books)
         yield "br_corner", img.crop((int(w * 0.45), int(h * 0.65), w, h))
-        yield "bl_corner", img.crop((0, int(h * 0.65), int(w * 0.55), h))
-        yield "tr_corner", img.crop((int(w * 0.45), 0, w, int(h * 0.35)))
-        yield "tl_corner", img.crop((0, 0, int(w * 0.55), int(h * 0.35)))
-    # High-contrast grayscale of full image (helps faded ink)
-    yield "gray", ImageOps.autocontrast(ImageOps.grayscale(img).convert("RGB"))
+        yield "bottom_band", img.crop((0, int(h * 0.78), w, h))
+    yield "gray_lower", ImageOps.autocontrast(
+        ImageOps.grayscale(img.crop((0, int(h * 0.6), w, h) if h > 60 else (0, 0, w, h))).convert("RGB")
+    )
 
 
 def _scale(im, factor: float):
@@ -248,34 +246,24 @@ def _up_min_side(im, min_side=900):
 
 
 def _variants(region) -> Iterator[tuple[str, object]]:
-    from PIL import ImageEnhance, ImageFilter, ImageOps
+    """Tiny legacy variant set (used only after ROI miss, budget-capped)."""
+    from PIL import ImageEnhance, ImageOps
 
-    base = _up_min_side(region, 900)
-    yield "up", base
-    # Force 2× / 3× even on already-large phone photos (tiny barcode bars)
     yield "x2", _scale(region, 2.0)
     yield "x3", _scale(region, 3.0)
-
-    g = ImageOps.autocontrast(ImageOps.grayscale(base))
-    yield "gray_up", g.convert("RGB")
-    sharp = ImageEnhance.Contrast(g).enhance(2.2)
-    yield "contrast", sharp.convert("RGB")
-    sharpened = sharp.filter(ImageFilter.SHARPEN)
-    yield "sharpen", sharpened.convert("RGB")
-    # Binary threshold — helps low-contrast phone photos
-    bw = sharp.point(lambda x: 255 if x > 130 else 0)
+    g = ImageOps.autocontrast(ImageOps.grayscale(_up_min_side(region, 700)))
+    contrast = ImageEnhance.Contrast(g).enhance(2.2)
+    yield "contrast", contrast.convert("RGB")
+    bw = contrast.point(lambda x: 255 if x > 125 else 0)
     yield "binary", bw.convert("RGB")
-    bw2 = ImageOps.autocontrast(g).point(lambda x: 255 if x > 110 else 0)
-    yield "binary_soft", bw2.convert("RGB")
-
-    for angle in _TILT_ROTATIONS:
-        rotated = base.rotate(angle, expand=True, fillcolor="white")
-        yield f"rot{angle}", _up_min_side(rotated, min_side=700)
-
-    for angle in _CARDINAL_ROTATIONS:
-        rotated = base.rotate(angle, expand=True, fillcolor="white")
-        yield f"card{angle}", _up_min_side(rotated, min_side=700)
-        yield f"card{angle}_x2", _scale(rotated, 2.0)
+    for angle in _LEGACY_TILTS:
+        yield f"rot{angle}", _up_min_side(
+            region.rotate(angle, expand=True, fillcolor="white"), min_side=700
+        )
+    for angle in _LEGACY_CARDINALS:
+        yield f"card{angle}", _up_min_side(
+            region.rotate(angle, expand=True, fillcolor="white"), min_side=700
+        )
 
 
 def _roi_band_regions(img, prepare: "CoverPreprocessResult | None") -> Iterator[tuple[str, object]]:
@@ -297,30 +285,24 @@ def _roi_band_regions(img, prepare: "CoverPreprocessResult | None") -> Iterator[
             continue
         crop = img.crop(clamped.as_tuple())
         yield name, crop
-        # Sticker often has bars in the middle band — extra tight crops
+        # One tight mid-sticker crop (bars often sit in the middle third)
         if name == "white_label" and crop.height > 40:
             cw, ch = crop.size
             yield "white_label_mid", crop.crop((0, int(ch * 0.15), cw, int(ch * 0.85)))
-            yield "white_label_bars", crop.crop((int(cw * 0.08), int(ch * 0.2), int(cw * 0.98), int(ch * 0.75)))
 
 
 def _roi_variants(region) -> Iterator[tuple[str, object]]:
-    """Few upscale/tilt/binary variants for ROI crops (no cardinal explosion)."""
-    from PIL import ImageEnhance, ImageFilter, ImageOps
+    """Upscale + light contrast/binary for ROI barcode bands (no cardinal explosion)."""
+    from PIL import ImageEnhance, ImageOps
 
     yield "raw", region
     for scale in _ROI_SCALES:
-        if scale <= 1.01:
-            continue
         up = _scale(region, scale)
         yield f"x{int(scale)}", up
         g = ImageOps.autocontrast(ImageOps.grayscale(up))
-        yield f"x{int(scale)}_gray", g.convert("RGB")
         contrast = ImageEnhance.Contrast(g).enhance(2.2)
         yield f"x{int(scale)}_contrast", contrast.convert("RGB")
-        sharp = contrast.filter(ImageFilter.SHARPEN)
-        yield f"x{int(scale)}_sharp", sharp.convert("RGB")
-        bw = sharp.point(lambda x: 255 if x > 125 else 0)
+        bw = contrast.point(lambda x: 255 if x > 125 else 0)
         yield f"x{int(scale)}_binary", bw.convert("RGB")
     base = _up_min_side(region, 700)
     for angle in _ROI_TILTS:
@@ -346,6 +328,7 @@ def decode_product_barcode(
     """Return the best retained product barcode (ISBN or non-ISBN), or None.
 
     Only real decoder hits (pyzbar / OpenCV). Digit OCR never populates this path.
+    Phase 2C: whole image → ROI variants → tiny legacy fallback (budget-capped).
     """
     try:
         from PIL import Image
@@ -357,11 +340,11 @@ def decode_product_barcode(
     except Exception:
         return None
 
-    best = _pick_best(_decode_hits(img))
+    best = _pick_best(_decode_hits(img, allow_opencv=True))
     if best:
         return best
 
-    # Phase 2A/2B: preprocess ROIs first (white PVP/CNP stickers on Tunisian covers)
+    # Phase 2A/2B/2C: preprocess ROIs first (white PVP/CNP stickers on Tunisian covers)
     seen: set[str] = set()
     for rlabel, region in _roi_band_regions(img, prepare):
         for vlabel, variant in _roi_variants(region):
@@ -369,17 +352,23 @@ def decode_product_barcode(
             if key in seen:
                 continue
             seen.add(key)
-            hit = _pick_best(_decode_hits(variant))
+            # pyzbar only on variants — OpenCV already tried on full frame
+            hit = _pick_best(_decode_hits(variant, allow_opencv=False))
             if hit:
                 return hit
 
+    # Severely cut legacy region×variant fan-out (Phase 2C)
+    tries = 0
     for rlabel, region in _barcode_regions(img):
         for vlabel, variant in _variants(region):
+            if tries >= _LEGACY_FALLBACK_BUDGET:
+                return None
             key = f"{rlabel}:{vlabel}"
             if key in seen:
                 continue
             seen.add(key)
-            hit = _pick_best(_decode_hits(variant))
+            tries += 1
+            hit = _pick_best(_decode_hits(variant, allow_opencv=False))
             if hit:
                 return hit
     return None
@@ -419,23 +408,22 @@ def ocr_isbn_digits_from_image(
         return ""
 
     w, h = img.size
-    bands = [img]
-    # Prefer preprocess ROI crops when available
+    bands = []
+    # Prefer preprocess ROI crops when available (Phase 2C: tiny digit-OCR budget)
     for _label, region in _roi_band_regions(img, prepare):
         bands.append(region)
-    if h > 80:
-        bands.append(img.crop((0, int(h * 0.65), w, h)))
-        bands.append(img.crop((0, int(h * 0.78), w, h)))
-    if w > 100 and h > 80:
+        if len(bands) >= 2:
+            break
+    if not bands and h > 80:
+        bands.append(img.crop((0, int(h * 0.72), w, h)))
+    if w > 100 and h > 80 and len(bands) < 2:
         bands.append(img.crop((int(w * 0.4), int(h * 0.65), w, h)))
-        bands.append(img.crop((0, int(h * 0.65), int(w * 0.6), h)))
 
     cfg = "--psm 6 -c tessedit_char_whitelist=0123456789Xx-"
     blob = ""
-    # Cap band count — ROI + fixed bands, no explosion
-    for band in bands[:8]:
-        for scale in (1.0, 2.0, 3.0):
-            im = _scale(band, scale) if scale > 1 else band
+    for band in bands[:3]:
+        for scale in (2.0, 3.0):
+            im = _scale(band, scale)
             g = ImageOps.autocontrast(ImageOps.grayscale(im))
             g = ImageEnhance.Contrast(g).enhance(2.0)
             try:

@@ -707,6 +707,63 @@ class NonIsbnBarcodeRetentionTests(TestCase):
         self.assertLess(out.confidence or 0, 0.5)
 
 
+class FastOcrPathTests(unittest.TestCase):
+    """Phase 2C: budgeted lang passes + legacy barcode fallback cap."""
+
+    def test_budgeted_lang_passes_max_two(self):
+        from teyssir.catalog.bookscan.ocr import _budgeted_lang_passes
+
+        installed = {"ara", "fra", "eng"}
+        one = _budgeted_lang_passes(
+            "front", installed, primary="ara+fra", bilingual_evidence=False,
+        )
+        self.assertEqual(len(one), 1)
+        two = _budgeted_lang_passes(
+            "front", installed, primary="ara+fra", bilingual_evidence=True,
+        )
+        self.assertLessEqual(len(two), 2)
+        self.assertTrue(two[0].startswith("ara"))
+
+    def test_legacy_barcode_budget_small(self):
+        from teyssir.catalog.bookscan import barcode as bc
+        from PIL import Image
+
+        self.assertLessEqual(bc._LEGACY_FALLBACK_BUDGET, 8)
+        img = Image.new("RGB", (900, 1200), "white")
+        regions = list(bc._barcode_regions(img))
+        self.assertLessEqual(len(regions), 5)
+        variants = list(bc._variants(regions[0][1]))
+        # region×variant uncapped would explode; budget truncates decode tries
+        self.assertLessEqual(len(regions) * len(variants), 40)
+
+    def test_preprocess_variants_prefer_title_band_and_cap(self):
+        import tempfile
+        from teyssir.catalog.bookscan.ocr import _preprocess_variants
+        from teyssir.catalog.bookscan.preprocess import RoiBox, CoverPreprocessResult
+        from PIL import Image
+
+        img = Image.new("RGB", (800, 1000), "white")
+        path = tempfile.mktemp(suffix=".jpg")
+        img.save(path)
+        prep = CoverPreprocessResult(
+            path=path,
+            original_path=path,
+            width=800,
+            height=1000,
+            title_band=RoiBox(40, 40, 760, 320),
+            barcode_band=RoiBox(40, 720, 760, 980),
+            price_band=RoiBox(40, 520, 760, 720),
+            white_label=None,
+            method="test",
+        )
+        labels = [lab for lab, _ in _preprocess_variants(path, role="auto", prepare=prep)]
+        self.assertIn("title_band", labels)
+        self.assertTrue(any(l.startswith("price") or l.startswith("barcode") for l in labels))
+        self.assertLessEqual(len(labels), 8)
+        self.assertNotIn("lower_rot90", labels)
+        self.assertNotIn("calligraphy", labels)
+
+
 class TitleSearchGatingTests(unittest.TestCase):
     def test_title_similarity_jaccard(self):
         from teyssir.catalog.bookscan.metadata import title_similarity
