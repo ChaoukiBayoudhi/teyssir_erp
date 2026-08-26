@@ -9,7 +9,8 @@
 
     It creates the Python environment, installs dependencies, builds the app (if Node is
     present and not already built), writes a .env with random secrets, sets up the database,
-    and creates the first administrator.
+    and creates the first administrator. Local Ollama (optional AI) is installed when possible;
+    a failure there never aborts the ERP install.
 #>
 [CmdletBinding()]
 param(
@@ -18,7 +19,9 @@ param(
     [string]$StoreCode = "",
     [string]$HubUrl = "http://teyssir-hub.local:8000",
     [string]$SyncKey = "",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$SkipLlm,
+    [string]$LlmModel = "mistral"
 )
 
 $ErrorActionPreference = "Stop"
@@ -61,6 +64,26 @@ if (-not $SkipBuild -and -not (Test-Path "frontend\dist\index.html")) {
 function New-Key([int]$n) {
     $chars = [char[]]((48..57) + (65..90) + (97..122))
     -join (1..$n | ForEach-Object { $chars | Get-Random })
+}
+function Set-DotEnvValue([string]$Path, [string]$Key, [string]$Value) {
+    $lines = @()
+    if (Test-Path $Path) {
+        $lines = [System.IO.File]::ReadAllLines($Path)
+    }
+    $found = $false
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($line in $lines) {
+        if ($line -match ("^\s*" + [regex]::Escape($Key) + "=")) {
+            $out.Add("$Key=$Value") | Out-Null
+            $found = $true
+        }
+        else { $out.Add($line) | Out-Null }
+    }
+    if (-not $found) { $out.Add("$Key=$Value") | Out-Null }
+    [System.IO.File]::WriteAllText(
+        $Path,
+        (($out -join "`n") + "`n"),
+        (New-Object System.Text.UTF8Encoding($false)))
 }
 if (-not (Test-Path ".env")) {
     $secret = New-Key 50
@@ -114,7 +137,32 @@ Write-Host "Setting up the database ..."
 & .\.venv\Scripts\python.exe manage.py migrate --noinput
 & .\.venv\Scripts\python.exe manage.py collectstatic --noinput | Out-Null
 
-# 6) First administrator ----------------------------------------------------
+# 6) Local LLM (Ollama) — optional, never fails the ERP install -------------
+$global:TeyssirLlmReady = $false
+if (-not $SkipLlm) {
+    Write-Host "Setting up local LLM (Ollama) ..."
+    $llmScript = Join-Path $PSScriptRoot "Install-LocalLlm.ps1"
+    try {
+        & $llmScript -Model $LlmModel
+    }
+    catch {
+        Write-Warning ("Local LLM setup skipped: " + $_.Exception.Message)
+    }
+}
+else {
+    Write-Host "Skipping local LLM (-SkipLlm)."
+}
+
+$envPath = Join-Path $Root ".env"
+if (Test-Path $envPath) {
+    $useLlm = if ($global:TeyssirLlmReady) { "true" } else { "false" }
+    Set-DotEnvValue $envPath "USE_LLM" $useLlm
+    Set-DotEnvValue $envPath "LLM_PROVIDER" "ollama"
+    Set-DotEnvValue $envPath "LLM_MODEL" $LlmModel
+    Set-DotEnvValue $envPath "TEYSSIR_OLLAMA_URL" "http://127.0.0.1:11434"
+}
+
+# 7) First administrator ----------------------------------------------------
 Write-Host ""
 Write-Host "Create the first administrator account (owner):" -ForegroundColor Green
 & .\.venv\Scripts\python.exe manage.py createsuperuser
@@ -123,3 +171,11 @@ Write-Host ""
 Write-Host "==== Installation complete ====" -ForegroundColor Green
 Write-Host "Start Teyssir with:  deploy\windows\start-teyssir.bat"
 Write-Host "Then open:           http://localhost:8000"
+if ($global:TeyssirLlmReady) {
+    $modelNote = $LlmModel
+    if ($global:TeyssirLlmModelReady) { $modelNote = "$LlmModel (downloaded)" }
+    Write-Host ("Local AI:            Ollama ready · " + $modelNote)
+}
+else {
+    Write-Host "Local AI:            not active (ERP works without it). See docs/LOCAL-AI.md"
+}

@@ -17,6 +17,11 @@ def health(request):
             "terminal": settings.TERMINAL if settings.ROLE == "till" else None,
             "db": connection.vendor,
             "currency": settings.CURRENCY,
+            "llm": {
+                "enabled": bool(getattr(settings, "USE_LLM", False)),
+                "provider": getattr(settings, "LLM_PROVIDER", "ollama"),
+                "model": getattr(settings, "LLM_MODEL", "mistral"),
+            },
         },
         status=200 if db_ok else 503,   # so monitors/probes see the failure in the HTTP status
     )
