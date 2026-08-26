@@ -25,6 +25,14 @@ def to_money(value) -> Decimal:
     return Decimal(value).quantize(STORE_Q, rounding=ROUND_HALF_UP)
 
 
+
+def require_non_negative_money(value, *, label="amount") -> Decimal:
+    """Like ``to_money`` but rejects negatives (prices, payments, qty×price bases)."""
+    amount = to_money(value)
+    if amount < 0:
+        raise ValueError(f"{label} cannot be negative ({amount})")
+    return amount
+
 def display(value) -> str:
     """Render an amount at 2 dp for receipts/UI (storage stays lossless at 3 dp)."""
     return f"{Decimal(value).quantize(DISPLAY_Q, rounding=ROUND_HALF_UP):.2f}"

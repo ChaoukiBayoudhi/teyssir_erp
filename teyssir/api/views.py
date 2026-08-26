@@ -711,7 +711,10 @@ class BookScanView(APIView):
         isbn = (request.data.get("isbn") or "").strip()
         images = [
             ProductImage.objects.create(
-                image=f, kind=ProductImage.COVER if i == 0 else ProductImage.OTHER, order=i)
+                image=f,
+                kind=(ProductImage.COVER if i == 0 else
+                      ProductImage.BACK if i == 1 else ProductImage.OTHER),
+                order=i)
             for i, f in enumerate(files)
         ]
         job = ScanJob.objects.create(isbn=isbn, image_ids=[str(img.id) for img in images])
