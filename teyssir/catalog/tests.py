@@ -1665,3 +1665,117 @@ class BooksPhotosFixtureTests(unittest.TestCase):
             self.assertTrue(decoded.raw.startswith(prefix))
         if not any_hit:
             self.skipTest("zbar/OpenCV missed CNP stickers on History/Math versos")
+
+
+class BookScanRegressionFixtureTests(unittest.TestCase):
+    """Phase 2F: fixture schema + honesty rules (offline; live scan optional)."""
+
+    def test_fixtures_exist_and_schema(self):
+        from teyssir.catalog.bookscan.regression import fixtures_dir, load_all_fixtures
+
+        d = fixtures_dir()
+        if not d.is_dir():
+            self.skipTest("fixtures/bookscan/expected missing")
+        fxs = load_all_fixtures(d)
+        self.assertGreaterEqual(len(fxs), 4)
+        ids = {f["id"] for f in fxs}
+        self.assertTrue({"A_beauty", "B_premier", "C_history_cnp", "D_math_cnp"} <= ids)
+        for fx in fxs:
+            self.assertIn("expect", fx)
+            self.assertIn("honesty", fx)
+            self.assertIn("images", fx)
+            exp = fx["expect"]
+            self.assertIn("title_contains", exp)
+            self.assertIn("languages", exp)
+            self.assertIn("isbn13", exp)
+            self.assertIn("barcode_raw", exp)
+            self.assertIn("price", exp)
+            self.assertTrue(exp.get("title_allow_empty") or exp.get("title_contains"))
+            self.assertIn("digit_ocr_confidence_max", fx["honesty"])
+            self.assertIn("619", fx["honesty"].get("never_isbn13_prefix") or ["619"])
+
+    def test_honesty_rejects_619_as_isbn_and_digit_ocr_high_conf(self):
+        from teyssir.catalog.bookscan.regression import assert_honesty
+
+        bad = BookDraft(
+            title="كتاب",
+            isbn13="6192202606921",
+            barcode_raw="6192202606921",
+            barcode_kind="isbn13",
+            confidence=0.9,
+            source="tesseract",
+            raw={"isbn_from_digit_ocr": True},
+        )
+        fails = {c.code for c in assert_honesty(bad, {
+            "never_isbn13_prefix": ["619"],
+            "digit_ocr_confidence_max": 0.35,
+            "high_confidence_requires": "barcode_isbn_or_metadata",
+            "max_confidence_without_strong_id": 0.55,
+            "cnp_619_never_isbn13": True,
+        }) if not c.ok}
+        self.assertIn("isbn13_banned_prefix", fails)
+        self.assertIn("isbn13_checksum", fails)
+        self.assertIn("cnp_not_isbn", fails)
+        self.assertIn("digit_ocr_confidence", fails)
+
+        good = BookDraft(
+            title="Le premier",
+            isbn13="9789973352743",
+            barcode_raw="9789973352743",
+            barcode_kind="isbn13",
+            confidence=0.9,
+            source="tesseract",
+            raw={"isbn_from_barcode": True},
+        )
+        self.assertTrue(all(c.ok for c in assert_honesty(good, {
+            "never_isbn13_prefix": ["619"],
+            "digit_ocr_confidence_max": 0.35,
+            "high_confidence_requires": "barcode_isbn_or_metadata",
+            "max_confidence_without_strong_id": 0.55,
+        })))
+
+    def test_expect_allow_empty_title(self):
+        from teyssir.catalog.bookscan.regression import assert_expect
+
+        draft = BookDraft(
+            title="", languages=["ar"], source="tesseract", confidence=0.2,
+            raw={"ocr_title_unusable": True},
+        )
+        checks = assert_expect(draft, {
+            "title_contains": ["التاريخ"],
+            "title_allow_empty": True,
+            "languages": ["ar"],
+            "languages_mode": "includes_any",
+            "isbn13": "",
+            "isbn13_allow_empty": True,
+            "barcode_raw": "6192202606921",
+            "barcode_raw_allow_empty": True,
+            "price": "4.900",
+            "price_allow_empty": True,
+        })
+        self.assertTrue(all(c.ok for c in checks), checks)
+
+    def test_live_books_photos_regression_optional(self):
+        """Full Tess scan of A–D; set TEYSSIR_BOOKSCAN_REGRESSION=1 to enable."""
+        from teyssir.catalog.bookscan.regression import (
+            books_photos_dir,
+            env_wants_live_regression,
+            run_all_fixtures,
+        )
+
+        if not env_wants_live_regression():
+            self.skipTest("Set TEYSSIR_BOOKSCAN_REGRESSION=1 for live photo scan")
+        if not books_photos_dir().is_dir():
+            self.skipTest("books_photos/ missing")
+        results = run_all_fixtures(vision=False, strict_fields=True)
+        self.assertTrue(results)
+        honesty_fails = []
+        for r in results:
+            self.assertFalse(r.skipped, r.skip_reason)
+            for c in r.checks:
+                if not c.ok and c.code in (
+                    "isbn13_banned_prefix", "isbn13_checksum", "cnp_not_isbn",
+                    "cnp_kind", "digit_ocr_confidence", "confidence_honesty",
+                ):
+                    honesty_fails.append((r.fixture_id, c.code, c.detail))
+        self.assertEqual(honesty_fails, [], msg=str(honesty_fails))

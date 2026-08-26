@@ -327,6 +327,15 @@ Deux moteurs **gratuits** sont disponibles :
   décodage barcode serveur échoue silencieusement (fallback OCR digits).
 
 - **Vision fallback (2E)** : avec `TEYSSIR_OCR_PROVIDER=tesseract`, Ollama Vision ne tourne que si le titre/barcode Tess est faible (calligraphie arabe, photo téléphone sans code-barres, titre « garbage »). ISBN Vision refusé sans checksum. Voir `docs/LOCAL-AI.md` (Vision fallback gate).
+- **Régression books_photos (2F)** : placez les photos dans `books_photos\`, puis :
+
+```powershell
+$env:TEYSSIR_OCR_PROVIDER = "tesseract"
+$env:TEYSSIR_OCR_VISION_FALLBACK = "false"
+python manage.py bookscan_regression --json
+```
+
+  Fixtures : `fixtures\bookscan\expected\*.json`. Détails : `docs/BOOK-OCR-ARCHITECTURE.md` (Phase 2F).
 
 Sans configuration, la saisie du livre reste **manuelle** (aucune erreur, juste pas d'auto-remplissage).
 

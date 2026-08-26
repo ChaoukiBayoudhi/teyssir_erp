@@ -1,0 +1,30 @@
+{
+  "id": "C_history_cnp",
+  "label": "كتاب التاريخ (CNP History 1ère secondaire)",
+  "images": {
+    "front": {"needles": ["12.40", "#3"], "exclude": []},
+    "back": {"needles": ["12.41"], "exclude": ["#2"]}
+  },
+  "expect": {
+    "title_contains": ["التاريخ"],
+    "title_allow_empty": true,
+    "languages": ["ar"],
+    "languages_mode": "includes_any",
+    "languages_allow_empty": true,
+    "isbn13": "",
+    "isbn13_allow_empty": true,
+    "isbn13_must_be_empty_if_only_cnp": true,
+    "barcode_raw": "6192202606921",
+    "barcode_raw_allow_empty": true,
+    "barcode_kind": "local_product",
+    "price": "4.900",
+    "price_allow_empty": true
+  },
+  "honesty": {
+    "never_isbn13_prefix": ["619"],
+    "digit_ocr_confidence_max": 0.35,
+    "high_confidence_requires": "barcode_isbn_or_metadata",
+    "max_confidence_without_strong_id": 0.55,
+    "cnp_619_never_isbn13": true
+  }
+}

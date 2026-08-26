@@ -93,6 +93,17 @@ Vision **never** invents an ISBN: only checksum-valid bookland 978/979 is kept.
 3. First Vision call loads the model (~tens of seconds); use `TEYSSIR_SCAN_EXECUTOR=thread`.
 4. If Vision times out, Tess draft is kept — set a lower `TEYSSIR_VISION_FALLBACK_TIMEOUT` on weak PCs.
 
+### Regression (Phase 2F)
+
+Default regression runs **without** Vision:
+
+```powershell
+$env:TEYSSIR_OCR_VISION_FALLBACK = "false"
+python manage.py bookscan_regression --json
+```
+
+To include Vision on weak Tess paths: `python manage.py bookscan_regression --vision`.
+
 ## Troubleshooting
 
 ### Model not loading / `ollama pull` hangs
