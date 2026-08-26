@@ -49,6 +49,39 @@ def _roi_contains(outer, inner, *, pad: int = 2) -> bool:
     )
 
 
+def _sticker_like_reason(prep, wl) -> str | None:
+    """Return failure reason if white_label looks like sleeve/torso, else None.
+
+    Critical versos must pick a compact PVP/CNP sticker near the lower cover,
+    not a hollow \"any white_label\" (left-edge tall blob).
+    """
+    w, h = prep.width, prep.height
+    cover_area = max(w * h, 1)
+    label_area = wl.width * wl.height
+    ar = wl.width / float(max(wl.height, 1))
+    cx = (wl.x0 + wl.x1) / 2.0 / w
+    cy = (wl.y0 + wl.y1) / 2.0 / h
+    left_hug = wl.x0 <= max(6, int(w * 0.045))
+    tall_frac = wl.height / float(max(h, 1))
+
+    if left_hug and (tall_frac > 0.25 or ar < 1.15):
+        return (
+            f"looks like left-margin sleeve/torso "
+            f"(x0={wl.x0}, tall={tall_frac:.2f}, ar={ar:.2f})"
+        )
+    if label_area > cover_area * 0.12:
+        return f"too large for sticker ({label_area}/{cover_area})"
+    if label_area < cover_area * 0.004:
+        return f"suspiciously tiny ({label_area}/{cover_area})"
+    if ar < 0.7 or ar > 5.0:
+        return f"aspect not sticker-like (ar={ar:.2f})"
+    if cy < 0.55:
+        return f"not near lower cover (cy={cy:.2f})"
+    if cx < 0.12 and left_hug:
+        return f"edge-hugging left blob (cx={cx:.2f})"
+    return None
+
+
 def _draw_debug(prep, out_path: Path) -> None:
     try:
         import cv2
@@ -171,10 +204,14 @@ def main(argv: list[str] | None = None) -> int:
                 if prep.white_label is None:
                     failures.append(f"{path.name}: expected white_label on verso sticker")
                 else:
-                    wl = prep.white_label.to_dict()
+                    wl_box = prep.white_label
+                    wl = wl_box.to_dict()
                     bb = prep.barcode_band.to_dict()
                     pb = prep.price_band.to_dict()
-                    if not _roi_contains(bb, wl, pad=8):
+                    bad = _sticker_like_reason(prep, wl_box)
+                    if bad:
+                        failures.append(f"{path.name}: white_label not sticker-like: {bad}")
+                    elif not _roi_contains(bb, wl, pad=8):
                         failures.append(
                             f"{path.name}: white_label not inside barcode_band "
                             f"(label={wl} band={bb})"
@@ -186,21 +223,20 @@ def main(argv: list[str] | None = None) -> int:
                         )
                     else:
                         critical_ok += 1
-                        # Sticker should occupy a meaningful share of lower band
-                        cover_area = prep.width * prep.height
-                        label_area = prep.white_label.width * prep.white_label.height
-                        if label_area < cover_area * 0.005:
-                            failures.append(
-                                f"{path.name}: white_label suspiciously tiny "
-                                f"({label_area}/{cover_area})"
-                            )
-                            critical_ok -= 1
+                        row["white_label_sticker_ok"] = True
 
             rows.append(row)
+            wl_info = "no"
+            if prep.white_label:
+                wl = prep.white_label
+                wl_info = (
+                    f"yes[{wl.x0},{wl.y0}-{wl.x1},{wl.y1} "
+                    f"ar={wl.width/max(wl.height,1):.2f}]"
+                )
             print(
                 f"OK  {path.name}: method={prep.method} "
                 f"{prep.width}x{prep.height} deskew={prep.deskew_deg:.1f} "
-                f"white_label={'yes' if prep.white_label else 'no'}"
+                f"white_label={wl_info}"
                 + (" [critical verso]" if row["critical_verso"] else "")
             )
             if args.save_debug is not None:

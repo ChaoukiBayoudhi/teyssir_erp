@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from io import BytesIO
+from pathlib import Path
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -337,31 +338,53 @@ class CoverPreprocessTests(unittest.TestCase):
             cleanup_preprocess([prep])
 
     def test_books_photos_critical_versos_have_sticker_in_bands(self):
-        """Corpus History 12.41 + Math 12.42 versos: white label inside barcode/price bands."""
-        root = os.path.join(os.path.dirname(__file__), "..", "..", "..", "books_photos")
-        root = os.path.abspath(root)
-        if not os.path.isdir(root):
+        """Corpus History 12.41 + Math 12.42 versos: compact sticker, not sleeve FP."""
+        root = Path(__file__).resolve().parents[2] / "books_photos"
+        if not root.is_dir():
             self.skipTest("books_photos/ not present")
 
         from teyssir.catalog.bookscan.preprocess import cleanup_preprocess, preprocess_cover
 
         critical = []
-        for name in os.listdir(root):
-            if not name.lower().endswith(".jpg"):
+        for path in root.iterdir():
+            if not path.name.lower().endswith(".jpg"):
                 continue
-            if "12.42" in name:
-                critical.append(os.path.join(root, name))
-            elif "12.41" in name and "#2" not in name:
-                critical.append(os.path.join(root, name))
+            if "12.42" in path.name:
+                critical.append(path)
+            elif "12.41" in path.name and "#2" not in path.name:
+                critical.append(path)
         if len(critical) < 2:
             self.skipTest("critical verso samples (*12.41* / *12.42*) missing")
 
         for path in critical:
-            prep = preprocess_cover(path)
+            prep = preprocess_cover(str(path))
             try:
-                self.assertIsNotNone(prep.white_label, msg=path)
+                self.assertIsNotNone(prep.white_label, msg=str(path))
                 wl = prep.white_label
                 bb, pb = prep.barcode_band, prep.price_band
+                # Sticker-like: compact, not left-edge sleeve, lower cover
+                cover_area = max(prep.width * prep.height, 1)
+                label_area = wl.width * wl.height
+                ar = wl.width / float(max(wl.height, 1))
+                cy = (wl.y0 + wl.y1) / 2.0 / max(prep.height, 1)
+                left_hug = wl.x0 <= max(6, int(prep.width * 0.045))
+                self.assertFalse(
+                    left_hug and (wl.height / prep.height > 0.25 or ar < 1.15),
+                    msg=f"{path.name}: white_label looks like left sleeve {wl}",
+                )
+                self.assertLess(
+                    label_area / cover_area,
+                    0.12,
+                    msg=f"{path.name}: white_label too large (sleeve-sized) {wl}",
+                )
+                self.assertGreater(
+                    label_area / cover_area,
+                    0.004,
+                    msg=f"{path.name}: white_label too tiny {wl}",
+                )
+                self.assertGreaterEqual(ar, 0.7, msg=f"{path.name}: ar={ar}")
+                self.assertLessEqual(ar, 5.0, msg=f"{path.name}: ar={ar}")
+                self.assertGreaterEqual(cy, 0.55, msg=f"{path.name}: not lower cover cy={cy}")
                 self.assertLessEqual(bb.x0 - 8, wl.x0)
                 self.assertLessEqual(bb.y0 - 8, wl.y0)
                 self.assertGreaterEqual(bb.x1 + 8, wl.x1)
@@ -372,6 +395,43 @@ class CoverPreprocessTests(unittest.TestCase):
                 self.assertGreaterEqual(pb.y1 + 8, wl.y1)
             finally:
                 cleanup_preprocess([prep])
+
+    def test_prefers_compact_sticker_over_left_sleeve(self):
+        """Synthetic: large left grey sleeve must lose to compact white barcode sticker."""
+        from teyssir.catalog.bookscan.preprocess import (
+            cleanup_preprocess,
+            opencv_available,
+            preprocess_cover,
+        )
+
+        if not opencv_available():
+            self.skipTest("OpenCV required for white_label scoring test")
+
+        # Portrait cover: dark green page, left grey sleeve strip, white sticker BR
+        img = Image.new("RGB", (900, 1200), (30, 30, 30))
+        cover = Image.new("RGB", (620, 900), (40, 120, 50))
+        sleeve = Image.new("RGB", (140, 700), (170, 170, 170))
+        cover.paste(sleeve, (0, 120))
+        # Compact white sticker with dark barcode-like bars
+        sticker = Image.new("RGB", (170, 100), (248, 248, 248))
+        draw = ImageDraw.Draw(sticker)
+        for i, x in enumerate(range(20, 150, 4)):
+            draw.line([(x, 25), (x, 75)], fill=(20, 20, 20), width=2 if i % 3 else 1)
+        cover.paste(sticker, (380, 720))
+        img.paste(cover, (140, 100))
+        path = os.path.join(tempfile.mkdtemp(), "sleeve_vs_sticker.jpg")
+        img.save(path, quality=95)
+        prep = preprocess_cover(path, max_edge=1600)
+        try:
+            self.assertIsNotNone(prep.white_label)
+            wl = prep.white_label
+            cx = (wl.x0 + wl.x1) / 2.0 / prep.width
+            # Must not be the left-edge sleeve
+            self.assertGreater(wl.x0, int(prep.width * 0.08), msg=f"sleeve FP: {wl}")
+            self.assertGreater(cx, 0.35, msg=f"expected sticker toward right: {wl}")
+            self.assertLess(wl.height / prep.height, 0.35, msg=f"too tall (sleeve): {wl}")
+        finally:
+            cleanup_preprocess([prep])
 
     def test_scan_book_runs_preprocess_before_barcode(self):
         """scan_book still returns a draft when preprocess wraps the path."""

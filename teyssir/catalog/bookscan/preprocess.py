@@ -305,22 +305,25 @@ def _apply_clahe(bgr):
 
 
 def _find_white_label(bgr) -> RoiBox | None:
-    """Bright rectangular sticker in the lower ~45% (PVP / CNP barcode labels)."""
+    """Bright compact sticker in the lower cover (PVP / CNP barcode labels).
+
+    Prefers high-fill, barcode-textured rectangles over large left-sleeve /
+    edge-hugging tall blobs (common phone-photo false positives).
+    """
     import cv2
     import numpy as np
 
     h, w = bgr.shape[:2]
-    y0 = int(h * 0.55)
+    y0 = int(h * 0.52)
     roi = bgr[y0:h, 0:w]
     if roi.size == 0:
         return None
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    # White stickers: high luminance + low saturation
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    mask_bright = cv2.inRange(hsv, (0, 0, 180), (180, 70, 255))
-    # Also catch near-white paper stickers under mild glare
-    _, mask_gray = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
-    mask = cv2.bitwise_or(mask_bright, mask_gray)
+    # White / near-white paper (allow slightly lower V on cream covers)
+    mask_hsv = cv2.inRange(hsv, (0, 0, 165), (180, 75, 255))
+    _, mask_abs = cv2.threshold(gray, 195, 255, cv2.THRESH_BINARY)
+    mask = cv2.bitwise_or(mask_hsv, mask_abs)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8), iterations=2)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8), iterations=1)
 
@@ -330,23 +333,79 @@ def _find_white_label(bgr) -> RoiBox | None:
     best_score = 0.0
     for cnt in contours:
         area = float(cv2.contourArea(cnt))
-        if area < area_roi * 0.01 or area > area_roi * 0.55:
+        # Compact stickers — reject huge sleeve/torso blobs by area alone
+        if area < area_roi * 0.006 or area > area_roi * 0.28:
             continue
         x, y, bw, bh = cv2.boundingRect(cnt)
-        if bw < 20 or bh < 15:
+        if bw < 28 or bh < 18:
             continue
         ar = bw / float(bh)
-        # Stickers are usually wider than tall, but vertical CNP labels exist
-        if ar < 0.35 or ar > 6.0:
-            continue
-        # Prefer compact rectangles (fill ratio)
         fill = area / float(max(bw * bh, 1))
-        if fill < 0.35:
+        if fill < 0.38 or ar < 0.55 or ar > 5.5:
             continue
-        score = area * (0.5 + fill)
+
+        ax0, ay0 = x, y + y0
+        ax1, ay1 = x + bw, y + y0 + bh
+        left_margin = ax0 <= max(6, int(w * 0.045))
+        right_margin = ax1 >= w - max(6, int(w * 0.045))
+        tall_frac = bh / float(roi.shape[0])
+        wide_frac = bw / float(w)
+
+        # Hard reject left-margin torso / grey sleeve FPs
+        if left_margin and (tall_frac > 0.40 or ar < 1.15):
+            continue
+        if tall_frac > 0.65:
+            continue
+        if wide_frac > 0.40 and fill < 0.65:
+            continue
+        if (left_margin or right_margin) and area > area_roi * 0.08:
+            continue
+
+        patch_g = gray[y : y + bh, x : x + bw]
+        patch_hsv = hsv[y : y + bh, x : x + bw]
+        mean_v = float(patch_hsv[:, :, 2].mean())
+        mean_s = float(patch_hsv[:, :, 1].mean())
+        if mean_v < 145:
+            continue
+
+        # Ink / barcode texture inside the white patch (sleeves are smoother)
+        dark = float(np.count_nonzero(patch_g < 110)) / max(patch_g.size, 1)
+        gx = cv2.Sobel(patch_g, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(patch_g, cv2.CV_32F, 0, 1, ksize=3)
+        h_energy = float(np.mean(np.abs(gx)))
+        v_energy = float(np.mean(np.abs(gy)))
+        barcodeish = h_energy / max(v_energy, 1e-3)
+
+        submask = mask[y : y + bh, x : x + bw]
+        bright_frac = float(np.count_nonzero(submask)) / max(submask.size, 1)
+
+        cy = (ay0 + ay1) / 2.0 / h
+        lower_bonus = 1.0 + 0.35 * max(0.0, (cy - 0.65) / 0.35)
+        ar_bonus = 1.35 if 1.15 <= ar <= 4.2 else (0.55 if ar < 0.85 else 1.0)
+        afrac = area / area_roi
+        size_score = float(np.exp(-((np.log(max(afrac, 1e-6) / 0.035)) ** 2)))
+        texture = 0.4 + 2.5 * dark + 0.015 * h_energy + 0.25 * min(barcodeish, 3.0)
+        skin_pen = 0.55 if mean_s > 55 and mean_v > 160 else 1.0
+        edge_pen = 1.0
+        if left_margin:
+            edge_pen *= 0.2
+        if right_margin and tall_frac > 0.45:
+            edge_pen *= 0.4
+
+        score = (
+            (fill ** 1.4)
+            * bright_frac
+            * ar_bonus
+            * size_score
+            * texture
+            * lower_bonus
+            * edge_pen
+            * skin_pen
+            * (mean_v / 255.0)
+        )
         if score > best_score:
             best_score = score
-            best = (x, y + y0, x + bw, y + y0 + bh)
+            best = (ax0, ay0, ax1, ay1)
 
     if best is None:
         return None
