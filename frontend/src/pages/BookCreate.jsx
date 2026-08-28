@@ -179,6 +179,61 @@ const EMPTY = {
   description: "", sale_price: "", category: "", tax_rate: "",
 };
 
+/** Portrait book guide (typical trade paperback ~2:3). Overlay only — full frame still captured. */
+const BOOK_ASPECT = "2 / 3";
+
+/**
+ * Highest practical resolution for XTRIKE ME XPC01 / generic USB webcams.
+ * Browser negotiates down when the device cannot meet ideal/max.
+ */
+const BOOK_VIDEO_CONSTRAINTS = {
+  width: { ideal: 1920, max: 3840 },
+  height: { ideal: 1080, max: 2160 },
+  frameRate: { ideal: 30, max: 60 },
+};
+
+/** Try high-res constraints first; fall back so older webcams still open. */
+async function openBookCameraStream(deviceId) {
+  const attempts = [];
+  if (deviceId) {
+    attempts.push({ ...BOOK_VIDEO_CONSTRAINTS, deviceId: { exact: deviceId } });
+    attempts.push({ ...BOOK_VIDEO_CONSTRAINTS, deviceId: { ideal: deviceId } });
+  }
+  attempts.push({ ...BOOK_VIDEO_CONSTRAINTS, facingMode: { ideal: "environment" } });
+  attempts.push({
+    width: { ideal: 1280, max: 1920 },
+    height: { ideal: 720, max: 1080 },
+    facingMode: { ideal: "environment" },
+  });
+  attempts.push({ facingMode: "environment" });
+  attempts.push(true);
+
+  let lastErr;
+  for (const video of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ video, audio: false });
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error("getUserMedia failed");
+}
+
+/** Nudge track toward max capability after open (helps some USB cams ignore ideal). */
+async function bumpTrackResolution(stream) {
+  const track = stream?.getVideoTracks?.()?.[0];
+  if (!track?.getCapabilities || !track.applyConstraints) return;
+  try {
+    const caps = track.getCapabilities();
+    const wMax = caps.width?.max;
+    const hMax = caps.height?.max;
+    if (!wMax && !hMax) return;
+    const width = wMax ? { ideal: Math.min(wMax, 1920), max: Math.min(wMax, 3840) } : BOOK_VIDEO_CONSTRAINTS.width;
+    const height = hMax ? { ideal: Math.min(hMax, 1080), max: Math.min(hMax, 2160) } : BOOK_VIDEO_CONSTRAINTS.height;
+    await track.applyConstraints({ width, height });
+  } catch { /* device may reject — keep negotiated settings */ }
+}
+
 export default function BookCreate({ onBack, onLogout }) {
   const { t } = useTranslation();
   const videoRef = useRef(null);
@@ -202,14 +257,31 @@ export default function BookCreate({ onBack, onLogout }) {
 
   const stopCamera = () => {
     const s = streamRef.current;
-    if (s) {
-      try { s.getTracks().forEach((tk) => { try { tk.stop(); } catch { /* already stopped */ } }); } catch { /* ignore */ }
-    }
     streamRef.current = null;
-    setStream(null);
-    if (videoRef.current) {
-      try { videoRef.current.srcObject = null; } catch { /* ignore */ }
+    if (s) {
+      try {
+        s.getTracks().forEach((tk) => {
+          try {
+            tk.stop();
+          } catch { /* already stopped */ }
+        });
+      } catch { /* ignore */ }
     }
+    // Also clear any lingering tracks attached to the <video> element
+    const v = videoRef.current;
+    if (v) {
+      try {
+        const attached = v.srcObject;
+        if (attached && attached !== s) {
+          attached.getTracks?.().forEach((tk) => {
+            try { tk.stop(); } catch { /* */ }
+          });
+        }
+        v.srcObject = null;
+        v.pause?.();
+      } catch { /* ignore */ }
+    }
+    setStream(null);
   };
 
   // Attach stream after <video> mounts (getUserMedia often resolves before React paints it).
@@ -259,12 +331,22 @@ export default function BookCreate({ onBack, onLogout }) {
     setError("");
     try {
       stopCamera();
-      const video = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: "environment" };
-      const s = await navigator.mediaDevices.getUserMedia({ video });
+      const s = await openBookCameraStream(deviceId || undefined);
+      await bumpTrackResolution(s);
       streamRef.current = s;
       setStream(s);
       if (videoRef.current) videoRef.current.srcObject = s;
-      if (deviceId) { setCameraId(deviceId); localStorage.setItem("teyssir_camera", deviceId); }
+      if (deviceId) {
+        setCameraId(deviceId);
+        localStorage.setItem("teyssir_camera", deviceId);
+      } else {
+        const track = s.getVideoTracks?.()?.[0];
+        const settingsId = track?.getSettings?.()?.deviceId;
+        if (settingsId) {
+          setCameraId(settingsId);
+          localStorage.setItem("teyssir_camera", settingsId);
+        }
+      }
       await listCameras();
     } catch {
       setError(t("cameraUnavailable"));
@@ -279,24 +361,30 @@ export default function BookCreate({ onBack, onLogout }) {
       return;
     }
     const canvas = document.createElement("canvas");
-    canvas.width = v.videoWidth || 720;
-    canvas.height = v.videoHeight || 960;
-    canvas.getContext("2d").drawImage(v, 0, 0, canvas.width, canvas.height);
+    // Use native stream resolution (requested via getUserMedia ideal/max).
+    canvas.width = v.videoWidth;
+    canvas.height = v.videoHeight;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+    const slot = captureStep === "back" ? 1 : 0;
+    const name = captureStep === "back" ? `back-${Date.now()}.jpg` : `front-${Date.now()}.jpg`;
+    const nextStep = captureStep === "front" ? "back" : "ready";
+    // CRITICAL: release webcam before async JPEG encode (recto + verso).
+    stopCamera();
     canvas.toBlob((blob) => {
-      if (!blob) return;
-      const slot = captureStep === "back" ? 1 : 0;
-      const name = captureStep === "back" ? `back-${Date.now()}.jpg` : `front-${Date.now()}.jpg`;
+      if (!blob) {
+        setError(t("cameraNotReady"));
+        return;
+      }
       addCapture(new File([blob], name, { type: "image/jpeg" }), slot);
-      // CRITICAL: release camera immediately after capture
-      stopCamera();
-      if (captureStep === "front") {
+      if (nextStep === "back") {
         setCaptureStep("back");
         setInfo(t("captureBackHint"));
       } else {
         setCaptureStep("ready");
         setInfo(t("capturesReady"));
       }
-    }, "image/jpeg", 0.9);
+    }, "image/jpeg", 0.95);
   };
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -530,8 +618,56 @@ export default function BookCreate({ onBack, onLogout }) {
               </Typography>
 
               {stream && (
-                <Box sx={{ bgcolor: "#000", borderRadius: 1, overflow: "hidden", mb: 1, minHeight: 180 }}>
-                  <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", display: "block" }} />
+                <Box sx={{
+                  position: "relative", bgcolor: "#000", borderRadius: 1, overflow: "hidden",
+                  mb: 1, minHeight: 180,
+                }}>
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    style={{ width: "100%", display: "block" }}
+                  />
+                  {/* Book-aspect guide: align cover inside the portrait frame */}
+                  <Box
+                    aria-hidden
+                    sx={{
+                      position: "absolute",
+                      inset: 0,
+                      pointerEvents: "none",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Box
+                      sx={{
+                        width: "52%",
+                        maxWidth: 280,
+                        aspectRatio: BOOK_ASPECT,
+                        maxHeight: "90%",
+                        border: "2px solid rgba(255,255,255,0.92)",
+                        borderRadius: 1,
+                        boxShadow: "0 0 0 9999px rgba(0,0,0,0.42)",
+                      }}
+                    />
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        position: "absolute",
+                        bottom: 8,
+                        left: 0,
+                        right: 0,
+                        textAlign: "center",
+                        color: "#fff",
+                        textShadow: "0 1px 2px #000",
+                        px: 1,
+                      }}
+                    >
+                      {captureStep === "back" ? t("captureBackHint") : t("captureFrontHint")}
+                    </Typography>
+                  </Box>
                 </Box>
               )}
               {stream && cameras.length > 1 && (
