@@ -117,6 +117,14 @@ else
   echo "WARNING: Tesseract not found — book OCR will fall back to manual/vision."
 fi
 
+# 2b2) Optional Ollama vision model hint (Phase 15.4 — not pulled by default)
+if command -v ollama >/dev/null 2>&1; then
+  echo "Ollama found. For bookscan Vision fallback (dual-image): ollama pull qwen2.5vl:3b"
+  echo "  Docs: docs/LOCAL-AI.md — keep TEYSSIR_OCR_PROVIDER=tesseract for day-to-day."
+else
+  echo "Optional: brew install ollama && ollama pull qwen2.5vl:3b for Vision book analysis."
+fi
+
 # 2c) zbar (libzbar) for ISBN barcode decode via pyzbar ---------------------
 if command -v brew >/dev/null 2>&1; then
   if ! brew list zbar >/dev/null 2>&1; then

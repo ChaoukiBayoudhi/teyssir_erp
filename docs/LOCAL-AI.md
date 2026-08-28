@@ -70,11 +70,16 @@ TEYSSIR_SCAN_EXECUTOR=thread
 ```
 
 
-## Vision fallback gate (Phase 2E)
+## Vision fallback gate (Phase 2E / 15.4 dual-image)
 
-Default OCR stays **Tesseract**. Local Ollama Vision runs only as a gated fallback when the
+Default OCR stays **Tesseract**. Local Ollama Vision runs as a gated fallback when the
 Tess path is weak (Arabic calligraphy, garbage Latin misreads, phone photos with no barcode
-and no usable title). Strong barcode+title paths skip Vision.
+and no usable title). Strong barcode ISBN + usable title paths skip Vision (metadata enriches).
+
+**Phase 15.4:** one Ollama call sends **front + back** covers together (downscaled to 1280px),
+returns structured JSON including required `language_detected` and a 2–4 sentence
+`description` (auto-fills the BookCreate draft). Invalid ISBN checksums are dropped;
+Vision never invents `barcode_*`.
 
 | Env | Default | Role |
 |-----|---------|------|
@@ -82,16 +87,29 @@ and no usable title). Strong barcode+title paths skip Vision.
 | `TEYSSIR_VISION_FALLBACK_TIMEOUT` | `28` | Soft budget (s) for fallback calls |
 | `TEYSSIR_VISION_TIMEOUT` | `45` | Hard cap (s) |
 | `TEYSSIR_VISION_IMAGE_MAX_EDGE` | `1280` | Downscale before base64→Ollama |
+| `TEYSSIR_VISION_MODEL` | `qwen2.5vl:3b` | CPU-friendly vision model |
 
 Vision **never** invents an ISBN: only checksum-valid bookland 978/979 is kept.
 
 ### Win11 / local Ollama tips
 
-1. Keep `TEYSSIR_OCR_PROVIDER=tesseract` for day-to-day speed; pull vision only if needed:
+1. Keep `TEYSSIR_OCR_PROVIDER=tesseract` for day-to-day speed; pull vision for gated fallback:
    `.\deploy\windows\Install-LocalLlm.ps1 -Model mistral -PullVision`
+   (pulls `qwen2.5vl:3b` by default).
 2. Ensure Ollama is running as the same user as the Teyssir service (or allow `127.0.0.1:11434`).
 3. First Vision call loads the model (~tens of seconds); use `TEYSSIR_SCAN_EXECUTOR=thread`.
 4. If Vision times out, Tess draft is kept — set a lower `TEYSSIR_VISION_FALLBACK_TIMEOUT` on weak PCs.
+
+### macOS / local Ollama tips
+
+1. `brew install ollama` then start the app / `ollama serve`.
+2. Pull the vision model used by bookscan fallback:
+   ```bash
+   ollama pull qwen2.5vl:3b
+   ```
+3. Keep `TEYSSIR_OCR_PROVIDER=tesseract` in `.env` (Vision is fallback layer 2). Optional primary:
+   `TEYSSIR_OCR_PROVIDER=vision` + `TEYSSIR_SCAN_EXECUTOR=thread`.
+4. Confirm: `ollama list` shows `qwen2.5vl:3b`; `curl -s http://127.0.0.1:11434` → Ollama is running.
 
 ### Regression (Phase 2F)
 

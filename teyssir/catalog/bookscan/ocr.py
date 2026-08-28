@@ -9,13 +9,10 @@ Phase 2C: script probe → one primary ``-l`` string (second pass only on biling
 evidence); title_band downscaled ~1200px; barcode/price bands upscaled; early exit
 when usable title + (ISBN | local barcode | price).
 """
-import base64
-import json
 import logging
 import re
 import shutil
 import time
-import urllib.request
 from pathlib import Path
 
 from django.conf import settings
@@ -1503,101 +1500,22 @@ class TesseractOcrProvider(OcrProvider):
 
 
 
-# --- Vision-LLM provider (free, offline via Ollama) -------------------------------------------
+# --- Vision-LLM provider (free, offline via Ollama) — Phase 15.4 dual-image in vision.py ---
 
-_VISION_PROMPT = (
-    "You are reading the cover of a book. The cover may be in Arabic, French or English "
-    "(sometimes mixed). Extract the bibliographic data and reply with a SINGLE JSON object only, "
-    "no prose. Use these keys (empty string or empty list if unknown): "
-    "title, subtitle, authors (list), translators (list), publisher, series, edition, "
-    "languages (ISO codes list, e.g. [\"ar\",\"fr\"]), language_detected "
-    "(one of: \"ar\", \"fr\", \"en\", or \"mixed:ar+fr\" / \"mixed:ar+en\" / \"mixed:fr+en\"), "
-    "pub_year (int), pages (int), isbn13, subject, description, price (string in TND if printed). "
-    "CRITICAL for description: if no blurb is printed, invent NOTHING long — write a short "
-    "1–2 sentence factual description of the book from the cover (title/genre/audience) "
-    "in the book's language; never leave description empty when a usable title is visible. "
-    "Preserve the original script for Arabic text. "
-    "CRITICAL: Never invent or guess an ISBN. Set isbn13 to empty string unless the digits "
-    "are clearly printed on the cover/verso; do not fabricate check digits."
+# Back-compat aliases for tests / callers that import from ocr
+from .vision import (  # noqa: E402
+    VISION_PROMPT as _VISION_PROMPT,
+    draft_from_vision_json as _draft_from_vision_json,
+    image_to_b64 as _vision_image_b64,
 )
-
-_VISION_KEYS = {
-    "title", "subtitle", "publisher", "series", "edition",
-    "subject", "description", "isbn13", "price", "language_detected",
-}
-
-
-def _draft_from_vision_json(raw):
-    """Parse the model's JSON reply into a BookDraft (tolerant of stray prose around the JSON)."""
-    draft = BookDraft(source="vision", confidence=0.85, raw={"ocr_available": True})
-    try:
-        start, end = raw.index("{"), raw.rindex("}") + 1
-        data = json.loads(raw[start:end])
-    except (ValueError, json.JSONDecodeError):
-        draft.raw = {"vision_reply": raw, "isbn_not_detected": True}
-        return draft
-    draft.raw = {**data, "ocr_available": True}
-    for key in _VISION_KEYS:
-        val = data.get(key)
-        if isinstance(val, str) and val.strip():
-            setattr(draft, key, val.strip())
-    if isinstance(data.get("authors"), list):
-        draft.authors = [str(a).strip() for a in data["authors"] if str(a).strip()]
-    if isinstance(data.get("translators"), list):
-        draft.translators = [str(a).strip() for a in data["translators"] if str(a).strip()]
-    if isinstance(data.get("languages"), list):
-        draft.languages = [str(a).strip() for a in data["languages"] if str(a).strip()]
-    # Prefer explicit language_detected; else derive from languages[]
-    ld = (data.get("language_detected") or "").strip()
-    if ld:
-        draft.language_detected = ld
-        draft.raw["language_detected"] = ld
-    elif draft.languages:
-        from .language import format_language_detected
-
-        draft.language_detected = format_language_detected(draft.languages)
-        draft.raw["language_detected"] = draft.language_detected
-    for num in ("pub_year", "pages"):
-        try:
-            value = int(data.get(num))
-            if value > 0:
-                setattr(draft, num, value)
-        except (TypeError, ValueError):
-            pass
-    if draft.price:
-        draft.price = extract_price_dt(draft.price) or draft.price
-    if draft.isbn13:
-        valid = to_isbn13(draft.isbn13)
-        if valid:
-            draft.isbn13 = valid
-            draft.raw["isbn_detected"] = True
-        else:
-            # Reject checksum-invalid vision guesses
-            draft.raw["rejected_isbn"] = draft.isbn13
-            draft.isbn13 = ""
-            draft.raw["isbn_not_detected"] = True
-    else:
-        draft.raw["isbn_not_detected"] = True
-    return draft
-
-
-def _vision_image_b64(image_path: str) -> str:
-    """JPEG-encode a downscaled cover for Ollama (phone photos are multi‑MB otherwise)."""
-    import io
-
-    from PIL import Image
-
-    max_edge = int(getattr(settings, "VISION_IMAGE_MAX_EDGE", 1280) or 1280)
-    with Image.open(image_path) as im:
-        im = im.convert("RGB")
-        im = _downscale_max_edge(im, max_edge)
-        buf = io.BytesIO()
-        im.save(buf, format="JPEG", quality=85, optimize=True)
-        return base64.b64encode(buf.getvalue()).decode()
 
 
 class VisionLlmOcrProvider(OcrProvider):
-    """Structured multilingual extraction via a local Ollama vision model (free, offline, no key)."""
+    """Structured multilingual extraction via local Ollama vision (Phase 15.4).
+
+    Single-image ``extract`` for OCR_PROVIDER=vision; scan_book uses
+    ``vision.analyze_covers`` for front+back in one call.
+    """
 
     name = "vision"
 
@@ -1605,32 +1523,59 @@ class VisionLlmOcrProvider(OcrProvider):
         self._transport = transport
         self._timeout = timeout
 
-    def _ollama(self, image_b64):
-        timeout = self._timeout if self._timeout is not None else settings.VISION_TIMEOUT
-        body = json.dumps({
-            "model": settings.VISION_MODEL,
-            "prompt": _VISION_PROMPT,
-            "images": [image_b64],
-            "stream": False,
-            "format": "json",
-        }).encode()
-        req = urllib.request.Request(
-            f"{settings.OLLAMA_URL}/api/generate", data=body,
-            headers={"Content-Type": "application/json"}, method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.load(resp).get("response", "")
+    def _wrap_transport(self):
+        """Adapt legacy single-b64 transport(str) → list[str] API."""
+        if self._transport is None:
+            return None
+
+        def _adapted(images_b64):
+            # Legacy tests pass transport(lambda b64: ...) expecting one string
+            if len(images_b64) == 1:
+                try:
+                    return self._transport(images_b64[0])
+                except TypeError:
+                    return self._transport(images_b64)
+            return self._transport(images_b64)
+
+        return _adapted
 
     def extract(self, image_path, role="auto", prepare=None, known_barcode=None):
+        from .vision import analyze_covers
+
         try:
-            image_b64 = _vision_image_b64(image_path)
-            raw = (self._transport or self._ollama)(image_b64)
+            timeout = self._timeout if self._timeout is not None else settings.VISION_TIMEOUT
+            text, draft = analyze_covers(
+                image_path,
+                None,
+                timeout=timeout,
+                transport=self._wrap_transport(),
+            )
         except Exception:
             return ManualOcrProvider().extract(image_path, role=role, prepare=prepare)
-        text, draft = raw, _draft_from_vision_json(raw)
         draft.raw = {
             **(draft.raw or {}),
             "cover_role": role,
+            "vision_downscaled": True,
+        }
+        return text, draft
+
+    def extract_dual(self, front_path, back_path=None, role="front"):
+        """One Ollama call with front (+ optional back). Used by scan_book layer 2."""
+        from .vision import analyze_covers
+
+        try:
+            timeout = self._timeout if self._timeout is not None else settings.VISION_TIMEOUT
+            text, draft = analyze_covers(
+                front_path,
+                back_path,
+                timeout=timeout,
+                transport=self._wrap_transport(),
+            )
+        except Exception:
+            return ManualOcrProvider().extract(front_path, role=role)
+        draft.raw = {
+            **(draft.raw or {}),
+            "cover_role": "front+back" if back_path else role,
             "vision_downscaled": True,
         }
         return text, draft

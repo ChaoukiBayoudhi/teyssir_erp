@@ -1181,6 +1181,138 @@ class TitleSearchGatingTests(unittest.TestCase):
         self.assertEqual(cleaned.isbn13, "")
         self.assertTrue(cleaned.raw.get("vision_isbn_rejected"))
 
+    def test_dual_image_vision_json_parse_and_description(self):
+        """Phase 15.4: one call with front+back; language_detected + description required."""
+        import tempfile
+        from unittest.mock import patch
+
+        from PIL import Image
+
+        from teyssir.catalog.bookscan.vision import analyze_covers, draft_from_vision_json
+
+        reply = json.dumps({
+            "title": "الأمير الصغير",
+            "authors": ["Antoine de Saint-Exupéry"],
+            "publisher": "Gallimard",
+            "languages": ["ar", "fr"],
+            "language_detected": "mixed:ar+fr",
+            "description": (
+                "Roman poétique pour enfants et adultes. "
+                "L'histoire suit un petit prince venu d'une autre planète. "
+                "Il rencontre un aviateur dans le désert."
+            ),
+            "isbn13": "9782070612758",
+            "price": "",
+            "barcode_raw": "6199999999999",
+        }, ensure_ascii=False)
+
+        draft = draft_from_vision_json(reply)
+        self.assertEqual(draft.title, "الأمير الصغير")
+        self.assertEqual(draft.language_detected, "mixed:ar+fr")
+        self.assertTrue(draft.description)
+        self.assertGreaterEqual(len([s for s in draft.description.split(".") if s.strip()]), 2)
+        self.assertEqual(draft.isbn13, "9782070612758")
+        self.assertEqual(draft.barcode_raw, "")  # never invent barcode_*
+
+        # Invented ISBN rejected
+        invented = draft_from_vision_json(
+            '{"title": "X", "language_detected": "en", '
+            '"description": "One. Two. Three.", "isbn13": "9781234567890"}'
+        )
+        self.assertEqual(invented.isbn13, "")
+        self.assertTrue(invented.raw.get("vision_isbn_rejected") or invented.raw.get("rejected_isbn"))
+
+        # Dual-image transport receives TWO base64 payloads
+        seen = {"n": 0, "count": 0}
+        tmp = tempfile.mkdtemp()
+        front = os.path.join(tmp, "f.png")
+        back = os.path.join(tmp, "b.png")
+        Image.new("RGB", (64, 64), "white").save(front)
+        Image.new("RGB", (64, 64), "blue").save(back)
+
+        def transport(images_b64):
+            seen["n"] += 1
+            seen["count"] = len(images_b64)
+            return reply
+
+        raw, out = analyze_covers(front, back, transport=transport, timeout=5)
+        self.assertEqual(seen["n"], 1)
+        self.assertEqual(seen["count"], 2)
+        self.assertTrue(out.raw.get("vision_dual_image"))
+        self.assertEqual(out.description.count("."), 3)  # three sentences end with .
+        self.assertEqual(out.language_detected, "mixed:ar+fr")
+        self.assertEqual(out.barcode_raw, "")
+
+    def test_maybe_vision_draft_dual_image_once(self):
+        """_maybe_vision_draft uses analyze_covers once (front+back), not two sequential calls."""
+        import tempfile
+        from unittest.mock import patch
+
+        from PIL import Image
+
+        from teyssir.catalog.bookscan.services import _maybe_vision_draft
+
+        tmp = tempfile.mkdtemp()
+        front = os.path.join(tmp, "f.png")
+        back = os.path.join(tmp, "b.png")
+        Image.new("RGB", (32, 32), "white").save(front)
+        Image.new("RGB", (32, 32), "red").save(back)
+        ocr_draft = BookDraft(
+            title="", source="tesseract", confidence=0.1,
+            raw={"ocr_garbage_latin": True},
+        )
+        calls = {"n": 0}
+
+        def fake_analyze(front_path, back_path=None, **kwargs):
+            calls["n"] += 1
+            self.assertIsNotNone(back_path)
+            d = BookDraft(
+                title="Book", description="A. B. C.", language_detected="en",
+                source="vision", confidence=0.8,
+                raw={"vision_dual_image": True},
+            )
+            return '{"title":"Book"}', d
+
+        with patch(
+            "teyssir.catalog.bookscan.vision.analyze_covers", side_effect=fake_analyze,
+        ):
+            out = _maybe_vision_draft([front, back], ocr_draft)
+        self.assertEqual(calls["n"], 1)
+        self.assertEqual(out.title, "Book")
+        self.assertTrue(out.description)
+
+    def test_scan_autofills_description_from_vision(self):
+        """Vision layer description becomes draft.description via merge."""
+        from unittest.mock import patch
+
+        ocr_draft = BookDraft(
+            title="", source="tesseract", confidence=0.1, languages=["ar"],
+            raw={"ocr_garbage_latin": True, "ocr_arabic_likely": True},
+        )
+        vision = BookDraft(
+            title="كتاب الفقه", authors=["مؤلف"], languages=["ar"],
+            language_detected="ar",
+            description="كتاب في الفقه الإسلامي. يتناول أحكام العبادات. مناسب للطلاب.",
+            source="vision", confidence=0.8,
+            raw={"vision_fallback": True, "vision_description": True},
+        )
+        with patch("teyssir.catalog.bookscan.services.get_ocr_provider") as g, \
+             patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths", return_value=("", "")), \
+             patch("teyssir.catalog.bookscan.services._maybe_vision_draft", return_value=vision):
+            class P:
+                name = "tesseract"
+                def extract(self, path, role="auto"):
+                    return "garbage", ocr_draft
+            g.return_value = P()
+            out, _ = scan_book(
+                ["/tmp/fake.png"], isbn="", enrich=lambda i: None,
+                enrich_title=lambda t, a="": None,
+            )
+        self.assertEqual(out.title, "كتاب الفقه")
+        self.assertTrue(out.description)
+        self.assertIn("الفقه", out.description)
+        self.assertEqual((out.raw or {}).get("field_sources", {}).get("description"), "vision")
+
     def test_scan_isbn_metadata_raises_confidence(self):
         """Barcode/ISBN hint + OpenLibrary must present high confidence, not 35%."""
         from unittest.mock import patch
