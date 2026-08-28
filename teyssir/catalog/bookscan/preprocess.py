@@ -304,6 +304,24 @@ def _apply_clahe(bgr):
     return cv2.cvtColor(cv2.merge([l2, a, b]), cv2.COLOR_LAB2BGR)
 
 
+def _light_denoise(bgr):
+    """Phase 15-OCR-1: cheap denoise after CLAHE (no multi-variant explosion).
+
+    Prefer fastNlMeans when available; fall back to bilateral. Small strength keeps
+    text edges usable for Tess while reducing webcam grain.
+    """
+    import cv2
+
+    try:
+        # h=6 is light; templateWindowSize/searchWindowSize stay small for latency
+        return cv2.fastNlMeansDenoisingColored(bgr, None, 6, 6, 7, 15)
+    except Exception:
+        try:
+            return cv2.bilateralFilter(bgr, d=5, sigmaColor=40, sigmaSpace=40)
+        except Exception:
+            return bgr
+
+
 def _find_white_label(bgr) -> RoiBox | None:
     """Bright compact sticker in the lower cover (PVP / CNP barcode labels).
 
@@ -449,6 +467,7 @@ def _preprocess_opencv(image_path: str, *, max_edge: int, out_path: str) -> Cove
         method = f"{method}+deskew"
 
     bgr = _apply_clahe(bgr)
+    bgr = _light_denoise(bgr)
     # Re-clamp after warp/rotate (warp can enlarge)
     bgr = _resize_max_edge(bgr, max_edge)
 

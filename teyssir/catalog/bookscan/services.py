@@ -157,6 +157,11 @@ def _merge_cover_drafts(front: BookDraft, back: BookDraft | None) -> BookDraft:
         out.raw.pop("isbn_not_detected", None)
     else:
         out.raw["isbn_not_detected"] = True
+
+    from .language import apply_language_detected
+
+    # Languages already unioned (with Latin-front guard); detect from draft only.
+    apply_language_detected(out)
     return out
 
 
@@ -497,7 +502,27 @@ def _scan_book_prepared(
                 draft.confidence = min(draft.confidence or 0.3, 0.35)
     else:
         draft.raw = {**(draft.raw or {}), "isbn_not_detected": True}
-        if draft.title and not title_hit and not metadata_hit:
+        from .ocr import is_usable_ocr_title
+
+        title_usable = bool(draft.title) and is_usable_ocr_title(draft.title) and not (
+            (draft.raw or {}).get("ocr_garbage_latin")
+            or is_garbage_latin_ocr(draft.title or "")
+        )
+        # Tess-only / no-ISBN: short template description only if title usable
+        vision_used = bool((draft.raw or {}).get("vision_fallback")) or draft.source == "vision"
+        if not vision_used and not draft.description:
+            if title_usable:
+                from .language import template_description
+
+                draft.description = template_description(
+                    draft.title,
+                    language_detected=getattr(draft, "language_detected", "") or "",
+                )
+                if draft.description:
+                    draft.raw["description_template"] = True
+            else:
+                draft.raw["manual_assist"] = True
+        elif draft.title and not title_hit and not metadata_hit:
             draft.raw["manual_assist"] = True
         # Never advertise high confidence without ISBN from fuzzy title alone
         if draft.raw.get("title_search") and not draft.isbn13:
@@ -516,13 +541,21 @@ def _scan_book_prepared(
     # Prefer per-cover ocr_ms when present
     if ocr_draft.raw.get("ocr_ms") and "ocr_ms" not in (draft.raw or {}):
         draft.raw["ocr_ms"] = ocr_draft.raw["ocr_ms"]
+
+    from .language import apply_language_detected
+
+    apply_language_detected(draft, front=ocr_draft, back=None)
+
+    # Vision path: if description still empty but title usable, keep empty for
+    # Vision (prompt asks for 1–2 sentences); do not overwrite a Vision description.
     logger.info(
-        "scan_book done ms=%s title=%r isbn=%s barcode=%s conf=%s",
+        "scan_book done ms=%s title=%r isbn=%s barcode=%s conf=%s lang=%s",
         scan_ms,
         (draft.title or "")[:40],
         draft.isbn13 or "",
         draft.barcode_raw or "",
         draft.confidence,
+        getattr(draft, "language_detected", "") or "",
     )
     return draft, ocr_text
 
@@ -822,6 +855,9 @@ def create_book_from_draft(*, data, image_ids=(), sale_price="0", origin_termina
         raw_meta.setdefault("barcode_raw", barcode_raw)
         raw_meta.setdefault("barcode_symbology", barcode_symbology)
         raw_meta.setdefault("barcode_kind", barcode_kind)
+    ld = (data.get("language_detected") or raw_meta.get("language_detected") or "").strip()
+    if ld:
+        raw_meta["language_detected"] = ld
     book = Book.objects.create(
         product=product, isbn13=isbn13, isbn10=data.get("isbn10", ""),
         subtitle=data.get("subtitle", ""), publisher=data.get("publisher", ""),

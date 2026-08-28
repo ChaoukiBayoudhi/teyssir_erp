@@ -771,6 +771,45 @@ def _preprocess_variants(
         im = im.filter(ImageFilter.MedianFilter(size=3))
         return ImageEnhance.Sharpness(im).enhance(1.5).convert("RGB")
 
+    def _title_thr(im):
+        """One extra Otsu/adaptive threshold on title_band only (15-OCR-1)."""
+        im = _downscale_max_edge(im, _TITLE_MAX_EDGE)
+        g = ImageOps.autocontrast(ImageOps.grayscale(im))
+        try:
+            import numpy as np
+
+            arr = np.asarray(g, dtype=np.uint8)
+            try:
+                import cv2
+
+                _, thr = cv2.threshold(arr, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                return Image.fromarray(thr).convert("RGB")
+            except Exception:
+                hist = np.bincount(arr.ravel(), minlength=256).astype(np.float64)
+                total = arr.size
+                sum_total = float(np.dot(np.arange(256), hist))
+                sum_b = 0.0
+                w_b = 0.0
+                best = 0
+                max_var = -1.0
+                for t in range(256):
+                    w_b += hist[t]
+                    if w_b == 0:
+                        continue
+                    w_f = total - w_b
+                    if w_f == 0:
+                        break
+                    sum_b += t * hist[t]
+                    m_b = sum_b / w_b
+                    m_f = (sum_total - sum_b) / w_f
+                    var = w_b * w_f * (m_b - m_f) ** 2
+                    if var > max_var:
+                        max_var = var
+                        best = t
+                return g.point(lambda x, b=best: 255 if x > b else 0).convert("RGB")
+        except Exception:
+            return g.point(lambda x: 255 if x > 140 else 0).convert("RGB")
+
     def _band_up(im, *, threshold=False, min_edge: int | None = None):
         im = _upscale_min_edge(im, min_edge or _BARCODE_MIN_EDGE)
         g = ImageOps.autocontrast(ImageOps.grayscale(im))
@@ -779,8 +818,9 @@ def _preprocess_variants(
             g = g.point(lambda x: 255 if x > 140 else 0)
         return g.convert("RGB")
 
-    # Title path (always downscaled)
+    # Title path (always downscaled) + one threshold variant (15-OCR-1)
     yield "title_band", _title_prep(crop)
+    yield "title_thr", _title_thr(crop)
     if role == "front":
         yield "title_color", _title_prep(crop, color=True)
 
@@ -1470,8 +1510,12 @@ _VISION_PROMPT = (
     "(sometimes mixed). Extract the bibliographic data and reply with a SINGLE JSON object only, "
     "no prose. Use these keys (empty string or empty list if unknown): "
     "title, subtitle, authors (list), translators (list), publisher, series, edition, "
-    "languages (ISO codes list, e.g. [\"ar\",\"fr\"]), pub_year (int), pages (int), "
-    "isbn13, subject, description, price (string in TND if printed). "
+    "languages (ISO codes list, e.g. [\"ar\",\"fr\"]), language_detected "
+    "(one of: \"ar\", \"fr\", \"en\", or \"mixed:ar+fr\" / \"mixed:ar+en\" / \"mixed:fr+en\"), "
+    "pub_year (int), pages (int), isbn13, subject, description, price (string in TND if printed). "
+    "CRITICAL for description: if no blurb is printed, invent NOTHING long — write a short "
+    "1–2 sentence factual description of the book from the cover (title/genre/audience) "
+    "in the book's language; never leave description empty when a usable title is visible. "
     "Preserve the original script for Arabic text. "
     "CRITICAL: Never invent or guess an ISBN. Set isbn13 to empty string unless the digits "
     "are clearly printed on the cover/verso; do not fabricate check digits."
@@ -1479,7 +1523,7 @@ _VISION_PROMPT = (
 
 _VISION_KEYS = {
     "title", "subtitle", "publisher", "series", "edition",
-    "subject", "description", "isbn13", "price",
+    "subject", "description", "isbn13", "price", "language_detected",
 }
 
 
@@ -1503,6 +1547,16 @@ def _draft_from_vision_json(raw):
         draft.translators = [str(a).strip() for a in data["translators"] if str(a).strip()]
     if isinstance(data.get("languages"), list):
         draft.languages = [str(a).strip() for a in data["languages"] if str(a).strip()]
+    # Prefer explicit language_detected; else derive from languages[]
+    ld = (data.get("language_detected") or "").strip()
+    if ld:
+        draft.language_detected = ld
+        draft.raw["language_detected"] = ld
+    elif draft.languages:
+        from .language import format_language_detected
+
+        draft.language_detected = format_language_detected(draft.languages)
+        draft.raw["language_detected"] = draft.language_detected
     for num in ("pub_year", "pages"):
         try:
             value = int(data.get(num))
