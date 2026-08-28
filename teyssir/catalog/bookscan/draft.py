@@ -18,6 +18,8 @@ class BookDraft:
     series: str = ""
     edition: str = ""
     languages: list = field(default_factory=list)
+    # Phase 15.2: scalar ar|fr|en|mixed:ar+fr (keeps languages[] compatible)
+    language_detected: str = ""
     pub_year: int | None = None
     pages: int | None = None
     dimensions: str = ""

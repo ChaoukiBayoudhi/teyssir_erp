@@ -114,6 +114,46 @@ class BookScanServiceTests(TestCase):
         self.assertEqual(out.price, "15.000")
         self.assertEqual(out.authors, ["Saint-Exupéry"])
         self.assertTrue(out.raw["covers"]["back"])
+        self.assertEqual(out.language_detected, "fr")
+        self.assertEqual(out.raw.get("language_detected"), "fr")
+        self.assertIn("fr", out.languages)
+
+    def test_merge_language_detected_mixed_ar_fr(self):
+        from teyssir.catalog.bookscan.services import _merge_cover_drafts
+        front = BookDraft(
+            title="الأول في السنة", languages=["ar"], source="tesseract", confidence=0.5,
+            raw={"script_probe": "ar"},
+        )
+        back = BookDraft(
+            title="Le premier", languages=["fr"], isbn13="9789973352743",
+            source="tesseract", confidence=0.6,
+            raw={"script_probe": "fr", "isbn_from_barcode": True},
+        )
+        out = _merge_cover_drafts(front, back)
+        self.assertEqual(out.language_detected, "mixed:ar+fr")
+        self.assertIn("ar", out.languages)
+        self.assertIn("fr", out.languages)
+        self.assertIn("language_detected", out.as_dict())
+        self.assertEqual(out.as_dict()["language_detected"], "mixed:ar+fr")
+
+    def test_language_detected_helpers(self):
+        from teyssir.catalog.bookscan.language import (
+            detect_language_detected,
+            format_language_detected,
+            template_description,
+        )
+        self.assertEqual(format_language_detected(["fr"]), "fr")
+        self.assertEqual(format_language_detected(["fr", "ar"]), "mixed:ar+fr")
+        self.assertEqual(
+            detect_language_detected(script_probes=["ar+fr"], languages=[]),
+            "mixed:ar+fr",
+        )
+        self.assertEqual(
+            detect_language_detected(ocr_langs=["ara+fra"], languages=["en"]),
+            "mixed:ar+fr+en",
+        )
+        self.assertTrue(template_description("Mathématiques", language_detected="fr").startswith("Livre"))
+        self.assertEqual(template_description("", language_detected="fr"), "")
 
     def test_create_book_from_draft_builds_normalized_records(self):
         product = create_book_from_draft(data={
@@ -820,8 +860,10 @@ class FastOcrPathTests(unittest.TestCase):
         )
         labels = [lab for lab, _ in _preprocess_variants(path, role="auto", prepare=prep)]
         self.assertIn("title_band", labels)
+        self.assertIn("title_thr", labels)
         self.assertTrue(any(l.startswith("price") or l.startswith("barcode") for l in labels))
-        self.assertLessEqual(len(labels), 8)
+        # title_band + title_thr + title_gray + price/barcode bands (≤9 without white_label)
+        self.assertLessEqual(len(labels), 9)
         self.assertNotIn("lower_rot90", labels)
         self.assertNotIn("calligraphy", labels)
 
