@@ -14,10 +14,14 @@ from teyssir.core.money import require_non_negative_money
 from .barcode import DecodedBarcode, decode_isbn_with_source, decode_product_barcode
 from .draft import BookDraft
 from .isbn import to_isbn13
+from .merge import merge_cover_drafts, merge_scan_layers
 from .metadata import enrich_by_isbn, enrich_by_title
 from .ocr import get_ocr_provider
 
 logger = logging.getLogger("teyssir.ocr")
+
+# Backward-compatible alias for tests / callers
+_merge_cover_drafts = merge_cover_drafts
 
 
 def _apply_barcode_hit(draft: BookDraft, hit: DecodedBarcode | None) -> None:
@@ -42,127 +46,6 @@ def _apply_barcode_hit(draft: BookDraft, hit: DecodedBarcode | None) -> None:
         draft.raw["barcode_non_isbn"] = True
         if draft.isbn13 and not to_isbn13(draft.isbn13):
             draft.isbn13 = ""
-
-
-def _merge_cover_drafts(front: BookDraft, back: BookDraft | None) -> BookDraft:
-    """Combine front (title/author) + back (ISBN/price) into one reviewable draft."""
-    out = BookDraft(source=front.source or (back.source if back else ""), confidence=0.0)
-    # Bibliographic identity from front
-    for key in ("title", "subtitle", "publisher", "series", "edition", "subject",
-                "description", "isbn13", "isbn10", "price",
-                "barcode_raw", "barcode_symbology", "barcode_kind"):
-        setattr(out, key, getattr(front, key) or "")
-    out.authors = list(front.authors or [])
-    out.translators = list(front.translators or [])
-    out.languages = list(front.languages or [])
-    out.pub_year = front.pub_year
-    out.pages = front.pages
-    out.raw = {**(front.raw or {}), "covers": {"front": True}}
-
-    if back:
-        # Back wins for ISBN + price + product barcode; fills empty bib fields
-        if back.isbn13:
-            out.isbn13 = back.isbn13
-        if back.price:
-            out.price = back.price
-        if back.barcode_raw:
-            out.barcode_raw = back.barcode_raw
-            out.barcode_symbology = back.barcode_symbology or out.barcode_symbology
-            out.barcode_kind = back.barcode_kind or out.barcode_kind
-        if back.isbn10 and not out.isbn10:
-            out.isbn10 = back.isbn10
-        for key in ("title", "subtitle", "publisher", "subject", "description"):
-            if not getattr(out, key) and getattr(back, key):
-                setattr(out, key, getattr(back, key))
-        if not out.authors and back.authors:
-            out.authors = list(back.authors)
-        # Union language tags from both covers (bilingual FR+AR)
-        if back.languages:
-            from .ocr import arabic_char_ratio, is_usable_ocr_title
-
-            front_latin_only = (
-                is_usable_ocr_title(front.title or "")
-                and arabic_char_ratio(front.title or "") < 0.12
-                and "ar" not in (front.languages or [])
-            )
-            if front_latin_only:
-                # EN/FR front must not inherit false Arabic from verso noise
-                merged_langs = list(front.languages or [])
-                for lang in back.languages:
-                    if lang == "ar":
-                        continue
-                    if lang not in merged_langs:
-                        merged_langs.append(lang)
-                out.languages = merged_langs
-                out.raw.pop("arabic_script_detected", None)
-                out.raw.pop("ocr_arabic_likely", None)
-            else:
-                merged_langs = list(out.languages or [])
-                for lang in back.languages:
-                    if lang not in merged_langs:
-                        merged_langs.append(lang)
-                out.languages = merged_langs
-        out.raw["covers"] = {"front": True, "back": True}
-        out.raw["back"] = {k: back.raw.get(k) for k in
-                           ("isbn_detected", "isbn_not_detected", "price_detected",
-                            "isbn_from_barcode", "isbn_from_digit_ocr", "ocr_langs",
-                            "barcode_detected", "barcode_non_isbn", "barcode_source")
-                           if back.raw}
-        if back.raw.get("isbn_from_barcode"):
-            out.raw["isbn_from_barcode"] = True
-        if back.raw.get("isbn_from_digit_ocr"):
-            out.raw["isbn_from_digit_ocr"] = True
-        if back.raw.get("barcode_detected"):
-            out.raw["barcode_detected"] = True
-        if back.raw.get("barcode_non_isbn"):
-            out.raw["barcode_non_isbn"] = True
-
-    from .ocr import is_usable_ocr_title, merge_bilingual_title
-
-    # Prefer bilingual merge when front/back each have one script
-    if front.title and back and back.title:
-        merged = merge_bilingual_title(front.title, back.title)
-        if merged and ("(" in merged or "/" in merged):
-            out.title = merged
-            out.raw["bilingual_title"] = True
-
-    # Confidence: real barcode ISBN is high-trust; digit OCR is not
-    if out.isbn13 and (
-        out.raw.get("isbn_from_barcode")
-        or (back and back.raw.get("isbn_from_barcode"))
-    ):
-        out.confidence = max(front.confidence or 0, (back.confidence if back else 0) or 0, 0.85)
-        out.raw["isbn_from_barcode"] = True
-    elif out.isbn13 and (
-        out.raw.get("isbn_from_digit_ocr")
-        or (back and back.raw.get("isbn_from_digit_ocr"))
-    ):
-        out.confidence = min(
-            max(front.confidence or 0, (back.confidence if back else 0) or 0),
-            0.35,
-        )
-        out.raw["isbn_from_digit_ocr"] = True
-    elif out.isbn13:
-        out.confidence = min(
-            max(front.confidence or 0, (back.confidence if back else 0) or 0, 0.55),
-            0.6,
-        )
-    elif out.title and is_usable_ocr_title(out.title):
-        out.confidence = max(front.confidence or 0, (back.confidence if back else 0) or 0)
-    else:
-        out.confidence = max(front.confidence or 0, (back.confidence if back else 0) or 0)
-
-    if out.isbn13:
-        out.raw["isbn_detected"] = True
-        out.raw.pop("isbn_not_detected", None)
-    else:
-        out.raw["isbn_not_detected"] = True
-
-    from .language import apply_language_detected
-
-    # Languages already unioned (with Latin-front guard); detect from draft only.
-    apply_language_detected(out)
-    return out
 
 
 def _product_barcode_from_paths(image_paths, prepared=None) -> DecodedBarcode | None:
@@ -362,7 +245,7 @@ def _scan_book_prepared(
         ):
             isbn_source = "digit_ocr"
 
-    ocr_draft = _merge_cover_drafts(front, back) if image_paths else front
+    ocr_draft = merge_cover_drafts(front, back) if image_paths else front
     ocr_text = "\n---\n".join(texts)
 
     # Attach product barcode (ISBN or CNP/GTIN). Prefer path-level zbar hit.
@@ -374,6 +257,15 @@ def _scan_book_prepared(
                 ocr_draft.barcode_raw = side.barcode_raw
                 ocr_draft.barcode_symbology = side.barcode_symbology
                 ocr_draft.barcode_kind = side.barcode_kind
+                ocr_draft.raw = {
+                    **(ocr_draft.raw or {}),
+                    "barcode_detected": True,
+                    "barcode_source": (side.raw or {}).get("barcode_source") or "ocr",
+                }
+                if side.barcode_kind == "isbn13":
+                    ocr_draft.raw["isbn_from_barcode"] = True
+                elif side.barcode_raw:
+                    ocr_draft.raw["barcode_non_isbn"] = True
                 break
 
     if isbn:
@@ -391,38 +283,34 @@ def _scan_book_prepared(
         if client_isbn_hint:
             ocr_draft.raw["isbn_client_hint"] = True
 
-    # Phone-camera covers often defeat Tesseract; upgrade via local Ollama vision when weak.
+    # Phase 15.3: Vision is a separate layer (not an in-place OCR overwrite).
+    vision_draft = None
     if image_paths and _should_try_vision(ocr_draft, provider):
-        ocr_draft = _maybe_vision_upgrade(image_paths, ocr_draft, back)
-        if not isbn and ocr_draft.isbn13:
-            isbn = to_isbn13(ocr_draft.isbn13) or ""
-        # Append vision text marker if present
-        if ocr_draft.raw.get("vision_fallback") and ocr_draft.raw.get("vision_text"):
-            ocr_text = f"{ocr_text}\n---\n{ocr_draft.raw.get('vision_text')}"
+        vision_draft = _maybe_vision_draft(image_paths, ocr_draft)
+        if vision_draft:
+            if not isbn and vision_draft.isbn13:
+                isbn = to_isbn13(vision_draft.isbn13) or ""
+            if vision_draft.raw.get("vision_text"):
+                ocr_text = f"{ocr_text}\n---\n{vision_draft.raw.get('vision_text')}"
 
-    draft = enrich(isbn) if isbn else None
-    metadata_hit = draft is not None
-    if draft is None:
-        draft = ocr_draft
-    else:
-        draft.merge(ocr_draft)
-        if ocr_draft.price and not draft.price:
-            draft.price = ocr_draft.price
-        # Prefer barcode/OCR ISBN; keep OCR price
-        if isbn:
-            draft.isbn13 = draft.isbn13 or isbn
-        # Metadata by ISBN is high-trust — reflect that in confidence/source
-        draft.confidence = max(draft.confidence or 0, 0.85)
-        if ocr_draft.raw.get("isbn_from_barcode") or client_isbn_hint:
-            draft.raw = {**(draft.raw or {}), "isbn_from_barcode": True}
-            draft.confidence = max(draft.confidence or 0, 0.9)
-        # Confirmed digit-OCR ISBN via OpenLibrary → upgrade trust
-        if ocr_draft.raw.get("isbn_from_digit_ocr"):
-            draft.raw = {
-                **(draft.raw or {}),
-                "isbn_from_digit_ocr": True,
-                "isbn_digit_ocr_confirmed": True,
-            }
+    metadata_draft = enrich(isbn) if isbn else None
+    metadata_hit = metadata_draft is not None
+    if metadata_hit and isbn_source == "digit_ocr":
+        # Digit-OCR ISBN confirmed by OpenLibrary/Google → upgrade trust flag
+        metadata_draft.raw = {
+            **(metadata_draft.raw or {}),
+            "isbn_from_digit_ocr": True,
+            "isbn_digit_ocr_confirmed": True,
+        }
+
+    draft = merge_scan_layers(
+        metadata=metadata_draft,
+        vision=vision_draft,
+        ocr=ocr_draft,
+        isbn_hint=isbn,
+        isbn_source=isbn_source,
+        client_isbn_hint=client_isbn_hint,
+    )
 
     # No ISBN: try title/author metadata search (local Tunisian editions) — low confidence
     # Never search OpenLibrary with garbage Latin OCR (locks wrong language / wrong book).
@@ -442,10 +330,14 @@ def _scan_book_prepared(
             ocr_title = draft.title
             ocr_authors = list(draft.authors or [])
             raw_ocr = dict(draft.raw or {})
+            field_sources = dict(raw_ocr.get("field_sources") or {})
             # OCR title/authors stay unless search is a strong match (see metadata)
             strong = (found.confidence or 0) >= 0.55 and not found.raw.get("title_search_weak")
             if strong:
                 found.merge(draft)  # search wins bibliographic fields; OCR fills gaps
+                for key in ("title", "authors", "publisher", "description", "subtitle"):
+                    if getattr(found, key, None):
+                        field_sources[key] = "metadata"
             else:
                 # Keep OCR identity; only fill empty extras from search
                 draft.merge(found)
@@ -457,6 +349,7 @@ def _scan_book_prepared(
                     found.title = ocr_title
             if price:
                 found.price = price
+                field_sources.setdefault("price", "ocr")
             # Prefer OCR script tags (ar) over OL defaulting to eng from a bad query
             if langs:
                 found.languages = langs
@@ -465,6 +358,7 @@ def _scan_book_prepared(
             found.raw = {
                 **(found.raw or {}), **raw_ocr, "title_search": True,
                 **({"title_search_weak": True} if not strong else {}),
+                "field_sources": field_sources,
             }
             draft = found
     elif not isbn and draft.title and not title_ok:
@@ -474,7 +368,7 @@ def _scan_book_prepared(
         }
 
     if isbn:
-        draft.isbn13 = draft.isbn13 or isbn
+        draft.isbn13 = draft.isbn13 or to_isbn13(isbn) or draft.isbn13
         draft.raw = {**(draft.raw or {}), "isbn_detected": True}
         draft.raw.pop("isbn_not_detected", None)
         if not metadata_hit:
@@ -484,9 +378,12 @@ def _scan_book_prepared(
                 draft.raw.get("isbn_from_barcode")
                 or client_isbn_hint
                 or isbn_source == "barcode"
+                or (draft.raw.get("field_sources") or {}).get("isbn13") == "barcode"
             )
             from_digit = bool(
-                draft.raw.get("isbn_from_digit_ocr") or isbn_source == "digit_ocr"
+                draft.raw.get("isbn_from_digit_ocr")
+                or isbn_source == "digit_ocr"
+                or (draft.raw.get("field_sources") or {}).get("isbn13") == "digit_ocr"
             )
             if from_digit and not from_barcode:
                 draft.raw["suggested_isbn"] = draft.isbn13
@@ -495,6 +392,9 @@ def _scan_book_prepared(
                 draft.confidence = min(draft.confidence or 0.2, 0.25)
                 draft.raw["isbn_not_detected"] = True
                 draft.raw.pop("isbn_detected", None)
+                fs = dict(draft.raw.get("field_sources") or {})
+                fs.pop("isbn13", None)
+                draft.raw["field_sources"] = fs
             elif not from_barcode:
                 # Unknown-source ISBN + metadata miss → low confidence
                 draft.raw["suggested_isbn"] = draft.isbn13
@@ -520,6 +420,9 @@ def _scan_book_prepared(
                 )
                 if draft.description:
                     draft.raw["description_template"] = True
+                    fs = dict(draft.raw.get("field_sources") or {})
+                    fs.setdefault("description", "ocr")
+                    draft.raw["field_sources"] = fs
             else:
                 draft.raw["manual_assist"] = True
         elif draft.title and not title_hit and not metadata_hit:
@@ -531,6 +434,9 @@ def _scan_book_prepared(
     # Ensure barcode fields survive metadata merge
     if product_bc and not draft.barcode_raw:
         _apply_barcode_hit(draft, product_bc)
+        fs = dict(draft.raw.get("field_sources") or {})
+        fs["barcode_raw"] = "barcode"
+        draft.raw["field_sources"] = fs
     elif ocr_draft.barcode_raw and not draft.barcode_raw:
         draft.barcode_raw = ocr_draft.barcode_raw
         draft.barcode_symbology = ocr_draft.barcode_symbology
@@ -546,16 +452,15 @@ def _scan_book_prepared(
 
     apply_language_detected(draft, front=ocr_draft, back=None)
 
-    # Vision path: if description still empty but title usable, keep empty for
-    # Vision (prompt asks for 1–2 sentences); do not overwrite a Vision description.
     logger.info(
-        "scan_book done ms=%s title=%r isbn=%s barcode=%s conf=%s lang=%s",
+        "scan_book done ms=%s title=%r isbn=%s barcode=%s conf=%s lang=%s sources=%s",
         scan_ms,
         (draft.title or "")[:40],
         draft.isbn13 or "",
         draft.barcode_raw or "",
         draft.confidence,
         getattr(draft, "language_detected", "") or "",
+        (draft.raw or {}).get("field_sources") or {},
     )
     return draft, ocr_text
 
@@ -582,12 +487,12 @@ def _sanitize_vision_isbn(draft):
     return draft
 
 
-def _maybe_vision_upgrade(image_paths, ocr_draft, back):
-    """Run Vision-LLM with a hard timeout; never block the scan for long.
+def _maybe_vision_draft(image_paths, ocr_draft) -> BookDraft | None:
+    """Run Vision-LLM with a hard timeout; return a separate layer (or None).
 
-    Phase 2E: downscaled JPEG to Ollama; Arabic calligraphy / garbage get a longer
-    share of the budget; verso only if front misses ISBN and time remains.
-    Never accept a Vision ISBN without checksum validation.
+    Phase 2E / 15.3: Vision is merged later via ``merge_scan_layers`` — do not
+    overwrite Tess/barcode/price OCR in place. Never accept a Vision ISBN
+    without checksum validation.
     """
     from django.conf import settings
 
@@ -619,10 +524,10 @@ def _maybe_vision_upgrade(image_paths, ocr_draft, back):
                     **(ocr_draft.raw or {}),
                     "vision_fallback_error": f"timeout after {timeout}s",
                 }
-                return ocr_draft
+                return None
     except Exception as exc:
         ocr_draft.raw = {**(ocr_draft.raw or {}), "vision_fallback_error": str(exc)[:200]}
-        return ocr_draft
+        return None
 
     v_front = _sanitize_vision_isbn(v_front)
 
@@ -648,36 +553,52 @@ def _maybe_vision_upgrade(image_paths, ocr_draft, back):
                         }
                     if v_back.price and not v_front.price:
                         v_front.price = v_back.price
+                    if v_back.description and not v_front.description:
+                        v_front.description = v_back.description
                 except FuturesTimeout:
                     fut_b.cancel()
         except Exception:
             pass
 
-    vision_draft = _merge_cover_drafts(v_front, back if back and back.source != "manual" else None)
-    vision_draft = _sanitize_vision_isbn(vision_draft)
-    # Prefer real barcode/digit ISBN over Vision guess
+    v_front = _sanitize_vision_isbn(v_front)
+    # Strip any Vision-invented barcode_* — decoder-only hard rule
+    v_front.barcode_raw = ""
+    v_front.barcode_symbology = ""
+    v_front.barcode_kind = ""
+
+    if not (v_front.title or v_front.isbn13 or v_front.description or v_front.authors):
+        return None
+
+    v_front.raw = {
+        **(v_front.raw or {}),
+        "vision_fallback": True,
+        "tesseract_title": ocr_draft.title,
+        "vision_text": (v_text or "")[:2000],
+        "vision_timeout_budget": timeout,
+    }
+    if not v_front.source:
+        v_front.source = "vision"
+    return v_front
+
+
+def _maybe_vision_upgrade(image_paths, ocr_draft, back):
+    """Legacy wrapper: merge vision layer into a combined draft (tests / callers)."""
+    vision = _maybe_vision_draft(image_paths, ocr_draft)
+    if not vision:
+        return ocr_draft
+    # Prefer barcode ISBN / OCR price via merge_scan_layers hard overrides
+    merged = merge_scan_layers(metadata=None, vision=vision, ocr=ocr_draft)
     if back and back.isbn13 and (back.raw or {}).get("isbn_from_barcode"):
-        vision_draft.isbn13 = back.isbn13
-        vision_draft.raw = {
-            **(vision_draft.raw or {}),
+        merged.isbn13 = back.isbn13
+        merged.raw = {
+            **(merged.raw or {}),
             "isbn_from_barcode": True,
             "isbn_from_vision": False,
         }
-    elif not vision_draft.isbn13 and back and back.isbn13:
-        vision_draft.isbn13 = back.isbn13
-    if not vision_draft.price and back and back.price:
-        vision_draft.price = back.price
-    if vision_draft.title or vision_draft.isbn13 or vision_draft.confidence > ocr_draft.confidence:
-        vision_draft.raw = {
-            **(ocr_draft.raw or {}),
-            **(vision_draft.raw or {}),
-            "vision_fallback": True,
-            "tesseract_title": ocr_draft.title,
-            "vision_text": (v_text or "")[:2000],
-            "vision_timeout_budget": timeout,
-        }
-        return vision_draft
-    return ocr_draft
+        fs = dict(merged.raw.get("field_sources") or {})
+        fs["isbn13"] = "barcode"
+        merged.raw["field_sources"] = fs
+    return merged
 
 
 def _should_try_vision(draft, provider) -> bool:
