@@ -206,14 +206,28 @@ installez le pilote Windows fourni par le fabricant ; l'impression se fait depui
 
 Deux moteurs **gratuits** sont disponibles :
 
-- **Tesseract** (rapide, hors-ligne) : installez Tesseract pour Windows
-  (<https://github.com/UB-Mannheim/tesseract/wiki>) avec les langues **ara + fra + eng**, puis dans
-  `.env` : `TEYSSIR_OCR_PROVIDER=tesseract`.
-- **Vision-LLM** (extraction structurée multilingue, hors-ligne) : installez **Ollama**
-  (<https://ollama.com>), puis `ollama pull qwen2.5vl:3b`, et dans `.env` :
-  `TEYSSIR_OCR_PROVIDER=vision` et `TEYSSIR_SCAN_EXECUTOR=thread`.
+- **Tesseract** (rapide, hors-ligne) : `install.ps1` tente d'installer Tesseract (winget UB-Mannheim)
+  avec **ara + fra + eng** et écrit `TEYSSIR_TESSERACT_CMD` dans `.env`. Sinon installez
+  manuellement (<https://github.com/UB-Mannheim/tesseract/wiki>), puis dans `.env` :
+  `TEYSSIR_OCR_PROVIDER=tesseract` et
+  `TEYSSIR_TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe`.
+- **Vision-LLM** (extraction structurée multilingue, hors-ligne) : Ollama est installé
+  automatiquement **si possible**, avec le modèle **texte** `mistral`. Le modèle **vision**
+  (`qwen2.5vl:3b`, CPU-friendly) **n'est pas** téléchargé par défaut. Pour le fallback
+  bookscan (Phase 15.4, une requête front+verso) :
+  `.\deploy\windows\Install-LocalLlm.ps1 -Model mistral -PullVision`.
+  Gardez `TEYSSIR_OCR_PROVIDER=tesseract` (Vision = couche 2). Option primaire :
+  `TEYSSIR_OCR_PROVIDER=vision` + `TEYSSIR_SCAN_EXECUTOR=thread`. Voir `docs/LOCAL-AI.md`.
+- **ISBN / code-barres** : `pyzbar` (dans `requirements.txt`) a besoin de **libzbar**.
+  Sur Windows, placez `libzbar-64.dll` sur le `PATH` du service (ou à côté de Python),
+  ou comptez sur la détection client `BarcodeDetector` + OCR chiffres. Sans DLL, le
+  décodage barcode serveur échoue silencieusement (fallback OCR digits).
 
-- **Vision fallback (2E)** : avec `TEYSSIR_OCR_PROVIDER=tesseract`, Ollama Vision ne tourne que si le titre/barcode Tess est faible (calligraphie arabe, photo téléphone sans code-barres, titre « garbage »). ISBN Vision refusé sans checksum. Voir `docs/LOCAL-AI.md` (Vision fallback gate).
+- **Vision fallback (2E / 15.4)** : avec `TEYSSIR_OCR_PROVIDER=tesseract`, Ollama Vision
+  (dual-image front+back, `qwen2.5vl:3b`) ne tourne que si le titre/barcode Tess est faible
+  (calligraphie arabe, photo téléphone sans code-barres, titre « garbage »). Description
+  2–4 phrases auto-remplie. ISBN Vision refusé sans checksum ; jamais de `barcode_*` inventé.
+  Voir `docs/LOCAL-AI.md`.
 - **Régression books_photos (2F)** : placez les photos dans `books_photos\`, puis :
 
 ```powershell

@@ -167,8 +167,14 @@ Time Machine. Le Hub contient déjà la consolidation de toutes les caisses.
 - **Tesseract** (rapide, hors-ligne) : `brew install tesseract tesseract-lang`, puis dans `.env` :
   `TEYSSIR_OCR_PROVIDER=tesseract`.
 - **Vision-LLM** (extraction structurée multilingue, hors-ligne) : `brew install ollama`,
-  `ollama pull qwen2.5vl:3b`, puis `.env` : `TEYSSIR_OCR_PROVIDER=vision` et
-  `TEYSSIR_SCAN_EXECUTOR=thread`.
+  `ollama pull qwen2.5vl:3b` (modèle vision par défaut, CPU-friendly), puis laissez
+  `TEYSSIR_OCR_PROVIDER=tesseract` — Vision est un fallback (couvertures arabes / OCR
+  faible / sans ISBN). Pour Vision en primaire : `.env` avec `TEYSSIR_OCR_PROVIDER=vision`
+  et `TEYSSIR_SCAN_EXECUTOR=thread`. Voir `docs/LOCAL-AI.md` (Phase 15.4 dual-image).
+- Si OCR est vide sous LaunchAgent : vérifiez `PATH` Homebrew dans le plist et
+  `TEYSSIR_TESSERACT_CMD` ; Menu → **Diagnostics** ;   `curl -s http://127.0.0.1:8000/health/ | jq .tesseract`.
+  Vérifiez que `langs` contient **ara** et **fra** (sinon `brew install tesseract-lang`).
+  Les couvertures arabes sans `ara` produisent du Latin absurde (`wis! Boot ay`) et `languages=en`.
 </details>
 
 <details>
