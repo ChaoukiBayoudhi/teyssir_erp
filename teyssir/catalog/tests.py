@@ -128,6 +128,152 @@ class BookScanServiceTests(TestCase):
         self.assertTrue(template_description("Mathématiques", language_detected="fr").startswith("Livre"))
         self.assertEqual(template_description("", language_detected="fr"), "")
 
+    def test_merge_priority_metadata_over_vision_over_ocr(self):
+        """Phase 15.3: metadata > vision > OCR for bibliographic fields."""
+        from teyssir.catalog.bookscan.merge import merge_scan_layers
+
+        meta = BookDraft(
+            title="Le Petit Prince", authors=["Saint-Exupéry"], publisher="Gallimard",
+            description="Meta desc", isbn13="9782070612758",
+            source="openlibrary", confidence=0.9,
+        )
+        vision = BookDraft(
+            title="Vision Title", authors=["Vision Author"], description="Vision desc",
+            isbn13="9782070612758", source="vision", confidence=0.7,
+            price="99.000",
+        )
+        ocr = BookDraft(
+            title="Tess garbage", authors=["OCR"], description="OCR desc",
+            source="tesseract", confidence=0.4, price="12.500",
+            raw={"isbn_from_barcode": True, "barcode_detected": True, "barcode_source": "pyzbar"},
+            barcode_raw="9782070612758", barcode_symbology="ISBN", barcode_kind="isbn13",
+            isbn13="9782070612758",
+        )
+        out = merge_scan_layers(
+            metadata=meta, vision=vision, ocr=ocr,
+            isbn_hint="9782070612758", isbn_source="barcode",
+        )
+        self.assertEqual(out.title, "Le Petit Prince")
+        self.assertEqual(out.authors, ["Saint-Exupéry"])
+        self.assertEqual(out.description, "Meta desc")
+        self.assertEqual(out.publisher, "Gallimard")
+        # Price: OCR sticker beats LLM
+        self.assertEqual(out.price, "12.500")
+        self.assertEqual(out.raw["field_sources"]["title"], "metadata")
+        self.assertEqual(out.raw["field_sources"]["price"], "ocr")
+        self.assertEqual(out.raw["field_sources"]["isbn13"], "barcode")
+        self.assertGreaterEqual(out.confidence or 0, 0.85)
+
+    def test_merge_vision_wins_title_when_metadata_missing(self):
+        from teyssir.catalog.bookscan.merge import merge_scan_layers
+
+        vision = BookDraft(
+            title="Beauty and the Beast", description="A classic tale.",
+            source="vision", confidence=0.65, languages=["en"],
+        )
+        ocr = BookDraft(
+            title="wis! Boot ay", source="tesseract", confidence=0.2,
+            raw={"ocr_garbage_latin": True},
+        )
+        out = merge_scan_layers(metadata=None, vision=vision, ocr=ocr)
+        self.assertEqual(out.title, "Beauty and the Beast")
+        self.assertEqual(out.description, "A classic tale.")
+        self.assertEqual(out.raw["field_sources"]["title"], "vision")
+        self.assertEqual(out.raw["field_sources"]["description"], "vision")
+
+    def test_merge_barcode_isbn_beats_vision_isbn(self):
+        from teyssir.catalog.bookscan.merge import merge_scan_layers
+
+        good = "9782070612758"
+        vision_isbn = "9789973352743"
+        vision = BookDraft(
+            title="Vision", isbn13=vision_isbn, source="vision",
+            raw={"isbn_from_vision": True},
+        )
+        ocr = BookDraft(
+            title="OCR", isbn13=good, source="tesseract",
+            barcode_raw=good, barcode_kind="isbn13", barcode_symbology="ISBN",
+            raw={
+                "isbn_from_barcode": True,
+                "barcode_detected": True,
+                "barcode_source": "pyzbar",
+            },
+        )
+        out = merge_scan_layers(
+            metadata=None, vision=vision, ocr=ocr,
+            isbn_hint=good, isbn_source="barcode",
+        )
+        self.assertEqual(out.isbn13, good)
+        self.assertEqual(out.raw["field_sources"]["isbn13"], "barcode")
+        self.assertTrue(out.raw.get("isbn_from_barcode"))
+
+    def test_merge_619_never_isbn13_and_barcode_decoder_only(self):
+        from teyssir.catalog.bookscan.merge import merge_scan_layers
+
+        cnp = "6192202606921"
+        vision = BookDraft(
+            title="Vision", isbn13=cnp, source="vision",
+            barcode_raw=cnp, barcode_kind="isbn13",
+        )
+        ocr = BookDraft(
+            title="تاريخ", source="tesseract",
+            barcode_raw=cnp, barcode_kind="local_product", barcode_symbology="EAN13",
+            price="4.900",
+            raw={"barcode_detected": True, "barcode_non_isbn": True, "barcode_source": "pyzbar"},
+        )
+        out = merge_scan_layers(metadata=None, vision=vision, ocr=ocr)
+        self.assertEqual(out.barcode_raw, cnp)
+        self.assertEqual(out.barcode_kind, "local_product")
+        self.assertEqual(out.isbn13, "")
+        self.assertNotEqual(out.isbn13, cnp)
+        self.assertEqual(out.price, "4.900")
+        self.assertEqual(out.raw["field_sources"]["barcode_raw"], "barcode")
+        self.assertEqual(out.raw["field_sources"]["price"], "ocr")
+        self.assertNotEqual(out.raw["field_sources"].get("barcode_raw"), "vision")
+
+    def test_merge_price_ocr_beats_vision_unless_empty(self):
+        from teyssir.catalog.bookscan.merge import merge_scan_layers
+
+        vision = BookDraft(title="T", price="50.000", source="vision")
+        ocr = BookDraft(title="T", price="8.500", source="tesseract")
+        out = merge_scan_layers(metadata=None, vision=vision, ocr=ocr)
+        self.assertEqual(out.price, "8.500")
+        self.assertEqual(out.raw["field_sources"]["price"], "ocr")
+
+        ocr_empty = BookDraft(title="T", price="", source="tesseract")
+        out2 = merge_scan_layers(metadata=None, vision=vision, ocr=ocr_empty)
+        self.assertEqual(out2.price, "50.000")
+        self.assertEqual(out2.raw["field_sources"]["price"], "vision")
+
+    def test_merge_digit_ocr_isbn_low_confidence_provenance(self):
+        from teyssir.catalog.bookscan.merge import merge_scan_layers
+
+        suspect = "9787723827435"
+        ocr = BookDraft(
+            title="الثلاثي", isbn13=suspect, source="tesseract", confidence=0.85,
+            raw={"isbn_from_digit_ocr": True, "isbn_detected": True},
+        )
+        out = merge_scan_layers(
+            metadata=None, vision=None, ocr=ocr,
+            isbn_hint=suspect, isbn_source="digit_ocr",
+        )
+        self.assertEqual(out.isbn13, suspect)
+        self.assertEqual(out.raw["field_sources"]["isbn13"], "digit_ocr")
+        self.assertLessEqual(out.confidence or 0, 0.35)
+        self.assertTrue(out.raw.get("isbn_from_digit_ocr"))
+
+    def test_merge_rejects_invalid_checksum_isbn(self):
+        from teyssir.catalog.bookscan.merge import merge_scan_layers
+
+        vision = BookDraft(
+            title="Fake", isbn13="9781234567890", source="vision",
+            raw={"isbn_from_vision": True},
+        )
+        ocr = BookDraft(title="x", source="tesseract")
+        out = merge_scan_layers(metadata=None, vision=vision, ocr=ocr)
+        self.assertEqual(out.isbn13, "")
+        self.assertNotIn("isbn13", out.raw.get("field_sources") or {})
+
     def test_create_book_from_draft_builds_normalized_records(self):
         product = create_book_from_draft(data={
             "title": "Le Petit Prince", "isbn13": "9782070612758", "publisher": "Gallimard",
@@ -865,7 +1011,7 @@ class TitleSearchGatingTests(unittest.TestCase):
 
         with patch("teyssir.catalog.bookscan.services.get_ocr_provider") as g, \
              patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths", return_value=("", "")), \
-             patch("teyssir.catalog.bookscan.services._maybe_vision_upgrade") as vision:
+             patch("teyssir.catalog.bookscan.services._maybe_vision_draft") as vision:
             class P:
                 name = "tesseract"
                 def extract(self, path, role="auto"):
@@ -897,14 +1043,14 @@ class TitleSearchGatingTests(unittest.TestCase):
 
         with patch("teyssir.catalog.bookscan.services.get_ocr_provider") as g, \
              patch("teyssir.catalog.bookscan.services._barcode_isbn_from_paths", return_value=("", "")), \
-             patch("teyssir.catalog.bookscan.services._maybe_vision_upgrade") as vision:
+             patch("teyssir.catalog.bookscan.services._maybe_vision_draft") as vision:
             class P:
                 name = "tesseract"
                 def extract(self, path, role="auto"):
                     return "wis! Boot ay", ocr_draft
             g.return_value = P()
 
-            def _vision(paths, draft, back):
+            def _vision(paths, draft):
                 vision_called["n"] += 1
                 return BookDraft(
                     title="كتاب الفقه", authors=["مؤلف"], languages=["ar"],
