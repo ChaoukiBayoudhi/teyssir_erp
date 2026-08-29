@@ -245,6 +245,8 @@ export default function BookCreate({ onBack, onLogout }) {
   const [captureStep, setCaptureStep] = useState("front"); // front | back | ready
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState("");
+  const [scanProgress, setScanProgress] = useState(0);
+  const [scanStage, setScanStage] = useState("");
   const [draft, setDraft] = useState(null);
   const [form, setForm] = useState(EMPTY);
   const [done, setDone] = useState(false);
@@ -399,6 +401,22 @@ export default function BookCreate({ onBack, onLogout }) {
     stopCamera();
   };
 
+  const stageLabel = (stage) => {
+    if (!stage) return t("analyzingBook");
+    const key = `scanStage_${stage}`;
+    const label = t(key);
+    return label === key ? t("analyzingBook") : label;
+  };
+
+  const applyScanProgress = (job) => {
+    if (!job) return;
+    if (job.stage) {
+      setScanStage(job.stage);
+      setBusyLabel(stageLabel(job.stage));
+    }
+    if (job.progress != null) setScanProgress(Number(job.progress) || 0);
+  };
+
   const analyze = async ({ force = false } = {}) => {
     const files = images.filter(Boolean);
     if (!files.length) return;
@@ -407,6 +425,8 @@ export default function BookCreate({ onBack, onLogout }) {
     setCaptureStep("ready");
     setBusy(true);
     setBusyLabel(t("analyzingBook"));
+    setScanProgress(0);
+    setScanStage("queued");
     setError("");
     setInfo("");
     try {
@@ -426,8 +446,11 @@ export default function BookCreate({ onBack, onLogout }) {
       setBusyLabel(t("runningOcr"));
       let d = await scanBook(files, isbnHint);
       if (d.status === "pending") {
-        setBusyLabel(t("waitingOcr"));
-        d = await pollScanJob(d.job_id);
+        applyScanProgress(d);
+        setBusyLabel(stageLabel(d.stage) || t("waitingOcr"));
+        d = await pollScanJob(d.job_id, { onProgress: applyScanProgress });
+      } else {
+        applyScanProgress(d);
       }
       if (d.status === "failed") {
         throw new Error(d.error || t("ocrFailed"));
@@ -530,6 +553,8 @@ export default function BookCreate({ onBack, onLogout }) {
       stopCamera();
       setBusy(false);
       setBusyLabel("");
+      setScanProgress(0);
+      setScanStage("");
     }
   };
 
@@ -586,11 +611,12 @@ export default function BookCreate({ onBack, onLogout }) {
       </AppBar>
 
       {busy && (
-        <Box>
-          <LinearProgress />
+        <Box sx={{ px: 2, pt: 1 }}>
+          <LinearProgress variant={scanProgress > 0 ? "determinate" : "indeterminate"}
+                          value={scanProgress} />
           {busyLabel && (
-            <Typography variant="caption" color="text.secondary" sx={{ px: 2 }}>
-              {busyLabel}
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+              {busyLabel}{scanProgress > 0 ? ` — ${scanProgress}%` : ""}
             </Typography>
           )}
         </Box>
@@ -735,10 +761,16 @@ export default function BookCreate({ onBack, onLogout }) {
             <Paper sx={{ p: 2 }}>
               <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
                 <Typography variant="h6">{t("bookTitle")}</Typography>
-                {draft && (
-                  <Chip size="small" color={draft.confidence >= 0.8 ? "success" : draft.confidence > 0 ? "warning" : "default"}
-                        label={`${t("confidence")}: ${Math.round((draft.confidence || 0) * 100)}% · ${draft.source || "—"}`} />
-                )}
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                  {draft && (
+                    <Chip size="small" color={draft.confidence >= 0.8 ? "success" : draft.confidence > 0 ? "warning" : "default"}
+                          label={`${t("confidence")}: ${Math.round((draft.confidence || 0) * 100)}% · ${draft.source || "—"}`} />
+                  )}
+                  {draft?.language_detected && (
+                    <Chip size="small" color="info" variant="outlined"
+                          label={`${t("languageDetected")}: ${draft.language_detected}`} />
+                  )}
+                </Stack>
               </Stack>
               <Grid container spacing={1.5}>
                 <Grid item xs={12} sm={6}>{F("ISBN", "isbn13")}</Grid>
@@ -776,7 +808,7 @@ export default function BookCreate({ onBack, onLogout }) {
                 <Grid item xs={6} sm={3}>{F(t("pagesF"), "pages", { type: "number", inputProps: { step: 1 } })}</Grid>
                 <Grid item xs={12} sm={6}>{F(t("languagesF"), "languages")}</Grid>
                 <Grid item xs={12} sm={6}>{F(t("subjectF"), "subject")}</Grid>
-                <Grid item xs={12}>{F(t("descriptionF"), "description", { multiline: true, rows: 2 })}</Grid>
+                <Grid item xs={12}>{F(t("descriptionF"), "description", { multiline: true, rows: 4 })}</Grid>
               </Grid>
               <Button variant="contained" size="large" sx={{ mt: 2 }} disabled={!form.title || busy} onClick={save}>
                 {t("saveBook")}

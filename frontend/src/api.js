@@ -146,9 +146,11 @@ export async function scanBook(files, isbn) {
   return res.json();
 }
 
-export async function pollScanJob(jobId, { interval = 2000, tries = 120 } = {}) {
+// Poll a scan job until it leaves the "pending" state (async OCR backend). Returns the final job.
+export async function pollScanJob(jobId, { interval = 2000, tries = 120, onProgress } = {}) {
   for (let i = 0; i < tries; i++) {
     const job = await request(`/catalog/books/scan/${jobId}`);
+    if (onProgress) onProgress(job);
     if (job.status === "failed") {
       throw new Error(job.error || "OCR failed");
     }

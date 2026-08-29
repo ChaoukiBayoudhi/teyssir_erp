@@ -143,12 +143,28 @@ class ProductImage(SyncableModel):
 class ScanJob(UUIDModel, TimeStampedModel):
     """A book-scan request processed by the OCR pipeline. Local-only (never synced to the hub); it
     lets the scan run *asynchronously* so a slow OCR engine (a vision LLM can take tens of seconds)
-    doesn't block the HTTP request. The client polls this job until DONE (docs/BOOK-OCR §6)."""
+    doesn't block the HTTP request. The client polls this job until DONE (docs/BOOK-OCR §6).
+
+    Phase 15.5: ``stage`` + ``progress`` (0–100) are additive poll fields so the PWA can show
+    pipeline feedback without changing status semantics (still PENDING|DONE|FAILED).
+    """
 
     PENDING = "PENDING"
     DONE = "DONE"
     FAILED = "FAILED"
     STATUSES = [(x, x) for x in (PENDING, DONE, FAILED)]
+
+    # Pipeline milestones (poll UI). Not a DB enum — free text so older clients ignore unknowns.
+    STAGE_QUEUED = "queued"
+    STAGE_PREPROCESS = "preprocess"
+    STAGE_BARCODE = "barcode"
+    STAGE_OCR = "ocr"
+    STAGE_LANGUAGE = "language"
+    STAGE_VISION = "vision"
+    STAGE_METADATA = "metadata"
+    STAGE_MERGE = "merge"
+    STAGE_DONE = "done"
+    STAGE_FAILED = "failed"
 
     status = models.CharField(max_length=8, choices=STATUSES, default=PENDING)
     isbn = models.CharField(max_length=20, blank=True, default="")
@@ -156,6 +172,9 @@ class ScanJob(UUIDModel, TimeStampedModel):
     result = models.JSONField(null=True, blank=True)        # the reviewable BookDraft, once DONE
     ocr_text = models.TextField(blank=True, default="")
     error = models.TextField(blank=True, default="")
+    # Phase 15.5 — nullable/blank so older DBs migrate additively without backfill.
+    stage = models.CharField(max_length=32, blank=True, null=True, default="queued")
+    progress = models.PositiveSmallIntegerField(null=True, blank=True, default=0)
 
     class Meta:
         ordering = ["-created_at"]

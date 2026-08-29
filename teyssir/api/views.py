@@ -684,6 +684,9 @@ def _scan_job_payload(request, job, images=None):
     body = {
         "job_id": str(job.id),
         "status": job.status.lower(),                       # pending | done | failed
+        "stage": job.stage or ("done" if job.status == ScanJob.DONE else
+                               "failed" if job.status == ScanJob.FAILED else "queued"),
+        "progress": 0 if job.progress is None else int(job.progress),
         "image_ids": [str(i) for i in job.image_ids],
         "images": [_image_payload(request, img) for img in images],
     }

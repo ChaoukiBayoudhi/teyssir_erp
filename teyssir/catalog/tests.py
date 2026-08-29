@@ -1568,6 +1568,29 @@ class ScanJobTests(TestCase):
         self.assertEqual(body["isbn13"], "9782070612758")
         self.assertIn("job_id", body)
 
+    def test_scan_job_exposes_stage_and_progress(self):
+        """Phase 15.5: poll payload includes additive stage + progress (0–100)."""
+        from django.test import RequestFactory
+
+        from teyssir.api.views import _scan_job_payload
+        from teyssir.catalog.bookscan.jobs import run_scan_job
+        from teyssir.catalog.models import ScanJob
+
+        job = ScanJob.objects.create(isbn="9782070612758", image_ids=[])
+        self.assertEqual(job.stage, "queued")
+        self.assertEqual(job.progress, 0)
+        run_scan_job(job.id)
+        job.refresh_from_db()
+        self.assertEqual(job.status, ScanJob.DONE)
+        self.assertEqual(job.stage, "done")
+        self.assertEqual(job.progress, 100)
+        req = RequestFactory().get(f"/api/v1/catalog/books/scan/{job.id}")
+        body = _scan_job_payload(req, job)
+        self.assertEqual(body["status"], "done")
+        self.assertEqual(body["stage"], "done")
+        self.assertEqual(body["progress"], 100)
+        self.assertIn("job_id", body)
+
     def test_poll_scan_job_endpoint(self):
         job_id = self.client.post("/api/v1/catalog/books/scan",
                                   {"images": _png(), "isbn": "9782070612758"},
