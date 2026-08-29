@@ -1,0 +1,24 @@
+{
+  "results": [
+    {
+      "case": "C",
+      "ok": false,
+      "error": "no file input"
+    },
+    {
+      "case": "A",
+      "ok": false,
+      "error": "no file input"
+    },
+    {
+      "case": "D",
+      "ok": false,
+      "error": "no file input"
+    },
+    {
+      "case": "F",
+      "ok": false,
+      "error": "no file input"
+    }
+  ]
+}
