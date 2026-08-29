@@ -131,6 +131,29 @@ python manage.py bookscan_regression --json
 Place phone photos under `books_photos\` (same filenames as the Mac corpus). Missing
 `libzbar` is OK — barcode fields stay empty (`allow_empty`); honesty rules still apply.
 
+## Phase 15 — low-quality camera + local Vision LLM
+
+Target hardware includes shop USB webcams such as **XTRIKE ME XPC01** (soft focus, noise,
+low contrast). Pipeline layers (bookscan only):
+
+1. **Capture** — highest practical `getUserMedia` resolution + aspect guide; tracks stop after shot.
+2. **Tess fast path (2C)** — script probe, capped variants; ISBN/barcode when visible.
+3. **Vision gated fallback (15.4)** — one dual-image Ollama call (`TEYSSIR_VISION_MODEL`,
+   default `qwen2.5vl:3b`) when Tess is weak; returns `language_detected` + short `description`.
+4. **Merge (15.3)** — metadata → Vision → Tess; barcode ISBN checksum beats LLM; never invent `barcode_*`.
+
+### Install / offline (Phase 15.7)
+
+| Platform | Command |
+|----------|---------|
+| Win11 Hub | `.\deploy\windows\install.ps1 -Role hub` — auto-pulls text + vision; `-SkipVision` to omit |
+| Win11 vision only | `.\deploy\windows\Install-LocalLlm.ps1 -Model mistral` |
+| macOS | `bash deploy/macos/install.sh --role hub` — brew Ollama if needed + `ollama pull qwen2.5vl:3b`; `--skip-vision` to omit |
+
+Env: `TEYSSIR_VISION_MODEL`, `TEYSSIR_OCR_VISION_FALLBACK=true`, keep `TEYSSIR_OCR_PROVIDER=tesseract`
+for day-to-day. **CPU** works (cold start tens of seconds); GPU/Metal speeds warm inference.
+Fully **offline** after pull. Details: `docs/LOCAL-AI.md`.
+
 ## Status / phasing
 - **Phase A (this milestone):** models + migration, provider abstractions (`OcrProvider`,
   `BookMetadataProvider` + OpenLibrary), `scan_book` + create services, scan/create/image API,
@@ -138,3 +161,4 @@ Place phone photos under `books_photos\` (same filenames as the Mac corpus). Mis
 - **Phase B:** PWA Book-Creation camera page (capture, barcode, review, crop).
 - **Phase C (later):** Tesseract/Vision-LLM provider, async via Celery, hub media replication, MinIO.
 - **Phase 2F:** `fixtures/bookscan/expected` + `manage.py bookscan_regression`.
+- **Phase 15.7:** installer auto-pull of `qwen2.5vl:3b` + LOCAL-AI / install docs (CPU, cold start, XTRIKE).

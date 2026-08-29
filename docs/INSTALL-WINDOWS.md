@@ -211,11 +211,12 @@ Deux moteurs **gratuits** sont disponibles :
   manuellement (<https://github.com/UB-Mannheim/tesseract/wiki>), puis dans `.env` :
   `TEYSSIR_OCR_PROVIDER=tesseract` et
   `TEYSSIR_TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe`.
-- **Vision-LLM** (extraction structurée multilingue, hors-ligne) : Ollama est installé
-  automatiquement **si possible**, avec le modèle **texte** `mistral`. Le modèle **vision**
-  (`qwen2.5vl:3b`, CPU-friendly) **n'est pas** téléchargé par défaut. Pour le fallback
-  bookscan (Phase 15.4, une requête front+verso) :
-  `.\deploy\windows\Install-LocalLlm.ps1 -Model mistral -PullVision`.
+- **Vision-LLM** (extraction structurée multilingue, hors-ligne) : `install.ps1` **essaie**
+  d'installer Ollama, de démarrer le service et de télécharger le modèle texte (**mistral**)
+  **et** le modèle vision bookscan (**`qwen2.5vl:3b`**, Phase 15.7). Opt-out :
+  `-SkipVision` (pas de ~2 Go) ou `-SkipLlm`. Si Ollama échoue, Teyssir s'installe quand même.
+  Cold start CPU : souvent **20–90 s** — gardez `TEYSSIR_SCAN_EXECUTOR=thread`.
+  Repli manuel : `.\deploy\windows\Install-LocalLlm.ps1 -Model mistral`.
   Gardez `TEYSSIR_OCR_PROVIDER=tesseract` (Vision = couche 2). Option primaire :
   `TEYSSIR_OCR_PROVIDER=vision` + `TEYSSIR_SCAN_EXECUTOR=thread`. Voir `docs/LOCAL-AI.md`.
 - **ISBN / code-barres** : `pyzbar` (dans `requirements.txt`) a besoin de **libzbar**.

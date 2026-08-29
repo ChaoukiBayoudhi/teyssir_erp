@@ -6,7 +6,8 @@ Scripts to install and run Teyssir on the client's Windows PCs (1 Hub + up to 3 
 
 | File | Purpose |
 |------|---------|
-| `install.ps1` | One-shot installer: Python venv, deps, build, `.env` (random secrets), DB, admin user. |
+| `install.ps1` | One-shot installer: Python venv, deps, build, `.env` (random secrets), DB, admin user, optional Ollama + vision pull. |
+| `Install-LocalLlm.ps1` | Silent Ollama install + text/vision pulls (never fails the ERP; Phase 15.7 auto-pulls `qwen2.5vl:3b`). |
 | `start-teyssir.bat` | Start the server (hub or till, per `.env`) on `http://localhost:8000`. |
 | `register-autostart.ps1` | Auto-start at logon + scheduled till→hub sync (Task Scheduler). |
 | `sync-now.bat` | Till → hub reconcile (manual or scheduled). |
