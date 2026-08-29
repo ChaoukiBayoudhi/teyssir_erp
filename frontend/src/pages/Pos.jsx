@@ -73,14 +73,20 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
     }
   };
 
-  // Camera scan -> same path as the USB reader: barcode lookup, single hit goes into the cart.
+  // Camera scan → barcode lookup (any symbology). Close camera after cart add.
   const onCameraCode = async (code) => {
     setError("");
+    const raw = String(code || "").replace(/[-\s]/g, "").trim();
+    if (!raw) return;
     try {
-      const hits = await lookupBarcode(code);
-      if (hits.length === 1) return addToCart(hits[0]);
+      const hits = await lookupBarcode(raw);
+      if (hits.length === 1) {
+        addToCart(hits[0]);
+        setCamera(false);
+        return;
+      }
       if (hits.length > 1) return setResults(hits);
-      setError(`${t("unknownBarcode")}: ${code}`);
+      setError(t("unknownProductBarcode", { code: raw }));
     } catch (err) {
       setError(String(err.message || err));
     }
@@ -174,7 +180,7 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
                 <Button variant={camera ? "contained" : "outlined"} sx={{ minWidth: 52, height: 56 }}
                         onClick={() => setCamera((c) => !c)} aria-label={t("scanWithCamera")}>📷</Button>
               </Stack>
-              {camera && <CameraScanner onDetect={onCameraCode} onClose={() => setCamera(false)} />}
+              {camera && <CameraScanner mode="pos" onDetect={onCameraCode} onClose={() => setCamera(false)} />}
               <List dense>
                 {results.length === 0 && (
                   <Typography color="text.secondary" sx={{ p: 1 }}>{t("noResults")}</Typography>
