@@ -1,8 +1,10 @@
 # Phase 15 screenshots (Cases A–F)
 
-Draft API/regression captures:
+See **[QA-REPORT.md](./QA-REPORT.md)** for the full pass/fail table, timings, and implementer gaps.
 
-- `case_A_draft.png` … `case_F_draft.png`
-- `cases_af_results.json` — field pass/fail + timings
+Artifacts:
 
-Formal Nouveau livre Playwright UI captures and polish are owned by the **Phase 15 QA agent**. Ignore or replace `ui_*.png` stubs if they only show the login shell.
+- `case_A_draft.png` … `case_F_draft.png` — CLI draft field cards
+- `cases_af_results.json` — machine-readable field verdicts
+- `ui_02_nouveau_livre.png`, `ui_case_*_{uploaded,result}.png` — Nouveau livre Playwright
+- `ui_playwright_results.json` — UI timings / snips

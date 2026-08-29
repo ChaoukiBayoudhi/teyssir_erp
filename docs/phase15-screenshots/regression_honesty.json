@@ -1,0 +1,577 @@
+{
+  "vision": false,
+  "honesty_only": true,
+  "photos": "/Users/chaoukibayoudhi/Documents/My_society/teyssir_erp_bookocr/books_photos",
+  "fixtures": "/Users/chaoukibayoudhi/Documents/My_society/teyssir_erp_bookocr/fixtures/bookscan/expected",
+  "results": [
+    {
+      "id": "A_beauty",
+      "label": "Beauty and the Beast (Golden Tales)",
+      "ok": true,
+      "ms": 51012.5,
+      "skipped": false,
+      "skip_reason": "",
+      "images": [
+        "Photo on 25-8-2026 at 12.39 PM.jpg",
+        "Photo on 25-8-2026 at 12.39 PM #2.jpg"
+      ],
+      "draft": {
+        "title": "ais, melbease |",
+        "languages": [
+          "en"
+        ],
+        "isbn13": "",
+        "barcode_raw": "",
+        "barcode_kind": "",
+        "price": "",
+        "confidence": 0.26,
+        "source": "tesseract",
+        "raw": {
+          "isbn_from_barcode": null,
+          "isbn_from_digit_ocr": null,
+          "isbn_digit_ocr_confirmed": null,
+          "ocr_garbage_latin": null,
+          "ocr_garbage_arabic": null,
+          "ocr_title_unusable": null,
+          "vision_fallback": null
+        }
+      },
+      "checks": [
+        {
+          "ok": true,
+          "code": "isbn13_banned_prefix",
+          "detail": "ok vs 619"
+        },
+        {
+          "ok": true,
+          "code": "isbn13_checksum",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "digit_ocr_confidence",
+          "detail": "n/a"
+        },
+        {
+          "ok": true,
+          "code": "confidence_honesty",
+          "detail": "conf=0.26 strong=False"
+        },
+        {
+          "ok": true,
+          "code": "soft_title_contains",
+          "detail": "miss allowed ('ais, melbease |')"
+        },
+        {
+          "ok": true,
+          "code": "soft_languages",
+          "detail": "['en']"
+        },
+        {
+          "ok": true,
+          "code": "soft_isbn13",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "soft_barcode_raw",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "soft_price",
+          "detail": "empty"
+        }
+      ]
+    },
+    {
+      "id": "B_blur",
+      "label": "Phase 15 Case B — Blurred/downscaled Premier (XTRIKE soft-focus sim)",
+      "ok": true,
+      "ms": 24438.8,
+      "skipped": false,
+      "skip_reason": "",
+      "images": [
+        "B_blur_premier_front.jpg",
+        "B_blur_premier_back.jpg"
+      ],
+      "draft": {
+        "title": "",
+        "languages": [
+          "ar",
+          "fr",
+          "en"
+        ],
+        "isbn13": "",
+        "barcode_raw": "",
+        "barcode_kind": "",
+        "price": "",
+        "confidence": 0.1,
+        "source": "tesseract",
+        "raw": {
+          "isbn_from_barcode": null,
+          "isbn_from_digit_ocr": null,
+          "isbn_digit_ocr_confirmed": null,
+          "ocr_garbage_latin": null,
+          "ocr_garbage_arabic": null,
+          "ocr_title_unusable": true,
+          "vision_fallback": null
+        }
+      },
+      "checks": [
+        {
+          "ok": true,
+          "code": "isbn13_banned_prefix",
+          "detail": "ok vs 619"
+        },
+        {
+          "ok": true,
+          "code": "isbn13_checksum",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "digit_ocr_confidence",
+          "detail": "n/a"
+        },
+        {
+          "ok": true,
+          "code": "confidence_honesty",
+          "detail": "conf=0.1 strong=False"
+        },
+        {
+          "ok": true,
+          "code": "soft_title_contains",
+          "detail": "miss allowed ('')"
+        },
+        {
+          "ok": true,
+          "code": "soft_languages",
+          "detail": "['ar', 'fr', 'en']"
+        },
+        {
+          "ok": true,
+          "code": "soft_isbn13",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "soft_barcode_raw",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "soft_price",
+          "detail": "empty"
+        }
+      ]
+    },
+    {
+      "id": "B_premier",
+      "label": "Le premier en première année secondaire",
+      "ok": true,
+      "ms": 33463.8,
+      "skipped": false,
+      "skip_reason": "",
+      "images": [
+        "Photo on 25-8-2026 at 12.40 PM.jpg",
+        "Photo on 25-8-2026 at 12.40 PM #2.jpg"
+      ],
+      "draft": {
+        "title": "",
+        "languages": [
+          "ar",
+          "fr"
+        ],
+        "isbn13": "",
+        "barcode_raw": "",
+        "barcode_kind": "",
+        "price": "17.000",
+        "confidence": 0.15,
+        "source": "tesseract",
+        "raw": {
+          "isbn_from_barcode": null,
+          "isbn_from_digit_ocr": null,
+          "isbn_digit_ocr_confirmed": null,
+          "ocr_garbage_latin": null,
+          "ocr_garbage_arabic": null,
+          "ocr_title_unusable": true,
+          "vision_fallback": null
+        }
+      },
+      "checks": [
+        {
+          "ok": true,
+          "code": "isbn13_banned_prefix",
+          "detail": "ok vs 619"
+        },
+        {
+          "ok": true,
+          "code": "isbn13_checksum",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "digit_ocr_confidence",
+          "detail": "n/a"
+        },
+        {
+          "ok": true,
+          "code": "confidence_honesty",
+          "detail": "conf=0.15 strong=False"
+        },
+        {
+          "ok": true,
+          "code": "soft_title_contains",
+          "detail": "miss allowed ('')"
+        },
+        {
+          "ok": true,
+          "code": "soft_languages",
+          "detail": "['ar', 'fr']"
+        },
+        {
+          "ok": true,
+          "code": "soft_isbn13",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "soft_barcode_raw",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "soft_price",
+          "detail": "17.000"
+        }
+      ]
+    },
+    {
+      "id": "C_history_cnp",
+      "label": "كتاب التاريخ (CNP History 1ère secondaire)",
+      "ok": true,
+      "ms": 25782.9,
+      "skipped": false,
+      "skip_reason": "",
+      "images": [
+        "Photo on 25-8-2026 at 12.40 PM #3.jpg",
+        "Photo on 25-8-2026 at 12.41 PM.jpg"
+      ],
+      "draft": {
+        "title": "",
+        "languages": [
+          "fr",
+          "en"
+        ],
+        "isbn13": "",
+        "barcode_raw": "",
+        "barcode_kind": "",
+        "price": "",
+        "confidence": 0.1,
+        "source": "tesseract",
+        "raw": {
+          "isbn_from_barcode": null,
+          "isbn_from_digit_ocr": null,
+          "isbn_digit_ocr_confirmed": null,
+          "ocr_garbage_latin": true,
+          "ocr_garbage_arabic": null,
+          "ocr_title_unusable": true,
+          "vision_fallback": null
+        }
+      },
+      "checks": [
+        {
+          "ok": true,
+          "code": "isbn13_banned_prefix",
+          "detail": "ok vs 619"
+        },
+        {
+          "ok": true,
+          "code": "isbn13_checksum",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "digit_ocr_confidence",
+          "detail": "n/a"
+        },
+        {
+          "ok": true,
+          "code": "confidence_honesty",
+          "detail": "conf=0.1 strong=False"
+        },
+        {
+          "ok": true,
+          "code": "soft_title_contains",
+          "detail": "miss allowed ('')"
+        },
+        {
+          "ok": true,
+          "code": "soft_languages",
+          "detail": "weak path ['fr', 'en']"
+        },
+        {
+          "ok": true,
+          "code": "soft_isbn13",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "soft_barcode_raw",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "soft_price",
+          "detail": "empty"
+        }
+      ]
+    },
+    {
+      "id": "D_math_cnp",
+      "label": "Mathématiques 2ème année secondaire Tome 1 (CNP)",
+      "ok": true,
+      "ms": 24915.5,
+      "skipped": false,
+      "skip_reason": "",
+      "images": [
+        "Photo on 25-8-2026 at 12.41 PM #2.jpg",
+        "Photo on 25-8-2026 at 12.42 PM.jpg"
+      ],
+      "draft": {
+        "title": "Mathématiques",
+        "languages": [
+          "fr"
+        ],
+        "isbn13": "",
+        "barcode_raw": "",
+        "barcode_kind": "",
+        "price": "4.200",
+        "confidence": 0.15,
+        "source": "tesseract",
+        "raw": {
+          "isbn_from_barcode": null,
+          "isbn_from_digit_ocr": null,
+          "isbn_digit_ocr_confirmed": null,
+          "ocr_garbage_latin": true,
+          "ocr_garbage_arabic": null,
+          "ocr_title_unusable": true,
+          "vision_fallback": null
+        }
+      },
+      "checks": [
+        {
+          "ok": true,
+          "code": "isbn13_banned_prefix",
+          "detail": "ok vs 619"
+        },
+        {
+          "ok": true,
+          "code": "isbn13_checksum",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "digit_ocr_confidence",
+          "detail": "n/a"
+        },
+        {
+          "ok": true,
+          "code": "confidence_honesty",
+          "detail": "conf=0.15 strong=False"
+        },
+        {
+          "ok": true,
+          "code": "soft_title_contains",
+          "detail": "Mathématiques"
+        },
+        {
+          "ok": true,
+          "code": "soft_languages",
+          "detail": "['fr']"
+        },
+        {
+          "ok": true,
+          "code": "soft_isbn13",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "soft_barcode_raw",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "soft_price",
+          "detail": "4.200"
+        }
+      ]
+    },
+    {
+      "id": "E_french",
+      "label": "Phase 15 Case E — French (Mathématiques CNP, overlaps D)",
+      "ok": true,
+      "ms": 24504.0,
+      "skipped": false,
+      "skip_reason": "",
+      "images": [
+        "Photo on 25-8-2026 at 12.41 PM #2.jpg",
+        "Photo on 25-8-2026 at 12.42 PM.jpg"
+      ],
+      "draft": {
+        "title": "Mathématiques",
+        "languages": [
+          "fr"
+        ],
+        "isbn13": "",
+        "barcode_raw": "",
+        "barcode_kind": "",
+        "price": "4.200",
+        "confidence": 0.15,
+        "source": "tesseract",
+        "raw": {
+          "isbn_from_barcode": null,
+          "isbn_from_digit_ocr": null,
+          "isbn_digit_ocr_confirmed": null,
+          "ocr_garbage_latin": true,
+          "ocr_garbage_arabic": null,
+          "ocr_title_unusable": true,
+          "vision_fallback": null
+        }
+      },
+      "checks": [
+        {
+          "ok": true,
+          "code": "isbn13_banned_prefix",
+          "detail": "ok vs 619"
+        },
+        {
+          "ok": true,
+          "code": "isbn13_checksum",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "digit_ocr_confidence",
+          "detail": "n/a"
+        },
+        {
+          "ok": true,
+          "code": "confidence_honesty",
+          "detail": "conf=0.15 strong=False"
+        },
+        {
+          "ok": true,
+          "code": "soft_title_contains",
+          "detail": "Mathématiques"
+        },
+        {
+          "ok": true,
+          "code": "soft_languages",
+          "detail": "['fr']"
+        },
+        {
+          "ok": true,
+          "code": "soft_isbn13",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "soft_barcode_raw",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "soft_price",
+          "detail": "4.200"
+        }
+      ]
+    },
+    {
+      "id": "F_mixed",
+      "label": "Phase 15 Case F — Mixed FR+AR (Le premier, overlaps B)",
+      "ok": true,
+      "ms": 22018.7,
+      "skipped": false,
+      "skip_reason": "",
+      "images": [
+        "Photo on 25-8-2026 at 12.40 PM.jpg",
+        "Photo on 25-8-2026 at 12.40 PM #2.jpg"
+      ],
+      "draft": {
+        "title": "",
+        "languages": [
+          "ar",
+          "fr"
+        ],
+        "isbn13": "",
+        "barcode_raw": "",
+        "barcode_kind": "",
+        "price": "17.000",
+        "confidence": 0.15,
+        "source": "tesseract",
+        "raw": {
+          "isbn_from_barcode": null,
+          "isbn_from_digit_ocr": null,
+          "isbn_digit_ocr_confirmed": null,
+          "ocr_garbage_latin": null,
+          "ocr_garbage_arabic": null,
+          "ocr_title_unusable": true,
+          "vision_fallback": null
+        }
+      },
+      "checks": [
+        {
+          "ok": true,
+          "code": "isbn13_banned_prefix",
+          "detail": "ok vs 619"
+        },
+        {
+          "ok": true,
+          "code": "isbn13_checksum",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "digit_ocr_confidence",
+          "detail": "n/a"
+        },
+        {
+          "ok": true,
+          "code": "confidence_honesty",
+          "detail": "conf=0.15 strong=False"
+        },
+        {
+          "ok": true,
+          "code": "soft_title_contains",
+          "detail": "miss allowed ('')"
+        },
+        {
+          "ok": true,
+          "code": "soft_languages",
+          "detail": "['ar', 'fr']"
+        },
+        {
+          "ok": true,
+          "code": "soft_isbn13",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "soft_barcode_raw",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "soft_price",
+          "detail": "17.000"
+        }
+      ]
+    }
+  ],
+  "passed": 7,
+  "failed": 0,
+  "skipped": 0,
+  "total_ms": 206136.1
+}

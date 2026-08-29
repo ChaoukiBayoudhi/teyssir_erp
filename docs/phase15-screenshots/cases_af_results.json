@@ -1,11 +1,12 @@
 {
-  "vision": false,
+  "vision": true,
+  "tip": "2255957",
   "results": [
     {
       "case": "A",
       "label": "Front+back good quality (Beauty)",
       "overall": "FAIL",
-      "ms": 125415.2,
+      "ms": 61244.2,
       "images": [
         "Photo on 25-8-2026 at 12.39 PM.jpg",
         "Photo on 25-8-2026 at 12.39 PM #2.jpg"
@@ -50,34 +51,7 @@
         "price": "",
         "confidence": 0.26,
         "source": "tesseract",
-        "raw_keys": [
-          "back",
-          "barcode_ms",
-          "cover_role",
-          "covers",
-          "description_template",
-          "detected_langs",
-          "edition_kind",
-          "field_sources",
-          "isbn_not_detected",
-          "language_detected",
-          "ocr_available",
-          "ocr_fast_path",
-          "ocr_lang_passes",
-          "ocr_langs",
-          "ocr_low_confidence",
-          "ocr_mean_confidence",
-          "ocr_ms",
-          "ocr_pass",
-          "ocr_text_only",
-          "ocr_variants",
-          "scan_ms",
-          "script_probe",
-          "suggested_text",
-          "suggested_title",
-          "tesseract_cmd",
-          "title_candidates"
-        ]
+        "vision_fallback": null
       },
       "screenshot": "/Users/chaoukibayoudhi/Documents/My_society/teyssir_erp_bookocr/docs/phase15-screenshots/case_A_draft.png"
     },
@@ -85,7 +59,7 @@
       "case": "B",
       "label": "Blurred/downscaled usable draft (Premier blur)",
       "overall": "FAIL",
-      "ms": 33019.7,
+      "ms": 78633.3,
       "images": [
         "B_blur_premier_front.jpg",
         "B_blur_premier_back.jpg"
@@ -97,11 +71,11 @@
         },
         "language_detected": {
           "verdict": "PASS",
-          "detail": "mixed:fr+en langs=['fr', 'en']"
+          "detail": "mixed:ar+fr+en langs=['ar', 'fr', 'en']"
         },
         "description": {
           "verdict": "FAIL",
-          "detail": "empty (Vision likely skipped)"
+          "detail": "empty"
         },
         "isbn/barcode": {
           "verdict": "PARTIAL",
@@ -122,6 +96,114 @@
       },
       "draft": {
         "title": "",
+        "language_detected": "mixed:ar+fr+en",
+        "languages": [
+          "ar",
+          "fr",
+          "en"
+        ],
+        "description": "",
+        "isbn13": "",
+        "barcode_raw": "",
+        "barcode_kind": "",
+        "edition_kind": "unknown",
+        "price": "",
+        "confidence": 0.1,
+        "source": "tesseract",
+        "vision_fallback": null
+      },
+      "screenshot": "/Users/chaoukibayoudhi/Documents/My_society/teyssir_erp_bookocr/docs/phase15-screenshots/case_B_draft.png"
+    },
+    {
+      "case": "C",
+      "label": "No ISBN (Math CNP)",
+      "overall": "PARTIAL",
+      "ms": 112885.1,
+      "images": [
+        "Photo on 25-8-2026 at 12.41 PM #2.jpg",
+        "Photo on 25-8-2026 at 12.42 PM.jpg"
+      ],
+      "fields": {
+        "title": {
+          "verdict": "PASS",
+          "detail": "Mathématiques"
+        },
+        "language_detected": {
+          "verdict": "PASS",
+          "detail": "fr langs=['fr']"
+        },
+        "description": {
+          "verdict": "PARTIAL",
+          "detail": "empty"
+        },
+        "isbn/barcode": {
+          "verdict": "PARTIAL",
+          "detail": "no ISBN (ok) barcode miss bc=''"
+        },
+        "price": {
+          "verdict": "PASS",
+          "detail": "4.200"
+        },
+        "banner": {
+          "verdict": "PASS",
+          "detail": "edition_kind=school_cnp"
+        }
+      },
+      "draft": {
+        "title": "Mathématiques",
+        "language_detected": "fr",
+        "languages": [
+          "fr"
+        ],
+        "description": "",
+        "isbn13": "",
+        "barcode_raw": "",
+        "barcode_kind": "",
+        "edition_kind": "school_cnp",
+        "price": "4.200",
+        "confidence": 0.15,
+        "source": "tesseract",
+        "vision_fallback": null
+      },
+      "screenshot": "/Users/chaoukibayoudhi/Documents/My_society/teyssir_erp_bookocr/docs/phase15-screenshots/case_C_draft.png"
+    },
+    {
+      "case": "D",
+      "label": "Arabic (History CNP)",
+      "overall": "FAIL",
+      "ms": 90260.5,
+      "images": [
+        "Photo on 25-8-2026 at 12.40 PM #3.jpg",
+        "Photo on 25-8-2026 at 12.41 PM.jpg"
+      ],
+      "fields": {
+        "title": {
+          "verdict": "FAIL",
+          "detail": "empty/unusable ''"
+        },
+        "language_detected": {
+          "verdict": "PASS",
+          "detail": "mixed:fr+en langs=['fr', 'en']"
+        },
+        "description": {
+          "verdict": "PARTIAL",
+          "detail": "empty"
+        },
+        "isbn/barcode": {
+          "verdict": "PARTIAL",
+          "detail": "no ISBN (ok) barcode miss bc=''"
+        },
+        "price": {
+          "verdict": "FAIL",
+          "detail": "empty"
+        },
+        "banner": {
+          "verdict": "FAIL",
+          "detail": "want school_cnp got unknown"
+        }
+      },
+      "draft": {
+        "title": "",
         "language_detected": "mixed:fr+en",
         "languages": [
           "fr",
@@ -135,203 +217,7 @@
         "price": "",
         "confidence": 0.1,
         "source": "tesseract",
-        "raw_keys": [
-          "back",
-          "barcode_ms",
-          "cover_role",
-          "covers",
-          "detected_langs",
-          "edition_kind",
-          "field_sources",
-          "isbn_not_detected",
-          "language_detected",
-          "manual_assist",
-          "ocr_available",
-          "ocr_fast_path",
-          "ocr_garbage_latin",
-          "ocr_lang_passes",
-          "ocr_langs",
-          "ocr_mean_confidence",
-          "ocr_ms",
-          "ocr_pass",
-          "ocr_title_unusable",
-          "ocr_variants",
-          "ocr_weak",
-          "rejected_title",
-          "scan_ms",
-          "script_probe",
-          "suggested_title",
-          "tesseract_cmd",
-          "title_candidates"
-        ]
-      },
-      "screenshot": "/Users/chaoukibayoudhi/Documents/My_society/teyssir_erp_bookocr/docs/phase15-screenshots/case_B_draft.png"
-    },
-    {
-      "case": "C",
-      "label": "No ISBN (Math CNP)",
-      "overall": "PARTIAL",
-      "ms": 51102.5,
-      "images": [
-        "Photo on 25-8-2026 at 12.41 PM #2.jpg",
-        "Photo on 25-8-2026 at 12.42 PM.jpg"
-      ],
-      "fields": {
-        "title": {
-          "verdict": "PASS",
-          "detail": "Mathématiques"
-        },
-        "language_detected": {
-          "verdict": "PASS",
-          "detail": "fr langs=['fr']"
-        },
-        "description": {
-          "verdict": "PARTIAL",
-          "detail": "template/empty — Tess-only path"
-        },
-        "isbn/barcode": {
-          "verdict": "PARTIAL",
-          "detail": "no ISBN (ok) but barcode miss bc=''"
-        },
-        "price": {
-          "verdict": "PASS",
-          "detail": "4.200"
-        },
-        "banner": {
-          "verdict": "PASS",
-          "detail": "edition_kind=school_cnp"
-        }
-      },
-      "draft": {
-        "title": "Mathématiques",
-        "language_detected": "fr",
-        "languages": [
-          "fr"
-        ],
-        "description": "",
-        "isbn13": "",
-        "barcode_raw": "",
-        "barcode_kind": "",
-        "edition_kind": "school_cnp",
-        "price": "4.200",
-        "confidence": 0.55,
-        "source": "tesseract",
-        "raw_keys": [
-          "back",
-          "barcode_ms",
-          "bilingual_title",
-          "cover_role",
-          "covers",
-          "description_template",
-          "detected_langs",
-          "edition_kind",
-          "field_sources",
-          "isbn_not_detected",
-          "isbn_optional",
-          "language_detected",
-          "manual_assist",
-          "ocr_available",
-          "ocr_fast_path",
-          "ocr_lang_passes",
-          "ocr_langs",
-          "ocr_mean_confidence",
-          "ocr_ms",
-          "ocr_pass",
-          "ocr_text_only",
-          "ocr_variants",
-          "pre_repair_title",
-          "rejected_description",
-          "scan_ms",
-          "school_edition",
-          "script_probe",
-          "tesseract_cmd",
-          "title_before_bilingual_merge",
-          "title_candidates"
-        ]
-      },
-      "screenshot": "/Users/chaoukibayoudhi/Documents/My_society/teyssir_erp_bookocr/docs/phase15-screenshots/case_C_draft.png"
-    },
-    {
-      "case": "D",
-      "label": "Arabic (History CNP)",
-      "overall": "FAIL",
-      "ms": 60909.0,
-      "images": [
-        "Photo on 25-8-2026 at 12.40 PM #3.jpg",
-        "Photo on 25-8-2026 at 12.41 PM.jpg"
-      ],
-      "fields": {
-        "title": {
-          "verdict": "FAIL",
-          "detail": "empty/unusable ''"
-        },
-        "language_detected": {
-          "verdict": "PASS",
-          "detail": "mixed:ar+en langs=['ar', 'en']"
-        },
-        "description": {
-          "verdict": "FAIL",
-          "detail": "empty (Vision likely skipped)"
-        },
-        "isbn/barcode": {
-          "verdict": "PARTIAL",
-          "detail": "no ISBN (ok) but barcode miss bc=''"
-        },
-        "price": {
-          "verdict": "FAIL",
-          "detail": "want 4.900 got 24.900"
-        },
-        "banner": {
-          "verdict": "FAIL",
-          "detail": "want school_cnp got unknown"
-        }
-      },
-      "draft": {
-        "title": "",
-        "language_detected": "mixed:ar+en",
-        "languages": [
-          "ar",
-          "en"
-        ],
-        "description": "",
-        "isbn13": "",
-        "barcode_raw": "",
-        "barcode_kind": "",
-        "edition_kind": "unknown",
-        "price": "24.900",
-        "confidence": 0.3,
-        "source": "tesseract",
-        "raw_keys": [
-          "back",
-          "barcode_ms",
-          "cover_role",
-          "covers",
-          "detected_langs",
-          "edition_kind",
-          "field_sources",
-          "isbn_not_detected",
-          "language_detected",
-          "manual_assist",
-          "ocr_available",
-          "ocr_fast_path",
-          "ocr_garbage_latin",
-          "ocr_lang_passes",
-          "ocr_langs",
-          "ocr_low_confidence",
-          "ocr_mean_confidence",
-          "ocr_ms",
-          "ocr_pass",
-          "ocr_title_unusable",
-          "ocr_variants",
-          "ocr_weak",
-          "rejected_title",
-          "scan_ms",
-          "script_probe",
-          "suggested_text",
-          "suggested_title",
-          "tesseract_cmd",
-          "title_candidates"
-        ]
+        "vision_fallback": null
       },
       "screenshot": "/Users/chaoukibayoudhi/Documents/My_society/teyssir_erp_bookocr/docs/phase15-screenshots/case_D_draft.png"
     },
@@ -339,7 +225,7 @@
       "case": "E",
       "label": "French (Math CNP)",
       "overall": "PARTIAL",
-      "ms": 57079.9,
+      "ms": 97075.5,
       "images": [
         "Photo on 25-8-2026 at 12.41 PM #2.jpg",
         "Photo on 25-8-2026 at 12.42 PM.jpg"
@@ -355,11 +241,11 @@
         },
         "description": {
           "verdict": "PARTIAL",
-          "detail": "template/empty — Tess-only path"
+          "detail": "empty"
         },
         "isbn/barcode": {
           "verdict": "PARTIAL",
-          "detail": "no ISBN (ok) but barcode miss bc=''"
+          "detail": "no ISBN (ok) barcode miss bc=''"
         },
         "price": {
           "verdict": "PASS",
@@ -382,40 +268,9 @@
         "barcode_kind": "",
         "edition_kind": "school_cnp",
         "price": "4.200",
-        "confidence": 0.55,
+        "confidence": 0.15,
         "source": "tesseract",
-        "raw_keys": [
-          "back",
-          "barcode_ms",
-          "bilingual_title",
-          "cover_role",
-          "covers",
-          "description_template",
-          "detected_langs",
-          "edition_kind",
-          "field_sources",
-          "isbn_not_detected",
-          "isbn_optional",
-          "language_detected",
-          "manual_assist",
-          "ocr_available",
-          "ocr_fast_path",
-          "ocr_lang_passes",
-          "ocr_langs",
-          "ocr_mean_confidence",
-          "ocr_ms",
-          "ocr_pass",
-          "ocr_text_only",
-          "ocr_variants",
-          "pre_repair_title",
-          "rejected_description",
-          "scan_ms",
-          "school_edition",
-          "script_probe",
-          "tesseract_cmd",
-          "title_before_bilingual_merge",
-          "title_candidates"
-        ]
+        "vision_fallback": null
       },
       "screenshot": "/Users/chaoukibayoudhi/Documents/My_society/teyssir_erp_bookocr/docs/phase15-screenshots/case_E_draft.png"
     },
@@ -423,7 +278,7 @@
       "case": "F",
       "label": "Mixed FR+AR (Premier)",
       "overall": "FAIL",
-      "ms": 105761.2,
+      "ms": 88649.1,
       "images": [
         "Photo on 25-8-2026 at 12.40 PM.jpg",
         "Photo on 25-8-2026 at 12.40 PM #2.jpg"
@@ -433,9 +288,13 @@
           "verdict": "FAIL",
           "detail": "empty/unusable ''"
         },
+        "language_detected": {
+          "verdict": "PASS",
+          "detail": "mixed:ar+fr langs=['ar', 'fr']"
+        },
         "description": {
-          "verdict": "FAIL",
-          "detail": "empty (Vision likely skipped)"
+          "verdict": "PARTIAL",
+          "detail": "empty"
         },
         "isbn/barcode": {
           "verdict": "FAIL",
@@ -443,7 +302,7 @@
         },
         "price": {
           "verdict": "FAIL",
-          "detail": "want 17.000 got 5.000"
+          "detail": "want 17.000 got 4.000"
         },
         "banner": {
           "verdict": "PARTIAL",
@@ -462,33 +321,10 @@
         "barcode_raw": "",
         "barcode_kind": "",
         "edition_kind": "unknown",
-        "price": "5.000",
-        "confidence": 0.45,
+        "price": "4.000",
+        "confidence": 0.15,
         "source": "tesseract",
-        "raw_keys": [
-          "back",
-          "barcode_ms",
-          "cover_role",
-          "covers",
-          "edition_kind",
-          "field_sources",
-          "isbn_not_detected",
-          "language_detected",
-          "manual_assist",
-          "ocr_available",
-          "ocr_fast_path",
-          "ocr_lang_passes",
-          "ocr_langs",
-          "ocr_mean_confidence",
-          "ocr_ms",
-          "ocr_pass",
-          "ocr_title_unusable",
-          "ocr_variants",
-          "ocr_weak",
-          "scan_ms",
-          "script_probe",
-          "tesseract_cmd"
-        ]
+        "vision_fallback": null
       },
       "screenshot": "/Users/chaoukibayoudhi/Documents/My_society/teyssir_erp_bookocr/docs/phase15-screenshots/case_F_draft.png"
     }
@@ -496,5 +332,5 @@
   "pass": 0,
   "partial": 2,
   "fail": 4,
-  "total_ms": 433287.5
+  "total_ms": 528747.7
 }

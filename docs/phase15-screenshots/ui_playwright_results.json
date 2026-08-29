@@ -2,23 +2,33 @@
   "results": [
     {
       "case": "C",
-      "ok": false,
-      "error": "no file input"
+      "ok": true,
+      "note": "Math school — ui_case_C_result.png"
     },
     {
       "case": "A",
-      "ok": false,
-      "error": "no file input"
+      "ok": true,
+      "note": "Beauty — ui_case_A_result.png"
     },
     {
       "case": "D",
       "ok": false,
-      "error": "no file input"
+      "ms": 160763
+    },
+    {
+      "case": "E",
+      "ok": false,
+      "ms": 160405
     },
     {
       "case": "F",
       "ok": false,
-      "error": "no file input"
+      "ms": 160701
+    },
+    {
+      "case": "B",
+      "ok": false,
+      "ms": 160343
     }
   ]
 }
