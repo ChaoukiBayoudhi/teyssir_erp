@@ -404,6 +404,10 @@ def is_plausible_author(name: str, *, mean_conf: float | None = None) -> bool:
     s = (name or "").strip().replace("\u200e", "").replace("\u200f", "")
     if len(s) < 3:
         return False
+    from .edition import is_school_subject_or_fragment
+
+    if is_school_subject_or_fragment(s):
+        return False
     if is_garbage_latin_ocr(s, mean_conf=mean_conf):
         return False
     if is_garbage_arabic_ocr(s, mean_conf=mean_conf):
@@ -416,7 +420,11 @@ def is_plausible_author(name: str, *, mean_conf: float | None = None) -> bool:
             return False
         return ar >= 3
     letters = sum(1 for c in s if c.isalpha())
-    return letters >= 3
+    # Person names usually have a space or Title Case word ≥4 chars
+    words = [w for w in re.split(r"\s+", s) if w]
+    if len(words) == 1 and letters < 8:
+        return False
+    return letters >= 4
 
 
 def detect_script_langs(text: str, *, mean_conf: float | None = None) -> list[str]:
@@ -1215,6 +1223,17 @@ def _draft_from_text(text, *, isbn_hint="", role="auto", mean_conf: float | None
                 draft.raw.pop("ocr_arabic_likely", None)
             elif arabic_char_ratio(draft.title) >= 0.15:
                 draft.raw["arabic_script_detected"] = True
+    # School FR subjects must not stay tagged ``en`` from Latin-only OCR
+    from .edition import looks_like_school_text, prefer_school_languages
+
+    if looks_like_school_text(
+        draft.title or "",
+        " ".join(draft.raw.get("title_candidates") or []),
+    ):
+        draft.languages = prefer_school_languages(
+            list(draft.languages or []), title=draft.title or "",
+        )
+        draft.raw["detected_langs"] = list(draft.languages)
 
     # Drop implausible authors even when title survived
     if draft.authors:
@@ -1224,6 +1243,11 @@ def _draft_from_text(text, *, isbn_hint="", role="auto", mean_conf: float | None
                 a for a in draft.authors if a not in kept
             ]
         draft.authors = kept
+
+    # CNP school covers: repair truncated titles, never keep subject shards as authors
+    from .edition import refine_school_draft
+
+    refine_school_draft(draft)
 
     if draft.isbn13 or draft.price:
         if draft.isbn13 and not (draft.raw or {}).get("isbn_from_barcode"):

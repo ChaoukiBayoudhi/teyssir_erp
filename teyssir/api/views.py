@@ -466,6 +466,7 @@ class ProductDetailView(APIView):
             data["book"] = {
                 "isbn13": book.isbn13, "isbn10": book.isbn10, "subtitle": book.subtitle,
                 "publisher": book.publisher, "series": book.series, "edition": book.edition,
+                "edition_kind": book.edition_kind,
                 "languages": book.languages, "pub_year": book.pub_year, "pages": book.pages,
                 "dimensions": book.dimensions, "cover_type": book.cover_type,
                 "subject": book.subject, "description": book.description,

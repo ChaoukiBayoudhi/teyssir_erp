@@ -99,11 +99,27 @@ class Book(SyncableModel):
     """Rich bibliographic profile for a book product (camera/OCR registration, spec docs/BOOK-OCR).
 
     `raw_metadata` keeps the full external-provider payload so future enrichment fields need no
-    migration; `source_provider`/`ocr_confidence` record how the data was obtained."""
+    migration; `source_provider`/`ocr_confidence` record how the data was obtained.
+
+    ISBN-13 is optional: Tunisian CNP school editions often use a local ``619…`` product
+    barcode only (``edition_kind=school_cnp``). Store that barcode on ``Barcode`` as today.
+    """
+
+    SCHOOL_CNP = "school_cnp"
+    ISBN_EDITION = "isbn_edition"
+    UNKNOWN_EDITION = "unknown"
+    EDITION_KINDS = [
+        (SCHOOL_CNP, "School / CNP (barcode-only)"),
+        (ISBN_EDITION, "ISBN edition (978/979)"),
+        (UNKNOWN_EDITION, "Unknown"),
+    ]
 
     product = models.OneToOneField(Product, on_delete=models.CASCADE, related_name="book")
     isbn13 = models.CharField(max_length=13, blank=True, default="", db_index=True)
     isbn10 = models.CharField(max_length=10, blank=True, default="")
+    edition_kind = models.CharField(
+        max_length=16, choices=EDITION_KINDS, blank=True, default="", db_index=True,
+    )
     subtitle = models.CharField(max_length=255, blank=True, default="")
     publisher = models.CharField(max_length=160, blank=True, default="")
     series = models.CharField(max_length=160, blank=True, default="")
@@ -121,7 +137,7 @@ class Book(SyncableModel):
     raw_metadata = models.JSONField(default=dict, blank=True)
 
     def __str__(self):
-        return f"Book {self.isbn13 or self.product_id}"
+        return f"Book {self.isbn13 or self.edition_kind or self.product_id}"
 
 
 class Contributor(SyncableModel):

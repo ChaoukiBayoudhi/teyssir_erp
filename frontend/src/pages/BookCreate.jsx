@@ -174,10 +174,45 @@ async function assessCapturesQuality(files) {
 
 const EMPTY = {
   isbn13: "", barcode_raw: "", barcode_symbology: "", barcode_kind: "",
+  edition_kind: "",
   title: "", subtitle: "", authors: "", translators: "", publisher: "",
   series: "", edition: "", pub_year: "", pages: "", languages: "", subject: "",
   description: "", sale_price: "", category: "", tax_rate: "",
 };
+
+/** Client-side school / CNP heuristics when server edition_kind is missing. */
+function looksLikeSchoolDraft(d) {
+  if (!d) return false;
+  if (d.edition_kind === "school_cnp" || d.raw?.school_edition || d.raw?.edition_kind === "school_cnp") {
+    return true;
+  }
+  if (d.barcode_kind === "local_product" || d.raw?.barcode_non_isbn) return true;
+  const bc = String(d.barcode_raw || "").trim();
+  if (bc.startsWith("619")) return true;
+  const blob = [
+    d.title, d.subtitle, d.publisher, d.subject, d.description,
+    ...(d.raw?.title_candidates || []),
+    d.raw?.rejected_title, d.raw?.suggested_title, d.raw?.pre_repair_title,
+  ].filter(Boolean).join(" ");
+  return /math[eé]matiques?|ématiques|matiques|technologie\s+de\s+l['’]?informati|nologie\s+de\s+l['’]?informati|\bCNP\b|centre\s+national|ann[eé]e\s+(?:secondaire|primaire)|enseignement\s+secondaire|كتاب|مركز\s+وطني|histoire|2[eè]me\s+ann/i.test(blob);
+}
+
+/** Drop OCR subject shards that must never autofill as authors. */
+function scrubAuthors(authorsStr, title) {
+  const blocked = /math|ématiques|matiques|nologie|technologie|informati|histoire|sciences?|physique|chimie|fran[cç]ais|anglais|arabe|ann[eé]e|tome|secondaire|enseignement|manuel|scolaire|^cnp$|كتاب/i;
+  return String(authorsStr || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => {
+      if (!s || s.length < 3) return false;
+      if (blocked.test(s)) return false;
+      if (title && title.toLowerCase().includes(s.toLowerCase())) return false;
+      if (/^[a-zà-ÿ]{2,12}$/i.test(s) && s.length <= 12) return false;
+      if (/[a-z][A-Z]/.test(s)) return false;
+      return true;
+    })
+    .join(", ");
+}
 
 /** Portrait book guide (typical trade paperback ~2:3). Overlay only — full frame still captured. */
 const BOOK_ASPECT = "2 / 3";
@@ -467,7 +502,14 @@ export default function BookCreate({ onBack, onLogout }) {
         || d.raw?.barcode_detected
         || d.raw?.barcode_non_isbn
       );
-      const showIsbnCloseup = isbnMissing && !hasProductBarcode;
+      const isSchoolEdition = looksLikeSchoolDraft(d) || hasProductBarcode;
+      const isIsbnEdition = !!(
+        resolvedIsbn
+        || d.edition_kind === "isbn_edition"
+        || (d.barcode_kind === "isbn13" && !isSchoolEdition)
+      );
+      // NEVER ask to recrop ISBN for school/CNP — even when barcode decode failed
+      const showIsbnCloseup = isbnMissing && !hasProductBarcode && !isSchoolEdition;
       const priceMissing = !d.price;
       const ocrErr = d.raw?.ocr_error || d.raw?.back?.ocr_error;
       const lowConf = d.raw?.ocr_low_confidence || (d.confidence != null && d.confidence < 0.35);
@@ -481,6 +523,18 @@ export default function BookCreate({ onBack, onLogout }) {
       let note = "";
       if (ocrErr) {
         warn = `${t("ocrUnavailable")}\n${ocrErr}\n${t("imageBlurryRetry")}`;
+      } else if (isSchoolEdition && isbnMissing) {
+        // Success path for Tunisian school editions — NEVER "ISBN non détecté" / Recadrez ISBN
+        note = hasProductBarcode ? t("localBarcodeDetected") : t("schoolEditionNoIsbn");
+        if (d.title) {
+          note = `${note}\n${t("schoolEditionTitleHint")}`;
+        } else if (d.raw?.suggested_title || garbageOcr) {
+          note = `${note}\n${t("noIsbnTitleAssist")}`;
+        }
+        if (garbageOcr && !hasProductBarcode) {
+          // Soft OCR hint only — still no ISBN recrop
+          note = note ? `${note}\n${t("ocrWeak")}` : t("ocrWeak");
+        }
       } else if (garbageOcr || missingAra) {
         warn = missingAra ? t("ocrMissingAra") : t("ocrArabicWeak");
         if (d.raw?.rejected_title || d.raw?.suggested_title) {
@@ -491,9 +545,9 @@ export default function BookCreate({ onBack, onLogout }) {
         } else if (showIsbnCloseup) {
           note = note ? `${note}\n${t("barcodeCloseupHint")}` : t("barcodeCloseupHint");
         }
-      } else if (lowConf && !d.title && !resolvedIsbn && !hasProductBarcode) {
+      } else if (lowConf && !d.title && !resolvedIsbn && !hasProductBarcode && !isSchoolEdition) {
         warn = t("imageBlurryRetry");
-      } else if (lowConf && !metaOk && !hasProductBarcode) {
+      } else if (lowConf && !metaOk && !hasProductBarcode && !isSchoolEdition) {
         note = `${t("ocrWeak")}${d.raw?.suggested_title ? ` — ${d.raw.suggested_title}` : ""}`;
         if (showIsbnCloseup) {
           note = `${note}\n${t("barcodeCloseupHint")}`;
@@ -504,17 +558,17 @@ export default function BookCreate({ onBack, onLogout }) {
         if (!d.title && (d.raw?.suggested_title || garbageOcr)) {
           note = `${note}\n${t("noIsbnTitleAssist")}`;
         }
-      } else if (isbnMissing && d.title) {
+      } else if (isbnMissing && d.title && !isSchoolEdition) {
         warn = `${t("isbnNotDetected")}\n${t("noIsbnTitleAssist")}`;
         if (showIsbnCloseup) warn = `${warn}\n${t("barcodeCloseupHint")}`;
-      } else if (isbnMissing) {
+      } else if (isbnMissing && !isSchoolEdition) {
         warn = `${t("isbnNotDetected")}\n${t("isbnManualHint")}`;
         if (showIsbnCloseup) warn = `${warn}\n${t("barcodeCloseupHint")}`;
       } else if (d.raw?.metadata_miss && !d.title) {
         warn = t("metadataMiss");
       } else if (d.source === "manual" || d.raw?.ocr_available === false) {
         warn = t("ocrUnavailable");
-      } else if (!d.title && !resolvedIsbn && !hasProductBarcode) {
+      } else if (!d.title && !resolvedIsbn && !hasProductBarcode && !isSchoolEdition) {
         warn = t("ocrEmptyManual");
       } else if (weakTitleSearch) {
         note = t("titleSearchWeak");
@@ -523,10 +577,10 @@ export default function BookCreate({ onBack, onLogout }) {
       }
       if (!isbnMissing && priceMissing) {
         note = note ? `${note}\n${t("priceNotDetected")}` : t("priceNotDetected");
-      } else if (isbnMissing && hasProductBarcode && priceMissing) {
+      } else if (isbnMissing && (hasProductBarcode || isSchoolEdition) && priceMissing) {
         note = note ? `${note}\n${t("priceNotDetected")}` : t("priceNotDetected");
       }
-      if (d.raw?.suggested_isbn && isbnMissing && !hasProductBarcode) {
+      if (d.raw?.suggested_isbn && isbnMissing && !hasProductBarcode && !isSchoolEdition) {
         note = note
           ? `${note}\n${t("isbnManualHint")} (${d.raw.suggested_isbn})`
           : `${t("isbnManualHint")} (${d.raw.suggested_isbn})`;
@@ -537,18 +591,31 @@ export default function BookCreate({ onBack, onLogout }) {
       const livre = cats.find((c) => /livre|book|كتاب|manuel/i.test(c.name_fr || ""));
       const tva7 = taxes.find((x) => Number(x.rate_percent) === 7);
       // Do not present garbage OCR as a confident title; keep languages=ar when likely Arabic
-      const safeTitle = garbageOcr ? "" : (d.title || d.raw?.suggested_title || "");
-      const safeAuthors = garbageOcr ? "" : (d.authors || []).join(", ");
+      const safeTitle = garbageOcr && !isSchoolEdition ? "" : (d.title || d.raw?.suggested_title || "");
+      const rawAuthors = garbageOcr && !isSchoolEdition ? "" : (d.authors || []).join(", ");
+      const safeAuthors = scrubAuthors(rawAuthors, safeTitle);
       let langList = d.languages || [];
-      if (garbageOcr && !langList.includes("ar")) {
+      if (isSchoolEdition) {
+        langList = langList.filter((x) => x !== "en");
+        if (!langList.includes("fr") && !langList.includes("ar")) langList = ["fr"];
+        else if (!langList.includes("fr") && langList.includes("ar")) langList = ["ar", "fr"];
+      } else if (garbageOcr && !langList.includes("ar")) {
         langList = ["ar"];
       }
+      // Drop junk "Book: nologie…" descriptions
+      let safeDesc = d.description || "";
+      if (/^(Book|Livre)\s*[:/].*(nologie|ématiques|matiques)/i.test(safeDesc)) {
+        safeDesc = "";
+      }
+      const editionKind = d.edition_kind
+        || (isSchoolEdition ? "school_cnp" : (isIsbnEdition ? "isbn_edition" : ""));
       setForm((prev) => ({
         ...EMPTY,
         isbn13: resolvedIsbn,
         barcode_raw: d.barcode_raw || "",
         barcode_symbology: d.barcode_symbology || "",
-        barcode_kind: d.barcode_kind || "",
+        barcode_kind: d.barcode_kind || (isSchoolEdition && (d.barcode_raw || "").startsWith("619") ? "local_product" : ""),
+        edition_kind: editionKind,
         title: safeTitle,
         subtitle: d.subtitle || "",
         authors: safeAuthors,
@@ -560,8 +627,8 @@ export default function BookCreate({ onBack, onLogout }) {
         pages: d.pages || "",
         languages: langList.join(", "),
         subject: d.subject || "",
-        description: d.description || "",
-        sale_price: garbageLatin && !d.raw?.price_detected ? "" : (d.price || ""),
+        description: safeDesc,
+        sale_price: garbageLatin && !d.raw?.price_detected && !isSchoolEdition ? "" : (d.price || ""),
         category: prev.category || livre?.id || "",
         tax_rate: prev.tax_rate || tva7?.id || "",
       }));
@@ -617,6 +684,10 @@ export default function BookCreate({ onBack, onLogout }) {
   const stepIndex = captureStep === "front" ? 0 : captureStep === "back" ? 1 : 2;
   const captureLabel = captureStep === "back" ? t("captureBack") : t("captureFront");
   const readyFiles = images.filter(Boolean).length;
+  const schoolMode = looksLikeSchoolDraft(draft) || form.edition_kind === "school_cnp"
+    || (form.barcode_raw || "").startsWith("619") || form.barcode_kind === "local_product";
+  const isbnMode = !schoolMode && (!!form.isbn13 || form.edition_kind === "isbn_edition"
+    || (draft && draft.edition_kind === "isbn_edition"));
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "#f5f5f5" }}>
@@ -658,7 +729,7 @@ export default function BookCreate({ onBack, onLogout }) {
 
               <Typography color="text.secondary" sx={{ mb: 1 }}>
                 {captureStep === "front" && t("captureFrontHint")}
-                {captureStep === "back" && t("captureBackHint")}
+                {captureStep === "back" && (schoolMode ? t("captureBackHintSchool") : t("captureBackHint"))}
                 {captureStep === "ready" && t("capturesReady")}
               </Typography>
 
@@ -710,7 +781,9 @@ export default function BookCreate({ onBack, onLogout }) {
                         px: 1,
                       }}
                     >
-                      {captureStep === "back" ? t("captureBackHint") : t("captureFrontHint")}
+                      {captureStep === "back"
+                        ? (schoolMode ? t("captureBackHintSchool") : t("captureBackHint"))
+                        : t("captureFrontHint")}
                     </Typography>
                   </Box>
                 </Box>
@@ -792,8 +865,27 @@ export default function BookCreate({ onBack, onLogout }) {
                 </Stack>
               </Stack>
               <Grid container spacing={1.5}>
-                <Grid item xs={12} sm={6}>{F("ISBN", "isbn13")}</Grid>
-                <Grid item xs={12} sm={6}>{F("Code-barres", "barcode_raw")}</Grid>
+                {schoolMode ? (
+                  <>
+                    <Grid item xs={12} sm={6}>
+                      {F(t("barcodeFieldLabel"), "barcode_raw", {
+                        helperText: t("isbnOptionalHint"),
+                        FormHelperTextProps: { sx: { mx: 0 } },
+                      })}
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      {F(t("isbnFieldLabel"), "isbn13", {
+                        helperText: t("isbnOptionalHint"),
+                        FormHelperTextProps: { sx: { mx: 0 } },
+                      })}
+                    </Grid>
+                  </>
+                ) : (
+                  <>
+                    <Grid item xs={12} sm={6}>{F(t("isbnFieldLabel"), "isbn13")}</Grid>
+                    <Grid item xs={12} sm={6}>{F(isbnMode ? "Code-barres" : t("barcodeFieldLabel"), "barcode_raw")}</Grid>
+                  </>
+                )}
                 <Grid item xs={12} sm={6}>{F(t("priceF") + " (DT)", "sale_price", {
                   type: "number", inputProps: { min: 0, step: "0.001" },
                 })}</Grid>

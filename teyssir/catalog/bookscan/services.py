@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
@@ -481,14 +482,34 @@ def _scan_book_prepared(
     from .language import apply_language_detected
 
     apply_language_detected(draft, front=ocr_draft, back=None)
+    from .edition import refine_school_draft
+
+    refine_school_draft(draft)
+    # School / no usable title: never leave "Book: garbage…" descriptions
+    if (draft.raw or {}).get("school_edition") or (draft.edition_kind == "school_cnp"):
+        from .ocr import is_usable_ocr_title
+
+        if draft.description and not is_usable_ocr_title(draft.title or ""):
+            draft.raw["rejected_description"] = draft.description
+            draft.description = ""
+            draft.raw["manual_assist"] = True
+        elif draft.description and re.match(
+            r"^(Book|Livre)\s*[:/].*(nologie|ématiques|matiques)",
+            draft.description,
+            re.I,
+        ):
+            draft.raw["rejected_description"] = draft.description
+            draft.description = ""
+            draft.raw["manual_assist"] = True
     _emit("done", 100)
 
     logger.info(
-        "scan_book done ms=%s title=%r isbn=%s barcode=%s conf=%s lang=%s sources=%s",
+        "scan_book done ms=%s title=%r isbn=%s barcode=%s kind=%s conf=%s lang=%s sources=%s",
         scan_ms,
         (draft.title or "")[:40],
         draft.isbn13 or "",
         draft.barcode_raw or "",
+        getattr(draft, "edition_kind", "") or "",
         draft.confidence,
         getattr(draft, "language_detected", "") or "",
         (draft.raw or {}).get("field_sources") or {},
@@ -643,6 +664,18 @@ def _should_try_vision(draft, provider) -> bool:
     )
     has_price = bool(draft.price)
     metadata_hit = bool(raw.get("metadata_hit"))
+    from .edition import EDITION_SCHOOL_CNP, looks_like_school_text
+
+    is_school = (
+        getattr(draft, "edition_kind", "") == EDITION_SCHOOL_CNP
+        or raw.get("school_edition")
+        or looks_like_school_text(
+            title,
+            " ".join(raw.get("title_candidates") or []),
+            raw.get("rejected_title") or "",
+            raw.get("suggested_title") or "",
+        )
+    )
 
     garbage = bool(
         raw.get("ocr_garbage_latin")
@@ -658,6 +691,13 @@ def _should_try_vision(draft, provider) -> bool:
     # CNP 619… school books often have a usable price sticker even when title OCR
     # is noisy — do not block the shop on Ollama.
     if (has_barcode_isbn or has_product_barcode) and (title_ok or has_price):
+        return False
+    # School cover classified without barcode: skip Vision only for solid Latin/FR
+    # titles (Mathématiques) or a price sticker — weak Arabic calligraphy still
+    # benefits from Vision.
+    if is_school and has_price:
+        return False
+    if is_school and title_ok and arabic_char_ratio(title) < 0.15:
         return False
 
     # Force Vision: garbage / weak title when no barcode fast path above
@@ -776,8 +816,34 @@ def create_book_from_draft(*, data, image_ids=(), sale_price="0", origin_termina
     ld = (data.get("language_detected") or raw_meta.get("language_detected") or "").strip()
     if ld:
         raw_meta["language_detected"] = ld
+    from .edition import (
+        EDITION_ISBN,
+        EDITION_SCHOOL_CNP,
+        classify_edition_kind,
+    )
+
+    edition_kind = (data.get("edition_kind") or raw_meta.get("edition_kind") or "").strip()
+    if not edition_kind:
+        edition_kind = classify_edition_kind(
+            isbn13=isbn13,
+            barcode_raw=barcode_raw,
+            barcode_kind=barcode_kind,
+            title=data.get("title") or "",
+            publisher=data.get("publisher") or "",
+            description=data.get("description") or "",
+            subject=data.get("subject") or "",
+            raw=raw_meta,
+        )
+    if edition_kind:
+        raw_meta["edition_kind"] = edition_kind
+        if edition_kind == EDITION_SCHOOL_CNP:
+            raw_meta["school_edition"] = True
+            raw_meta["isbn_optional"] = True
+        elif edition_kind == EDITION_ISBN:
+            raw_meta.setdefault("isbn_optional", False)
     book = Book.objects.create(
         product=product, isbn13=isbn13, isbn10=data.get("isbn10", ""),
+        edition_kind=edition_kind or "",
         subtitle=data.get("subtitle", ""), publisher=data.get("publisher", ""),
         series=data.get("series", ""), edition=data.get("edition", ""),
         languages=data.get("languages", []), pub_year=data.get("pub_year"),

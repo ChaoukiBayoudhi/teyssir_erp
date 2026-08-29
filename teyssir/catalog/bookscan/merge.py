@@ -321,6 +321,9 @@ def merge_cover_drafts(front: BookDraft, back: BookDraft | None) -> BookDraft:
     from .language import apply_language_detected
 
     apply_language_detected(out)
+    from .edition import refine_school_draft
+
+    refine_school_draft(out)
     return out
 
 
@@ -475,6 +478,9 @@ def merge_scan_layers(
     from .language import apply_language_detected
 
     apply_language_detected(out)
+    from .edition import refine_school_draft
+
+    refine_school_draft(out)
     return out
 
 
