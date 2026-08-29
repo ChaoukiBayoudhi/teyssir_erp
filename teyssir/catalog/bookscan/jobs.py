@@ -8,12 +8,37 @@
 
 To scale later (e.g. on the hub), add a ``celery``/``django-q`` backend here — the HTTP API
 (a job id you poll) does not change. Uses only the stdlib (threading), no extra dependency.
+
+Phase 15.5: workers emit ``stage`` + ``progress`` (0–100) on the ScanJob so the PWA can poll
+pipeline feedback without changing PENDING|DONE|FAILED semantics.
 """
 import contextlib
 import os
 import tempfile
 
 from django.conf import settings
+
+# Default progress map for ScanJob.stage (clients may treat unknown stages as "busy").
+STAGE_PROGRESS = {
+    "queued": 0,
+    "preprocess": 12,
+    "barcode": 25,
+    "ocr": 40,
+    "language": 55,
+    "vision": 68,
+    "metadata": 82,
+    "merge": 92,
+    "done": 100,
+    "failed": 100,
+}
+
+
+def update_scan_stage(job_id, stage, progress=None):
+    """Persist a pipeline milestone on the ScanJob (lightweight UPDATE — safe mid-scan)."""
+    from teyssir.catalog.models import ScanJob
+
+    p = STAGE_PROGRESS.get(stage, 0) if progress is None else max(0, min(100, int(progress)))
+    ScanJob.objects.filter(pk=job_id).update(stage=stage, progress=p)
 
 
 @contextlib.contextmanager
@@ -50,17 +75,28 @@ def run_scan_job(job_id):
     from .services import scan_book
 
     job = ScanJob.objects.get(pk=job_id)
+    update_scan_stage(job_id, "queued", 0)
     try:
         images = ProductImage.objects.filter(id__in=job.image_ids).order_by("order")
         with local_image_paths([img.image for img in images]) as paths:
-            draft, ocr_text = scan_book(paths, isbn=job.isbn)
+            draft, ocr_text = scan_book(
+                paths,
+                isbn=job.isbn,
+                on_stage=lambda stage, progress=None: update_scan_stage(job_id, stage, progress),
+            )
+        job = ScanJob.objects.get(pk=job_id)  # refresh — stage updates used queryset UPDATE
         job.result = draft.as_dict()
         job.ocr_text = ocr_text or ""
         job.status = ScanJob.DONE
+        job.stage = "done"
+        job.progress = 100
         if job.image_ids and ocr_text:
             ProductImage.objects.filter(pk=job.image_ids[0]).update(ocr_text=ocr_text)
     except Exception as exc:                       # noqa: BLE001 — record, never lose the job
+        job = ScanJob.objects.get(pk=job_id)
         job.status = ScanJob.FAILED
+        job.stage = "failed"
+        job.progress = 100
         job.error = str(exc)
     job.save()
     return job

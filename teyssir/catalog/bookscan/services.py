@@ -139,7 +139,7 @@ def _extract_pair(
     return texts, front, back
 
 
-def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_by_title):
+def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_by_title, on_stage=None):
     """Produce a (BookDraft, ocr_text) from image path(s) + an optional ISBN.
 
     Multi-cover (Phase 6):
@@ -149,8 +149,18 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
       * image[1] → back cover (ISBN / barcode / price)
       * merge → enrich by ISBN, else cautious title search
       * optional Vision-LLM only when OCR has no usable title/ISBN (short timeout)
+
+    ``on_stage(stage, progress=None)`` — optional Phase 15.5 progress hook
+    (preprocess → barcode → ocr → language → vision → metadata → merge → done).
     """
     from .preprocess import prepared_cover_paths
+
+    def _emit(stage, progress=None):
+        if on_stage:
+            try:
+                on_stage(stage, progress)
+            except TypeError:
+                on_stage(stage)
 
     # Client / caller hint: only accept checksum-valid bookland ISBNs
     client_raw = (isbn or "").strip()
@@ -162,6 +172,7 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
     provider = get_ocr_provider()
 
     # Phase 2A: rectify covers before barcode + OCR (temps cleaned on exit).
+    _emit("preprocess")
     with prepared_cover_paths(image_paths or []) as (prep_paths, prep_results):
         work_paths = prep_paths if prep_paths else list(image_paths or [])
         return _scan_book_prepared(
@@ -172,6 +183,7 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
             provider=provider,
             enrich=enrich,
             enrich_title=enrich_title,
+            on_stage=on_stage,
         )
 
 
@@ -184,8 +196,16 @@ def _scan_book_prepared(
     provider,
     enrich,
     enrich_title,
+    on_stage=None,
 ):
     """Inner scan on already-preprocessed paths (+ optional ROI metadata)."""
+    def _emit(stage, progress=None):
+        if on_stage:
+            try:
+                on_stage(stage, progress)
+            except TypeError:
+                on_stage(stage)
+
     # Product barcode first (Phase 2B): retain ISBN and non-ISBN (CNP 619…).
     # Digit OCR never fills barcode_* ; isbn13 only when bookland check OK.
     # Phase 2C: skip digit-OCR ISBN hunt when a non-ISBN product barcode is already retained.
@@ -193,6 +213,7 @@ def _scan_book_prepared(
     product_bc: DecodedBarcode | None = None
     barcode_isbn = ""
     isbn_source = ""
+    _emit("barcode")
     if image_paths:
         product_bc = _product_barcode_from_paths(image_paths, prepared)
         if product_bc and product_bc.kind == "isbn13" and not isbn:
@@ -214,6 +235,7 @@ def _scan_book_prepared(
                     isbn = dig
                     break
 
+    _emit("ocr")
     texts, front, back = _extract_pair(
         provider,
         image_paths,
@@ -283,9 +305,15 @@ def _scan_book_prepared(
         if client_isbn_hint:
             ocr_draft.raw["isbn_client_hint"] = True
 
+    # Phase 15.5: language milestone after OCR (final apply still runs post-merge).
+    _emit("language")
+    from .language import apply_language_detected
+    apply_language_detected(ocr_draft, front=ocr_draft, back=None)
+
     # Phase 15.3: Vision is a separate layer (not an in-place OCR overwrite).
     vision_draft = None
     if image_paths and _should_try_vision(ocr_draft, provider):
+        _emit("vision")
         vision_draft = _maybe_vision_draft(image_paths, ocr_draft)
         if vision_draft:
             if not isbn and vision_draft.isbn13:
@@ -293,6 +321,7 @@ def _scan_book_prepared(
             if vision_draft.raw.get("vision_text"):
                 ocr_text = f"{ocr_text}\n---\n{vision_draft.raw.get('vision_text')}"
 
+    _emit("metadata")
     metadata_draft = enrich(isbn) if isbn else None
     metadata_hit = metadata_draft is not None
     if metadata_hit and isbn_source == "digit_ocr":
@@ -303,6 +332,7 @@ def _scan_book_prepared(
             "isbn_digit_ocr_confirmed": True,
         }
 
+    _emit("merge")
     draft = merge_scan_layers(
         metadata=metadata_draft,
         vision=vision_draft,
@@ -451,6 +481,7 @@ def _scan_book_prepared(
     from .language import apply_language_detected
 
     apply_language_detected(draft, front=ocr_draft, back=None)
+    _emit("done")
 
     logger.info(
         "scan_book done ms=%s title=%r isbn=%s barcode=%s conf=%s lang=%s sources=%s",
