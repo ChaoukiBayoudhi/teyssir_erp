@@ -24,9 +24,6 @@ bash deploy/macos/install.sh --role till --terminal C1 \
 bash deploy/macos/start-teyssir.sh               # open http://localhost:8000
 ```
 
-<<<<<<< HEAD
-Verified live on a MacBook Pro M1. Uses only free/open-source tools (Python, waitress, WhiteNoise).
-=======
 Verified live on a MacBook Pro M1. Uses only free/open-source tools (Python, waitress, WhiteNoise, launchd).
 
 ### Book scan speed (`TEYSSIR_BOOKSCAN_ACCURACY`)
@@ -43,4 +40,3 @@ off for day-to-day Nouveau livre:
   ~/Library/LaunchAgents/com.teyssir.backend.plist
 launchctl kickstart -k "gui/$(id -u)/com.teyssir.backend"
 ```
->>>>>>> f204f96 (fix: barcode-only books without ISBN and faster scan path)
