@@ -27,6 +27,9 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipLlm,
     [string]$LlmModel = "mistral",
+    # Phase 15.7: vision model (qwen2.5vl:3b) is pulled by default with Ollama.
+    [switch]$SkipVision,
+    [string]$VisionModel = "qwen2.5vl:3b",
     [switch]$SkipPostgres,
     [string]$PostgresSuperPassword = "",
     [string]$AdminUser = "",
@@ -444,11 +447,17 @@ if (Test-Path $envPath) {
 
 # 6) Local LLM (Ollama) — optional, never fails the ERP install -------------
 $global:TeyssirLlmReady = $false
+$global:TeyssirVisionModelReady = $false
 if (-not $SkipLlm) {
-    Write-Host "Setting up local LLM (Ollama) ..."
+    Write-Host "Setting up local LLM (Ollama + vision for bookscan) ..."
     $llmScript = Join-Path $PSScriptRoot "Install-LocalLlm.ps1"
     try {
-        & $llmScript -Model $LlmModel
+        if ($SkipVision) {
+            & $llmScript -Model $LlmModel -VisionModel $VisionModel -SkipVision
+        }
+        else {
+            & $llmScript -Model $LlmModel -VisionModel $VisionModel
+        }
     }
     catch {
         Write-Warning ("Local LLM setup skipped: " + $_.Exception.Message)
@@ -464,6 +473,11 @@ if (Test-Path $envPath) {
     Set-DotEnvValue $envPath "LLM_PROVIDER" "ollama"
     Set-DotEnvValue $envPath "LLM_MODEL" $LlmModel
     Set-DotEnvValue $envPath "TEYSSIR_OLLAMA_URL" "http://127.0.0.1:11434"
+    # Keep day-to-day OCR on Tesseract; Vision is gated fallback (needs model on disk).
+    Set-DotEnvValue $envPath "TEYSSIR_VISION_MODEL" $VisionModel
+    if (-not $SkipVision) {
+        Set-DotEnvValue $envPath "TEYSSIR_OCR_VISION_FALLBACK" "true"
+    }
 }
 
 # 7) First administrator (idempotent) ---------------------------------------
@@ -586,7 +600,15 @@ if ($global:TeyssirLlmReady) {
     $modelNote = $LlmModel
     if ($global:TeyssirLlmModelReady) { $modelNote = "$LlmModel (downloaded)" }
     Write-Host ("Local AI:            Ollama ready · " + $modelNote)
-    Write-Host "  Vision OCR model is NOT pulled by default (large). See docs/LOCAL-AI.md (-PullVision)."
+    if ($global:TeyssirVisionModelReady) {
+        Write-Host ("  Vision (bookscan):  " + $VisionModel + " ready — gated fallback. See docs/LOCAL-AI.md")
+    }
+    elseif ($SkipVision) {
+        Write-Host ("  Vision (bookscan):  skipped (-SkipVision). Pull later: ollama pull " + $VisionModel)
+    }
+    else {
+        Write-Host ("  Vision (bookscan):  not on disk yet — retry Install-LocalLlm.ps1 or ollama pull " + $VisionModel)
+    }
 }
 else {
     Write-Host "Local AI:            not active (ERP works without it). See docs/LOCAL-AI.md"

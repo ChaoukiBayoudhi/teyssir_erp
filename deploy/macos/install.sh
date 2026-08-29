@@ -7,8 +7,10 @@
 #          --hub-url http://teyssir-hub.local:8000 --sync-key <hub-key>
 #     bash deploy/macos/install.sh --role till --printer tcp:192.168.1.100:9100 ...
 #     bash deploy/macos/install.sh --role till --discover-printer ...
+#     bash deploy/macos/install.sh --role hub --skip-vision   # omit qwen2.5vl pull
 #
 #  Safe to re-run. Registers LaunchAgent com.teyssir.backend + Desktop app.
+#  Phase 15.7: auto-pulls vision model for bookscan when Ollama is available.
 # ============================================================
 set -euo pipefail
 
@@ -16,6 +18,8 @@ ROLE="till"; TERMINAL="C1"; STORE=""; HUB_URL="http://teyssir-hub.local:8000"
 SYNC_KEY=""; SKIP_BUILD=0; SKIP_SERVICE=0; SKIP_SHORTCUT=0; SKIP_ADMIN=0
 ADMIN_USER=""; ADMIN_PASSWORD=""
 PRINTER=""; DISCOVER_PRINTER=0
+SKIP_VISION=0
+VISION_MODEL="${TEYSSIR_VISION_MODEL:-qwen2.5vl:3b}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --role) ROLE="$2"; shift 2;;
@@ -31,6 +35,8 @@ while [ $# -gt 0 ]; do
     --skip-admin) SKIP_ADMIN=1; shift;;
     --admin-user) ADMIN_USER="$2"; shift 2;;
     --admin-password) ADMIN_PASSWORD="$2"; shift 2;;
+    --skip-vision) SKIP_VISION=1; shift;;
+    --vision-model) VISION_MODEL="$2"; shift 2;;
     *) echo "Unknown option: $1"; exit 1;;
   esac
 done
@@ -117,12 +123,56 @@ else
   echo "WARNING: Tesseract not found — book OCR will fall back to manual/vision."
 fi
 
-# 2b2) Optional Ollama vision model hint (Phase 15.4 — not pulled by default)
-if command -v ollama >/dev/null 2>&1; then
-  echo "Ollama found. For bookscan Vision fallback (dual-image): ollama pull qwen2.5vl:3b"
-  echo "  Docs: docs/LOCAL-AI.md — keep TEYSSIR_OCR_PROVIDER=tesseract for day-to-day."
+# 2b2) Ollama + vision model for bookscan (Phase 15.7 — auto-pull, never abort)
+ensure_ollama_vision() {
+  local ollama_bin=""
+  if command -v ollama >/dev/null 2>&1; then
+    ollama_bin="$(command -v ollama)"
+  elif [ -x "/Applications/Ollama.app/Contents/Resources/ollama" ]; then
+    ollama_bin="/Applications/Ollama.app/Contents/Resources/ollama"
+  fi
+
+  if [ -z "$ollama_bin" ] && command -v brew >/dev/null 2>&1; then
+    echo "Installing Ollama (Homebrew, optional — bookscan Vision) ..."
+    brew install ollama >/dev/null 2>&1 || true
+    if command -v ollama >/dev/null 2>&1; then
+      ollama_bin="$(command -v ollama)"
+    fi
+  fi
+
+  if [ -z "$ollama_bin" ]; then
+    echo "Optional: brew install ollama && ollama pull ${VISION_MODEL} for Vision book analysis."
+    echo "  Docs: docs/LOCAL-AI.md — keep TEYSSIR_OCR_PROVIDER=tesseract for day-to-day."
+    return 0
+  fi
+
+  echo "Ollama: $ollama_bin"
+  # Best-effort start (app or serve); ignore failures — pull may still work if already up.
+  if ! curl -sf --max-time 2 "http://127.0.0.1:11434/api/tags" >/dev/null 2>&1; then
+    if [ -d "/Applications/Ollama.app" ]; then
+      open -a Ollama >/dev/null 2>&1 || true
+    else
+      ("$ollama_bin" serve >/dev/null 2>&1 &) || true
+    fi
+    for _i in 1 2 3 4 5 6 7 8 9 10; do
+      curl -sf --max-time 2 "http://127.0.0.1:11434/api/tags" >/dev/null 2>&1 && break
+      sleep 1
+    done
+  fi
+
+  echo "Pulling vision model ${VISION_MODEL} for bookscan (offline, ~2 GB) ..."
+  if "$ollama_bin" pull "$VISION_MODEL"; then
+    echo "Vision model ${VISION_MODEL} ready."
+  else
+    echo "WARNING: ollama pull ${VISION_MODEL} failed — bookscan keeps Tesseract only."
+    echo "  Retry: ollama pull ${VISION_MODEL}"
+  fi
+}
+
+if [ "$SKIP_VISION" -eq 1 ]; then
+  echo "Skipping vision model (--skip-vision). Later: ollama pull ${VISION_MODEL}"
 else
-  echo "Optional: brew install ollama && ollama pull qwen2.5vl:3b for Vision book analysis."
+  ensure_ollama_vision || true
 fi
 
 # 2c) zbar (libzbar) for ISBN barcode decode via pyzbar ---------------------
@@ -156,6 +206,8 @@ if [ ! -f ".env" ]; then
     echo "WARNING: No --sync-key given. A random key was generated — this till cannot sync until TEYSSIR_SYNC_KEY matches the Hub."
   fi
   PCNAME="$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
+  VISION_FALLBACK_VAL="true"
+  [ "$SKIP_VISION" -eq 1 ] && VISION_FALLBACK_VAL="false"
   if [ "$ROLE" = "hub" ]; then
     cat > .env <<EOF
 TEYSSIR_ROLE=hub
@@ -164,6 +216,8 @@ TEYSSIR_DB=sqlite
 TEYSSIR_SCAN_EXECUTOR=thread
 TEYSSIR_OCR_PROVIDER=tesseract
 TEYSSIR_TESSERACT_CMD=${TESS_CMD:-/opt/homebrew/bin/tesseract}
+TEYSSIR_VISION_MODEL=$VISION_MODEL
+TEYSSIR_OCR_VISION_FALLBACK=$VISION_FALLBACK_VAL
 TEYSSIR_SYNC_KEY=$SYNC_KEY
 DEBUG=0
 SECRET_KEY=$SECRET
@@ -181,6 +235,8 @@ TEYSSIR_DB=sqlite
 TEYSSIR_SCAN_EXECUTOR=thread
 TEYSSIR_OCR_PROVIDER=tesseract
 TEYSSIR_TESSERACT_CMD=${TESS_CMD:-/opt/homebrew/bin/tesseract}
+TEYSSIR_VISION_MODEL=$VISION_MODEL
+TEYSSIR_OCR_VISION_FALLBACK=$VISION_FALLBACK_VAL
 DEBUG=0
 SECRET_KEY=$SECRET
 TEYSSIR_ALLOWED_HOSTS=localhost,127.0.0.1
@@ -224,6 +280,12 @@ else
       fi
     fi
   fi
+fi
+
+# Persist Vision model for gated bookscan fallback (re-run safe).
+set_env_value TEYSSIR_VISION_MODEL "$VISION_MODEL"
+if [ "$SKIP_VISION" -eq 0 ]; then
+  set_env_value TEYSSIR_OCR_VISION_FALLBACK "true"
 fi
 
 # 4b) Receipt printer (client LAN — never assume a fixed shop IP) ------------

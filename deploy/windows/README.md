@@ -13,7 +13,7 @@ Scripts to install and run Teyssir on the client's Windows PCs (1 Hub + up to 3 
 | `serve.py` | Service entry: migrate + waitress (not `runserver`). |
 | `uninstall.ps1` | Remove service, shortcut, scheduled tasks (keeps data). |
 | `Install-Postgres.ps1` | Silent PostgreSQL + `teyssir` database (hub only; SQLite fallback). |
-| `Install-LocalLlm.ps1` | Silent Ollama install (never fails the ERP). |
+| `Install-LocalLlm.ps1` | Silent Ollama install + text/vision pulls (never fails the ERP). |
 | `start-teyssir.bat` | Manual windowed server **if** the service is not running. |
 | `register-autostart.ps1` | Till sync schedule; logon fallback only if the service is missing. |
 | `sync-now.bat` | Till → hub reconcile. |

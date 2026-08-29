@@ -15,7 +15,9 @@ Hub SQLite fallback, and Till SQLite.
 - **Fallback:** If PostgreSQL install, role creation, or `migrate` fails, the Hub switches to SQLite and continues.
 - **Secrets:** Passwords and `SECRET_KEY` / `TEYSSIR_SYNC_KEY` are generated into `.env` (UTF-8, no BOM). Nothing is hardcoded in the repo.
 - **Seeds:** `seed_rbac` and `seed_fiscal` are idempotent (`get_or_create` / `permissions.set`).
-- **LLM:** Ollama is optional; failure never aborts the ERP. Default pull is the **text** model (`mistral`), not vision.
+- **LLM:** Ollama is optional; failure never aborts the ERP. Default pulls are the **text**
+  model (`mistral`) **and** the bookscan **vision** model (`qwen2.5vl:3b`); use `-SkipVision`
+  / `--skip-vision` to omit the ~2 GB vision download.
 - **Idempotency (script):** Re-run reuses `.venv`, does not clobber secrets, skips admin if a superuser exists, reuses an already-reachable `teyssir` database, `CREATE ROLE/DATABASE` only if missing.
 - **Start path:** `start-teyssir.bat` runs `migrate` then waitress on `:8000`. Health URL is documented.
 - **Docs present:** `README.md`, `docs/INSTALL-WINDOWS.md`, `docs/ARCHITECTURE.md`, `docs/POSTGRESQL-SETUP.md`, `docs/LOCAL-AI.md`, `docs/PDF-CONVERSION.md`, `docs/AUDIT-REPORT-2026-07-28.md`, `docs/BOOK-OCR-ARCHITECTURE.md`.
@@ -33,7 +35,7 @@ Hub SQLite fallback, and Till SQLite.
 | `createsuperuser` always interactive | Second run blocked / extra users | Skip if a superuser exists; `-AdminUser` / `-AdminPassword` |
 | Firewall port 8000 only in the guide | Tills could not reach Hub | Best-effort `New-NetFirewallRule` on Hub |
 | Backup chapter only mentioned SQLite files | Wrong backup for production Hub | `pg_dump` documented |
-| Vision OCR described as auto-installed | Surprise ~2 GB download missing | Docs: text model only; `-PullVision` for vision |
+| Vision OCR described as missing by default | Operators miss gated bookscan fallback | Phase 15.7: auto-pull `qwen2.5vl:3b`; `-SkipVision` documented |
 | README said **102** tests | Stale | **125** |
 | Till `.env` example omitted `TEYSSIR_DB=sqlite` | Inconsistency | Added |
 
@@ -49,7 +51,7 @@ Hub SQLite fallback, and Till SQLite.
 | `frontend\dist` missing and Node install fails | API starts; UI missing — warning printed |
 | Interactive admin prompt if no `-AdminUser` | Expected for a first human install; use flags for unattended |
 | Installer does **not** start waitress itself | Prevents a blocking window inside the installer; `start-teyssir.bat` is the documented next step |
-| Vision OCR still manual | Avoids a huge default download on a till PC |
+| Vision OCR still large (~2 GB) | Default auto-pull on Hub; use `-SkipVision` on thin tills |
 
 ---
 
@@ -79,4 +81,5 @@ On a machine with PostgreSQL 17: `TEYSSIR_ROLE=hub` `TEYSSIR_DB=postgres` → `m
 6. Each till: `.\deploy\windows\install.ps1 -Role till -Terminal C1 -HubUrl http://<hub>:8000 -SyncKey <key>` then `start-teyssir.bat`.
 7. Optional: `.\deploy\windows\register-autostart.ps1 -Role hub` (or `-Role till -SyncMinutes 5`).
 
-No other hidden steps are required for POS + sync. OCR vision, Tesseract language packs, and cloud-hub URLs remain optional.
+No other hidden steps are required for POS + sync. Vision weights are pulled with Ollama by
+default (opt out `-SkipVision`). Tesseract language packs and cloud-hub URLs remain optional.

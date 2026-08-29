@@ -287,11 +287,15 @@ suffit pour l'essentiel des données de gestion.
 <summary><b>AI Setup (Automatic) — Ollama local</b></summary>
 
 L'installateur Windows (`install.ps1`) **essaie** d'installer **Ollama** en silence, de démarrer
-le service (`http://localhost:11434`) et de télécharger le modèle par défaut (**mistral**).
+le service (`http://localhost:11434`) et de télécharger le modèle texte (**mistral**) **et**
+le modèle vision bookscan (**`qwen2.5vl:3b`**, Phase 15.7).
 
-- Aucun cloud : tout tourne sur le PC Hub / caisse.
-- Si Ollama ou le modèle échoue, **Teyssir s'installe quand même** (caisse, stock, livres).
-- Options : `-LlmModel llama3` ou `-SkipLlm`.
+- Aucun cloud : tout tourne sur le PC Hub / caisse (hors-ligne après le pull).
+- Si Ollama ou un modèle échoue, **Teyssir s'installe quand même** (caisse, stock, livres).
+- Options : `-LlmModel llama3`, `-VisionModel qwen2.5vl:3b`, `-SkipVision` (pas de ~2 Go vision),
+  `-SkipLlm` (pas d'Ollama).
+- Première analyse Vision (cold start CPU) : souvent **20–90 s** — gardez
+  `TEYSSIR_SCAN_EXECUTOR=thread`. GPU / Metal accélère ensuite.
 - Vérification : `ollama --version`, `ollama list`,
   `.\.venv\Scripts\python.exe manage.py check_llm --ping`.
 - Guide : [LOCAL-AI.md](LOCAL-AI.md).
@@ -317,12 +321,15 @@ Deux moteurs **gratuits** sont disponibles :
   `TEYSSIR_OCR_PROVIDER=tesseract` et
   `TEYSSIR_TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe`.
 - **Vision-LLM** (extraction structurée multilingue, hors-ligne) : Ollama est installé
-  automatiquement **si possible**, avec le modèle **texte** `mistral`. Le modèle **vision**
-  (`qwen2.5vl:3b`, CPU-friendly) **n'est pas** téléchargé par défaut. Pour le fallback
-  bookscan (Phase 15.4, une requête front+verso) :
-  `.\deploy\windows\Install-LocalLlm.ps1 -Model mistral -PullVision`.
-  Gardez `TEYSSIR_OCR_PROVIDER=tesseract` (Vision = couche 2). Option primaire :
-  `TEYSSIR_OCR_PROVIDER=vision` + `TEYSSIR_SCAN_EXECUTOR=thread`. Voir `docs/LOCAL-AI.md`.
+  automatiquement **si possible**, avec le modèle **texte** `mistral` **et** le modèle
+  **vision** `qwen2.5vl:3b` (CPU-friendly, Phase 15.7). Pour omettre le téléchargement vision
+  (~2 Go) : `install.ps1 -SkipVision` ou
+  `.\deploy\windows\Install-LocalLlm.ps1 -Model mistral -SkipVision`.
+  Gardez `TEYSSIR_OCR_PROVIDER=tesseract` (Vision = couche 2 / fallback). Option primaire :
+  `TEYSSIR_OCR_PROVIDER=vision` + `TEYSSIR_SCAN_EXECUTOR=thread`. Variable :
+  `TEYSSIR_VISION_MODEL`. Voir `docs/LOCAL-AI.md`.
+- **Caméra bas de gamme (ex. XTRIKE ME XPC01)** : flou / bruit attendus — le fallback Vision
+  (front+verso) complète Tess ; toujours relire le brouillon (ISBN / prix).
 - **ISBN / code-barres** : `pyzbar` (dans `requirements.txt`) a besoin de **libzbar**.
   Sur Windows, placez `libzbar-64.dll` sur le `PATH` du service (ou à côté de Python),
   ou comptez sur la détection client `BarcodeDetector` + OCR chiffres. Sans DLL, le
@@ -330,8 +337,9 @@ Deux moteurs **gratuits** sont disponibles :
 
 - **Vision fallback (2E / 15.4)** : avec `TEYSSIR_OCR_PROVIDER=tesseract`, Ollama Vision
   (dual-image front+back, `qwen2.5vl:3b`) ne tourne que si le titre/barcode Tess est faible
-  (calligraphie arabe, photo téléphone sans code-barres, titre « garbage »). Description
-  2–4 phrases auto-remplie. ISBN Vision refusé sans checksum ; jamais de `barcode_*` inventé.
+  (calligraphie arabe, photo téléphone / webcam XTRIKE sans code-barres, titre « garbage »).
+  Description 2–4 phrases auto-remplie. ISBN Vision refusé sans checksum ; jamais de
+  `barcode_*` inventé. Cold start CPU lent → `TEYSSIR_SCAN_EXECUTOR=thread`.
   Voir `docs/LOCAL-AI.md`.
 - **Régression books_photos (2F)** : placez les photos dans `books_photos\`, puis :
 

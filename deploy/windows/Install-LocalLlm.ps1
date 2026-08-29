@@ -2,8 +2,12 @@
     Teyssir — local LLM (Ollama) helper for Windows Hub/tills.
     Called by install.ps1. Never throws: the ERP must install even if AI setup fails.
 
+    Phase 15.7: pulls the bookscan vision model (qwen2.5vl:3b) by default after the
+    text model, so gated Vision fallback works offline. Use -SkipVision to omit.
+
     Usage:
         .\deploy\windows\Install-LocalLlm.ps1 -Model mistral
+        .\deploy\windows\Install-LocalLlm.ps1 -Model mistral -SkipVision
         .\deploy\windows\Install-LocalLlm.ps1 -SkipPull
 #>
 [CmdletBinding()]
@@ -11,6 +15,9 @@ param(
     [string]$Model = "mistral",
     [string]$OllamaUrl = "http://127.0.0.1:11434",
     [switch]$SkipPull,
+    # Opt out of vision pull (default is auto-pull for bookscan).
+    [switch]$SkipVision,
+    # Kept for callers/docs that pass -PullVision explicitly (now the default).
     [switch]$PullVision,
     [string]$VisionModel = "qwen2.5vl:3b"
 )
@@ -18,6 +25,7 @@ param(
 $ErrorActionPreference = "Continue"
 $script:LlmReady = $false
 $script:ModelReady = $false
+$script:VisionReady = $false
 
 function Write-Llm([string]$Message, [string]$Color = "Gray") {
     Write-Host "  [LLM] $Message" -ForegroundColor $Color
@@ -122,7 +130,26 @@ function Start-OllamaService {
     return $false
 }
 
-# --- main (install + start only; pull is a separate step in later revisions) ---
+function Pull-OllamaModel {
+    param([string]$Name, [string]$Kind = "model")
+    if (-not $Name) { return $false }
+    Write-Llm ("Ensuring $Kind '$Name' (ollama pull) ...") "Yellow"
+    try {
+        & (Get-OllamaExe) pull $Name
+        if ($LASTEXITCODE -eq 0) {
+            Write-Llm "$Kind $Name is available." "Green"
+            return $true
+        }
+        Write-Llm ("ollama pull $Name exited " + $LASTEXITCODE + " — continuing without it.") "Yellow"
+        return $false
+    }
+    catch {
+        Write-Llm ("$Kind pull skipped: " + $_.Exception.Message) "Yellow"
+        return $false
+    }
+}
+
+# --- main -------------------------------------------------------------------
 try {
     if (-not (Install-OllamaSilent)) {
         Write-Llm "Ollama is not available. Teyssir will run without local AI." "Yellow"
@@ -139,25 +166,24 @@ try {
         Write-Llm "Ollama API did not respond on $OllamaUrl — ERP continues without AI." "Yellow"
     }
 
-    if ($script:LlmReady -and -not $SkipPull -and $Model) {
-        Write-Llm ("Ensuring model '$Model' (ollama pull) ...") "Yellow"
-        try {
-            & (Get-OllamaExe) pull $Model
-            if ($LASTEXITCODE -eq 0) {
-                $script:ModelReady = $true
-                Write-Llm "Model $Model is available." "Green"
+    if ($script:LlmReady -and -not $SkipPull) {
+        if ($Model) {
+            $script:ModelReady = Pull-OllamaModel -Name $Model -Kind "text model"
+        }
+
+        # Phase 15.7: auto-pull vision for bookscan gated fallback (CPU-friendly 3B).
+        # -SkipVision opts out; -PullVision is a no-op synonym (pull is already default).
+        if ($SkipVision) {
+            Write-Llm "Skipping vision model (-SkipVision). Bookscan Vision fallback needs: ollama pull $VisionModel" "Gray"
+        }
+        elseif ($VisionModel) {
+            $null = $PullVision  # accepted for backward-compatible callers
+            $script:VisionReady = Pull-OllamaModel -Name $VisionModel -Kind "vision model"
+            if (-not $script:VisionReady) {
+                Write-Llm "Vision pull failed — bookscan keeps Tesseract; retry: Install-LocalLlm.ps1 (no -SkipVision)." "Yellow"
             }
-            else {
-                Write-Llm ("ollama pull $Model exited " + $LASTEXITCODE + " — continuing without it.") "Yellow"
-            }
         }
-        catch {
-            Write-Llm ("Model pull skipped: " + $_.Exception.Message) "Yellow"
-        }
-        if ($PullVision -and $VisionModel) {
-            Write-Llm ("Optional vision model '$VisionModel' ...") "Yellow"
-            try { & (Get-OllamaExe) pull $VisionModel } catch { Write-Llm $_.Exception.Message "Yellow" }
-        }
+
         if ($script:ModelReady) {
             try {
                 $body = @{ model = $Model; prompt = "Reply with the single word: pong"; stream = $false } | ConvertTo-Json
@@ -182,3 +208,5 @@ catch {
 $global:TeyssirLlmReady = [bool]$script:LlmReady
 $global:TeyssirLlmModelReady = [bool]$script:ModelReady
 $global:TeyssirLlmModel = $Model
+$global:TeyssirVisionModelReady = [bool]$script:VisionReady
+$global:TeyssirVisionModel = $VisionModel
