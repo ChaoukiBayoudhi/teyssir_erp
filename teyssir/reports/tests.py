@@ -52,7 +52,33 @@ class SalesReportTests(TestCase):
         c.force_authenticate(boss)
         r = c.get(f"/api/v1/reports/sales?from={self.today}&to={self.today}")
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()["gross_profit"], "2.250")
+        body = r.json()
+        self.assertEqual(body["gross_profit"], "2.250")
+        self.assertIn("series", body)
+        self.assertEqual(len(body["series"]), 1)
+        self.assertEqual(body["series"][0]["sales_count"], 2)
+        self.assertIn("category_mix", body)
+        self.assertIn("filter_options", body)
+
+    def test_payment_and_product_type_filters(self):
+        book = Product.objects.create(
+            sku="BK1", name_fr="Cahier", tax_rate=self.product.tax_rate,
+            sale_price=Decimal("5.000"), product_type=Product.BOOK, is_book=True,
+        )
+        receive_goods(product_id=book.id, qty=10, unit_cost=Decimal("2.000"))
+        sale = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
+        SaleLine.objects.create(sale=sale, product=book, qty=Decimal("1"),
+                                unit_price=Decimal("5.000"), tax_rate=Decimal("7.00"))
+        finalize_sale(sale, payment_method="CARD")
+
+        cash_only = sales_report(self.today, self.today, payment_method="CASH")
+        self.assertEqual(cash_only["sales_count"], 2)
+        self.assertEqual(cash_only["payment_mix"][0]["method"], "CASH")
+
+        books = sales_report(self.today, self.today, product_type="book")
+        self.assertEqual(books["sales_count"], 1)
+        self.assertEqual(books["best_sellers"][0]["sku"], "BK1")
+        self.assertTrue(any(c["product_type"] == "book" for c in books["category_mix"]))
 
 
 class ConsolidatedReportTests(TestCase):

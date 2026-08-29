@@ -672,7 +672,11 @@ class ReturnView(APIView):
 
 
 class SalesReportView(APIView):
-    """GET /api/v1/reports/sales?from=YYYY-MM-DD&to=YYYY-MM-DD (spec §15)."""
+    """GET /api/v1/reports/sales?from=YYYY-MM-DD&to=YYYY-MM-DD (spec §15).
+
+    Optional filters: store, payment, product_type (book|furniture), terminal.
+    Response is additive: existing KPI keys unchanged; series / category_mix / etc. appended.
+    """
 
     permission_classes = [CanViewReports]
 
@@ -682,8 +686,18 @@ class SalesReportView(APIView):
         if not date_from or not date_to:
             return Response({"detail": "from and to (YYYY-MM-DD) are required."},
                             status=status.HTTP_400_BAD_REQUEST)
-        store = request.query_params.get("store")        # Phase 6: optional per-store slice
-        return Response(sales_report(date_from, date_to, store=store))
+        store = request.query_params.get("store") or None
+        payment = request.query_params.get("payment") or None
+        product_type = request.query_params.get("product_type") or None
+        terminal = request.query_params.get("terminal") or None
+        if product_type and product_type not in ("book", "furniture"):
+            return Response({"detail": "product_type must be book or furniture."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        return Response(sales_report(
+            date_from, date_to,
+            store=store, payment_method=payment,
+            product_type=product_type, terminal=terminal,
+        ))
 
 
 class ConsolidatedReportView(APIView):

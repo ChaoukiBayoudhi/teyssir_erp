@@ -133,8 +133,13 @@ export const createQuotation = (payload) =>
 export const convertQuotation = (id, payment_method) =>
   request(`/quotations/${id}/convert`, { method: "POST", body: { payment_method } });
 
-export const salesReport = (from, to) =>
-  request(`/reports/sales?from=${from}&to=${to}`);
+export const salesReport = (from, to, filters = {}) => {
+  const q = new URLSearchParams({ from, to });
+  Object.entries(filters).forEach(([k, v]) => {
+    if (v != null && String(v).trim() !== "") q.set(k, v);
+  });
+  return request(`/reports/sales?${q}`);
+};
 export const trialBalance = () => request("/reports/trial-balance");
 export const financials = () => request("/reports/financials");
 export const vatDeclaration = (from, to) => request(`/reports/vat?from=${from}&to=${to}`);
