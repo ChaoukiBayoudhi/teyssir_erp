@@ -531,7 +531,15 @@ def _maybe_vision_draft(image_paths, ocr_draft) -> BookDraft | None:
     )
     # Budget: Arabic/calligraphy up to ~1.5× base, always ≤ VISION_TIMEOUT.
     # Dual-image uses the same budget (one call, not two sequential).
-    timeout = min(base_timeout * (1.5 if arabic_hard else 1.0), hard_cap)
+    # Phase 15.6 accuracy mode: slightly longer soft/hard budgets (never infinite).
+    accuracy = bool(getattr(settings, "BOOKSCAN_ACCURACY", False))
+    if accuracy:
+        mult = 1.75 if arabic_hard else 1.25
+        cap = min(hard_cap * 1.2, hard_cap + 15.0)
+    else:
+        mult = 1.5 if arabic_hard else 1.0
+        cap = hard_cap
+    timeout = min(base_timeout * mult, cap)
     front = image_paths[0]
     back = image_paths[1] if len(image_paths) > 1 else None
 

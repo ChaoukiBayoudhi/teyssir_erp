@@ -38,6 +38,14 @@ _PROBE_MAX_EDGE = 800
 _BARCODE_MIN_EDGE = 900
 # Compact CNP stickers need a stronger upscale than wide price bands.
 _STICKER_MIN_EDGE = 1400
+# Phase 15.6: hard cap on extra title_band variants when TEYSSIR_BOOKSCAN_ACCURACY=1
+# (denoise / sharpen / alt-threshold only — never restore region×rotation explosion).
+_ACCURACY_TITLE_EXTRA_MAX = 3
+
+
+def bookscan_accuracy_enabled() -> bool:
+    """True when ``TEYSSIR_BOOKSCAN_ACCURACY`` / settings.BOOKSCAN_ACCURACY is on."""
+    return bool(getattr(settings, "BOOKSCAN_ACCURACY", False))
 
 
 def configure_tesseract(pytesseract) -> str | None:
@@ -718,6 +726,9 @@ def _preprocess_variants(
 
     Prefer ``title_band`` / ``price_band`` / ``barcode_band`` from preprocess ROIs.
     Title crops downscale to ~1200px; barcode/price bands upscale only.
+
+    Phase 15.6: when ``BOOKSCAN_ACCURACY`` is on, add ≤3 extra title_band variants
+    (denoise / sharpen / alt-threshold). Never expands barcode/price/rotation fan-out.
     """
     from PIL import Image, ImageEnhance, ImageOps, ImageFilter
 
@@ -807,6 +818,26 @@ def _preprocess_variants(
         except Exception:
             return g.point(lambda x: 255 if x > 140 else 0).convert("RGB")
 
+    def _title_accuracy_extras(im):
+        """Phase 15.6: ≤3 denoise/sharpen/alt-threshold crops on title_band only."""
+        base = _downscale_max_edge(im, _TITLE_MAX_EDGE)
+        g = ImageOps.autocontrast(ImageOps.grayscale(base))
+
+        # Stronger denoise for grainy XPC01 covers (Median 5 vs default 3).
+        den = g.filter(ImageFilter.MedianFilter(size=5))
+        den = ImageEnhance.Contrast(den).enhance(1.9)
+        den = ImageEnhance.Sharpness(den).enhance(1.2)
+        yield "title_acc_denoise", den.convert("RGB")
+
+        # Aggressive sharpen — helps soft webcam focus without new ROIs.
+        sharp = ImageEnhance.Contrast(g).enhance(2.3)
+        sharp = ImageEnhance.Sharpness(sharp).enhance(2.6)
+        yield "title_acc_sharp", sharp.convert("RGB")
+
+        # Alternate fixed threshold (distinct from Otsu title_thr).
+        thr = g.point(lambda x: 255 if x > 118 else 0).convert("RGB")
+        yield "title_acc_thr", thr
+
     def _band_up(im, *, threshold=False, min_edge: int | None = None):
         im = _upscale_min_edge(im, min_edge or _BARCODE_MIN_EDGE)
         g = ImageOps.autocontrast(ImageOps.grayscale(im))
@@ -820,6 +851,13 @@ def _preprocess_variants(
     yield "title_thr", _title_thr(crop)
     if role == "front":
         yield "title_color", _title_prep(crop, color=True)
+
+    # Phase 15.6 accuracy mode: tightly capped extras on title_band only.
+    if bookscan_accuracy_enabled():
+        for i, (lab, im) in enumerate(_title_accuracy_extras(crop)):
+            if i >= _ACCURACY_TITLE_EXTRA_MAX:
+                break
+            yield lab, im
 
     def _yield_sticker_price():
         """Compact CNP/PVP white sticker first — avoids barcode digit bleed on price."""
