@@ -2270,9 +2270,20 @@ class BookScanRegressionFixtureTests(unittest.TestCase):
         if not d.is_dir():
             self.skipTest("fixtures/bookscan/expected missing")
         fxs = load_all_fixtures(d)
-        self.assertGreaterEqual(len(fxs), 4)
+        self.assertGreaterEqual(len(fxs), 7)
         ids = {f["id"] for f in fxs}
-        self.assertTrue({"A_beauty", "B_premier", "C_history_cnp", "D_math_cnp"} <= ids)
+        self.assertTrue(
+            {
+                "A_beauty",
+                "B_premier",
+                "B_blur",
+                "C_history_cnp",
+                "D_math_cnp",
+                "E_french",
+                "F_mixed",
+            }
+            <= ids
+        )
         for fx in fxs:
             self.assertIn("expect", fx)
             self.assertIn("honesty", fx)

@@ -1,0 +1,254 @@
+{
+  "vision": true,
+  "honesty_only": false,
+  "photos": "/Users/chaoukibayoudhi/Documents/My_society/teyssir_erp_bookocr/books_photos",
+  "fixtures": "/Users/chaoukibayoudhi/Documents/My_society/teyssir_erp_bookocr/fixtures/bookscan/expected",
+  "results": [
+    {
+      "id": "B_blur",
+      "label": "Phase 15 Case B — Blurred/downscaled Premier (XTRIKE soft-focus sim)",
+      "ok": true,
+      "ms": 69893.9,
+      "skipped": false,
+      "skip_reason": "",
+      "images": [
+        "B_blur_premier_front.jpg",
+        "B_blur_premier_back.jpg"
+      ],
+      "draft": {
+        "title": "",
+        "languages": [
+          "fr",
+          "en"
+        ],
+        "isbn13": "",
+        "barcode_raw": "",
+        "barcode_kind": "",
+        "price": "",
+        "confidence": 0.1,
+        "source": "tesseract",
+        "raw": {
+          "isbn_from_barcode": null,
+          "isbn_from_digit_ocr": null,
+          "isbn_digit_ocr_confirmed": null,
+          "ocr_garbage_latin": true,
+          "ocr_garbage_arabic": null,
+          "ocr_title_unusable": true,
+          "vision_fallback": null
+        }
+      },
+      "checks": [
+        {
+          "ok": true,
+          "code": "isbn13_banned_prefix",
+          "detail": "ok vs 619"
+        },
+        {
+          "ok": true,
+          "code": "isbn13_checksum",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "digit_ocr_confidence",
+          "detail": "n/a"
+        },
+        {
+          "ok": true,
+          "code": "confidence_honesty",
+          "detail": "conf=0.1 strong=False"
+        },
+        {
+          "ok": true,
+          "code": "title_contains",
+          "detail": "miss allowed ('')"
+        },
+        {
+          "ok": true,
+          "code": "languages",
+          "detail": "['fr', 'en']"
+        },
+        {
+          "ok": true,
+          "code": "isbn13",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "barcode_raw",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "price",
+          "detail": "empty"
+        }
+      ]
+    },
+    {
+      "id": "E_french",
+      "label": "Phase 15 Case E — French (Mathématiques CNP, overlaps D)",
+      "ok": true,
+      "ms": 124185.6,
+      "skipped": false,
+      "skip_reason": "",
+      "images": [
+        "Photo on 25-8-2026 at 12.41 PM #2.jpg",
+        "Photo on 25-8-2026 at 12.42 PM.jpg"
+      ],
+      "draft": {
+        "title": "Mathématiques",
+        "languages": [
+          "fr"
+        ],
+        "isbn13": "",
+        "barcode_raw": "",
+        "barcode_kind": "",
+        "price": "4.200",
+        "confidence": 0.55,
+        "source": "tesseract",
+        "raw": {
+          "isbn_from_barcode": null,
+          "isbn_from_digit_ocr": null,
+          "isbn_digit_ocr_confirmed": null,
+          "ocr_garbage_latin": null,
+          "ocr_garbage_arabic": null,
+          "ocr_title_unusable": null,
+          "vision_fallback": null
+        }
+      },
+      "checks": [
+        {
+          "ok": true,
+          "code": "isbn13_banned_prefix",
+          "detail": "ok vs 619"
+        },
+        {
+          "ok": true,
+          "code": "isbn13_checksum",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "digit_ocr_confidence",
+          "detail": "n/a"
+        },
+        {
+          "ok": true,
+          "code": "confidence_honesty",
+          "detail": "conf=0.55 strong=False"
+        },
+        {
+          "ok": true,
+          "code": "title_contains",
+          "detail": "Mathématiques"
+        },
+        {
+          "ok": true,
+          "code": "languages",
+          "detail": "['fr']"
+        },
+        {
+          "ok": true,
+          "code": "isbn13",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "barcode_raw",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "price",
+          "detail": "4.200"
+        }
+      ]
+    },
+    {
+      "id": "F_mixed",
+      "label": "Phase 15 Case F — Mixed FR+AR (Le premier, overlaps B)",
+      "ok": false,
+      "ms": 87048.2,
+      "skipped": false,
+      "skip_reason": "",
+      "images": [
+        "Photo on 25-8-2026 at 12.40 PM.jpg",
+        "Photo on 25-8-2026 at 12.40 PM #2.jpg"
+      ],
+      "draft": {
+        "title": "",
+        "languages": [
+          "ar",
+          "fr"
+        ],
+        "isbn13": "",
+        "barcode_raw": "",
+        "barcode_kind": "",
+        "price": "5.000",
+        "confidence": 0.15,
+        "source": "tesseract",
+        "raw": {
+          "isbn_from_barcode": null,
+          "isbn_from_digit_ocr": null,
+          "isbn_digit_ocr_confirmed": null,
+          "ocr_garbage_latin": null,
+          "ocr_garbage_arabic": null,
+          "ocr_title_unusable": true,
+          "vision_fallback": null
+        }
+      },
+      "checks": [
+        {
+          "ok": true,
+          "code": "isbn13_banned_prefix",
+          "detail": "ok vs 619"
+        },
+        {
+          "ok": true,
+          "code": "isbn13_checksum",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "digit_ocr_confidence",
+          "detail": "n/a"
+        },
+        {
+          "ok": true,
+          "code": "confidence_honesty",
+          "detail": "conf=0.15 strong=False"
+        },
+        {
+          "ok": true,
+          "code": "title_contains",
+          "detail": "miss allowed ('')"
+        },
+        {
+          "ok": true,
+          "code": "languages",
+          "detail": "['ar', 'fr']"
+        },
+        {
+          "ok": true,
+          "code": "isbn13",
+          "detail": "empty"
+        },
+        {
+          "ok": true,
+          "code": "barcode_raw",
+          "detail": "empty"
+        },
+        {
+          "ok": false,
+          "code": "price",
+          "detail": "want 17.000 got 5.000"
+        }
+      ]
+    }
+  ],
+  "passed": 2,
+  "failed": 1,
+  "skipped": 0,
+  "total_ms": 281127.7
+}

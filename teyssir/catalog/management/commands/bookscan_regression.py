@@ -1,4 +1,4 @@
-"""Run books_photos A–D book-scan regression (Phase 2F).
+"""Run books_photos A–F (+ blur) book-scan regression (Phase 2F / 15).
 
 Examples (repo root)::
 
@@ -7,7 +7,7 @@ Examples (repo root)::
     python manage.py bookscan_regression --vision   # optional Ollama Vision
     python manage.py bookscan_regression --honesty-only
 
-Win11 (PowerShell, Hub)::
+    Win11 (PowerShell, Hub)::
 
     cd C:\\teyssir_erp
     .\\.venv\\Scripts\\Activate.ps1
@@ -30,7 +30,7 @@ from teyssir.catalog.bookscan.regression import (
 
 
 class Command(BaseCommand):
-    help = "Phase 2F: scan books_photos against fixtures/bookscan/expected (offline)."
+    help = "Phase 2F/15: scan books_photos (+ blur images) against fixtures/bookscan/expected."
 
     def add_arguments(self, parser):
         parser.add_argument(

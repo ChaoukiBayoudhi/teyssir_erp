@@ -1,4 +1,4 @@
-"""Phase 2F — books_photos regression helpers (offline Tess, Vision optional)."""
+"""Phase 2F / 15 — books_photos regression helpers (A–F + blur; offline Tess, Vision optional)."""
 from __future__ import annotations
 
 import json
@@ -20,6 +20,11 @@ def repo_root() -> Path:
 
 def fixtures_dir(root: Path | None = None) -> Path:
     return (root or repo_root()) / "fixtures" / "bookscan" / "expected"
+
+
+def fixture_images_dir(root: Path | None = None) -> Path:
+    """Committed synthetic / blur images (Phase 15 Case B)."""
+    return (root or repo_root()) / "fixtures" / "bookscan" / "images"
 
 
 def books_photos_dir(root: Path | None = None) -> Path:
@@ -56,21 +61,55 @@ def find_photo(root: Path, needles: list[str], exclude: list[str] | None = None)
     return None
 
 
+def _resolve_image_spec(
+    fixture_id: str,
+    role: str,
+    spec: dict,
+    photos: Path,
+) -> Path | None:
+    """Resolve one front/back image via explicit ``file`` and/or filename needles."""
+    file_name = (spec.get("file") or "").strip()
+    if file_name:
+        candidates = [
+            fixture_images_dir() / file_name,
+            photos / file_name,
+            Path(file_name),
+        ]
+        for c in candidates:
+            if c.is_file():
+                return c
+        raise FileNotFoundError(
+            f"{fixture_id}: {role} file={file_name!r} not in "
+            f"{fixture_images_dir()} or {photos}"
+        )
+
+    needles = list(spec.get("needles") or [])
+    exclude = list(spec.get("exclude") or [])
+    if not needles:
+        return None
+    # Prefer books_photos, then committed fixture images (blur corpus).
+    for root in (photos, fixture_images_dir()):
+        hit = find_photo(root, needles, exclude)
+        if hit is not None:
+            return hit
+    raise FileNotFoundError(
+        f"{fixture_id}: no photo matching needles={needles} exclude={exclude} "
+        f"in {photos} or {fixture_images_dir()}"
+    )
+
+
 def resolve_fixture_images(fixture: dict, photos_dir: Path | None = None) -> list[Path]:
     photos = photos_dir or books_photos_dir()
     images = fixture.get("images") or {}
     paths: list[Path] = []
+    fid = str(fixture.get("id") or "unknown")
     for role in ("front", "back"):
         spec = images.get(role) or {}
-        needles = list(spec.get("needles") or [])
-        exclude = list(spec.get("exclude") or [])
-        if not needles:
+        if not spec:
             continue
-        hit = find_photo(photos, needles, exclude)
+        hit = _resolve_image_spec(fid, role, spec, photos)
         if hit is None:
-            raise FileNotFoundError(
-                f"{fixture.get('id')}: no photo matching needles={needles} exclude={exclude} in {photos}"
-            )
+            continue
         paths.append(hit)
     return paths
 
