@@ -131,6 +131,7 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
           </Stack>
           {camera && (
             <CameraScanner
+              mode="pos"
               onDetect={onCameraCode}
               onClose={() => setCamera(false)}
             />

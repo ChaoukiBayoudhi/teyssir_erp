@@ -159,32 +159,24 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
     }
   };
 
-  // Camera scan -> same path as the USB reader: barcode lookup, single hit goes into the cart.
+  // Camera scan → barcode lookup (ISBN / EAN / CNP 619 / Code128). No book OCR on Caisse.
   const onCameraCode = async (code) => {
     setError("");
+    const raw = String(code || "").replace(/[-\s]/g, "").trim();
+    if (!raw) return;
     try {
-      const hits = await lookupBarcode(code);
-      if (hits.length === 1) return addToCart(hits[0]);
+      const hits = await lookupBarcode(raw);
+      if (hits.length === 1) {
+        addToCart(hits[0]);
+        setCamera(false); // stop camera after successful add-to-cart
+        return;
+      }
       if (hits.length > 1) {
         setResults(hits);
         setHasSearched(true);
         return;
       }
-      setError(`${t("unknownBarcode")}: ${code}`);
-    } catch (err) {
-      setError(String(err.message || err));
-    }
-  };
-
-  // OCR title fallback from camera Analyser → product name search.
-  const onCameraQuery = async (q) => {
-    setError("");
-    setQuery(q);
-    // Live debounce effect will run; also fetch immediately for OCR latency.
-    try {
-      const hits = await searchProducts(q);
-      setResults(hits);
-      setHasSearched(true);
+      setError(t("unknownProductBarcode", { code: raw }));
     } catch (err) {
       setError(String(err.message || err));
     }
@@ -342,8 +334,8 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
               </Stack>
               {camera && (
                 <CameraScanner
+                  mode="pos"
                   onDetect={onCameraCode}
-                  onQuery={onCameraQuery}
                   onClose={() => setCamera(false)}
                 />
               )}
