@@ -248,6 +248,11 @@ VISION_TIMEOUT = int(os.environ.get("TEYSSIR_VISION_TIMEOUT", "45"))
 VISION_FALLBACK_TIMEOUT = float(os.environ.get("TEYSSIR_VISION_FALLBACK_TIMEOUT", "28"))
 # Max image edge (px) before base64→Ollama; phone photos are huge and starve the timeout budget.
 VISION_IMAGE_MAX_EDGE = int(os.environ.get("TEYSSIR_VISION_IMAGE_MAX_EDGE", "1280"))
+# Phase 15.6: optional accuracy mode for low-quality camera covers (extra title_band
+# Tess variants + slightly longer Vision budget). Default off keeps Phase 2C fast path.
+BOOKSCAN_ACCURACY = os.environ.get("TEYSSIR_BOOKSCAN_ACCURACY", "").strip().lower() in (
+    "1", "true", "yes", "on",
+)
 # Optional text LLM (Ollama). ERP must run when this is false or Ollama is down.
 USE_LLM = os.environ.get("USE_LLM", os.environ.get("TEYSSIR_USE_LLM", "false")).strip().lower() in (
     "1", "true", "yes", "on",

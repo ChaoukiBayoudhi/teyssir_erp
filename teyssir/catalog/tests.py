@@ -985,6 +985,89 @@ class FastOcrPathTests(unittest.TestCase):
         self.assertLessEqual(len(labels), 9)
         self.assertNotIn("lower_rot90", labels)
         self.assertNotIn("calligraphy", labels)
+        # Phase 15.6: default 2C path must not include accuracy extras
+        self.assertFalse(any(l.startswith("title_acc_") for l in labels))
+
+    def test_accuracy_mode_adds_title_variants_only(self):
+        """Phase 15.6: TEYSSIR_BOOKSCAN_ACCURACY adds ≤3 title_band extras; still capped."""
+        import tempfile
+        from django.test import override_settings
+        from teyssir.catalog.bookscan.ocr import _preprocess_variants
+        from teyssir.catalog.bookscan.preprocess import RoiBox, CoverPreprocessResult
+        from PIL import Image
+
+        img = Image.new("RGB", (800, 1000), "white")
+        path = tempfile.mktemp(suffix=".jpg")
+        img.save(path)
+        prep = CoverPreprocessResult(
+            path=path,
+            original_path=path,
+            width=800,
+            height=1000,
+            title_band=RoiBox(40, 40, 760, 320),
+            barcode_band=RoiBox(40, 720, 760, 980),
+            price_band=RoiBox(40, 520, 760, 720),
+            white_label=None,
+            method="test",
+        )
+        with override_settings(BOOKSCAN_ACCURACY=True):
+            labels = [lab for lab, _ in _preprocess_variants(path, role="auto", prepare=prep)]
+        extras = [l for l in labels if l.startswith("title_acc_")]
+        self.assertEqual(
+            set(extras),
+            {"title_acc_denoise", "title_acc_sharp", "title_acc_thr"},
+        )
+        self.assertLessEqual(len(extras), 3)
+        # Default budget (≤9) + ≤3 accuracy extras; no Tess explosion
+        self.assertLessEqual(len(labels), 12)
+        self.assertNotIn("lower_rot90", labels)
+        self.assertNotIn("calligraphy", labels)
+        # Extras are title-only — no accuracy clones of price/barcode bands
+        self.assertFalse(any(l.startswith("price_acc") for l in labels))
+        self.assertFalse(any(l.startswith("barcode_acc") for l in labels))
+
+    def test_accuracy_mode_vision_timeout_slightly_longer(self):
+        """Phase 15.6: accuracy mode raises Vision soft budget; default stays 2C."""
+        import tempfile
+        from unittest.mock import patch
+        from django.test import override_settings
+        from teyssir.catalog.bookscan.draft import BookDraft
+        from teyssir.catalog.bookscan.services import _maybe_vision_draft
+        from PIL import Image
+
+        front = tempfile.mktemp(suffix=".jpg")
+        Image.new("RGB", (200, 300), "white").save(front)
+        ocr_draft = BookDraft(title="Some Title", languages=["en"], raw={})
+
+        captured = {}
+
+        def _fake_analyze(front_path, back_path=None, timeout=None):
+            captured["timeout"] = timeout
+            return "", BookDraft(title="Vision Title", source="vision")
+
+        with override_settings(
+            BOOKSCAN_ACCURACY=False,
+            VISION_FALLBACK_TIMEOUT=28,
+            VISION_TIMEOUT=45,
+        ), patch(
+            "teyssir.catalog.bookscan.vision.analyze_covers", side_effect=_fake_analyze
+        ):
+            _maybe_vision_draft([front], ocr_draft)
+        default_to = captured["timeout"]
+        self.assertEqual(default_to, 28.0)
+
+        captured.clear()
+        with override_settings(
+            BOOKSCAN_ACCURACY=True,
+            VISION_FALLBACK_TIMEOUT=28,
+            VISION_TIMEOUT=45,
+        ), patch(
+            "teyssir.catalog.bookscan.vision.analyze_covers", side_effect=_fake_analyze
+        ):
+            _maybe_vision_draft([front], ocr_draft)
+        acc_to = captured["timeout"]
+        self.assertGreater(acc_to, default_to)
+        self.assertLessEqual(acc_to, 45 * 1.2)
 
 
 class TitleSearchGatingTests(unittest.TestCase):
