@@ -222,6 +222,7 @@ def _barcode_regions(img) -> Iterator[tuple[str, object]]:
     if w > 100 and h > 80:
         # CNP / PVP stickers often sit bottom-left on Tunisian school books
         yield "bl_corner", img.crop((0, int(h * 0.55), int(w * 0.55), h))
+        yield "bl_tight", img.crop((0, int(h * 0.72), int(w * 0.42), h))
         yield "br_corner", img.crop((int(w * 0.45), int(h * 0.65), w, h))
         yield "bottom_band", img.crop((0, int(h * 0.78), w, h))
     yield "gray_lower", ImageOps.autocontrast(

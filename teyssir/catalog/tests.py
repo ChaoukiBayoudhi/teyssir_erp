@@ -843,6 +843,42 @@ class NonIsbnBarcodeRetentionTests(TestCase):
         self.assertIsNotNone(lookup_by_code(self.MATH_CNP).filter(pk=product.pk).first())
         self.assertIsNotNone(lookup_by_code("222231").filter(pk=product.pk).first())
         self.assertEqual(str(product.sale_price), "4.200")
+        book = Book.objects.get(product=product)
+        self.assertEqual(book.edition_kind, "school_cnp")
+
+    def test_create_book_optional_isbn_stores_edition_kind(self):
+        """Book model accepts empty ISBN + school_cnp + barcode identity."""
+        product = create_book_from_draft(
+            data={
+                "title": "Mathématiques",
+                "isbn13": "",
+                "barcode_raw": "6192202502353",
+                "barcode_kind": "local_product",
+                "edition_kind": "school_cnp",
+                "languages": ["fr"],
+            },
+            sale_price="4.200",
+        )
+        book = Book.objects.get(product=product)
+        self.assertEqual(book.isbn13, "")
+        self.assertEqual(book.edition_kind, "school_cnp")
+        self.assertTrue(book.raw_metadata.get("isbn_optional"))
+        self.assertTrue(
+            Barcode.objects.filter(value="6192202502353", product=product).exists()
+        )
+
+        novel = create_book_from_draft(
+            data={
+                "title": "Le Petit Prince",
+                "isbn13": "9782070612758",
+                "authors": ["Antoine de Saint-Exupéry"],
+                "languages": ["fr"],
+            },
+            sale_price="12.000",
+        )
+        nb = Book.objects.get(product=novel)
+        self.assertEqual(nb.isbn13, "9782070612758")
+        self.assertEqual(nb.edition_kind, "isbn_edition")
 
     def test_scan_keeps_cnp_barcode_fields_without_isbn(self):
         try:
@@ -1254,6 +1290,71 @@ class TitleSearchGatingTests(unittest.TestCase):
         self.assertEqual(out.isbn13, "")
         self.assertFalse((out.isbn13 or "").startswith("619"))
         self.assertTrue(out.raw.get("barcode_non_isbn") or out.barcode_kind == "local_product")
+        self.assertEqual(out.edition_kind, "school_cnp")
+        self.assertTrue(out.raw.get("isbn_optional"))
+
+    def test_edition_kind_school_from_title_without_barcode(self):
+        """Even if barcode decode fails, Mathématiques/CNP title → school_cnp, ISBN optional."""
+        from teyssir.catalog.bookscan.edition import (
+            classify_edition_kind,
+            is_school_subject_or_fragment,
+            refine_school_draft,
+            repair_school_title,
+        )
+        from teyssir.catalog.bookscan.draft import BookDraft
+        from teyssir.catalog.bookscan.ocr import is_plausible_author
+        from teyssir.catalog.bookscan.services import _should_try_vision
+
+        self.assertEqual(
+            classify_edition_kind(title="nologie de lInformati", barcode_raw=""),
+            "school_cnp",
+        )
+        self.assertEqual(
+            classify_edition_kind(isbn13="9782070612758", title="Le Petit Prince"),
+            "isbn_edition",
+        )
+        self.assertEqual(
+            repair_school_title(
+                "nologie de lInformati",
+                ["ématiques", "Mathématiques", "Technologie"],
+            ),
+            "Mathématiques",
+        )
+        self.assertTrue(is_school_subject_or_fragment("ématiques"))
+        self.assertFalse(is_plausible_author("ématiques"))
+        self.assertFalse(is_plausible_author("nologie de lInformati"))
+
+        draft = BookDraft(
+            title="nologie de lInformati",
+            authors=["ématiques"],
+            languages=["en"],
+            description="Book: nologie de lInformati.",
+            source="tesseract",
+            confidence=0.48,
+            raw={
+                "isbn_not_detected": True,
+                "title_candidates": ["ématiques", "nologie de lInformati", "Technologie"],
+            },
+        )
+        refine_school_draft(draft)
+        self.assertEqual(draft.edition_kind, "school_cnp")
+        self.assertEqual(draft.title, "Mathématiques")
+        self.assertEqual(draft.authors, [])
+        self.assertIn("fr", draft.languages)
+        self.assertNotIn("en", draft.languages)
+        self.assertFalse(draft.description.startswith("Book:"))
+        self.assertTrue(draft.raw.get("isbn_optional"))
+
+        class P:
+            name = "tesseract"
+
+        # Usable school title → skip Vision even without barcode
+        school = BookDraft(
+            title="Mathématiques", source="tesseract", confidence=0.4,
+            edition_kind="school_cnp",
+            raw={"school_edition": True, "ocr_mean_confidence": 48},
+        )
+        self.assertFalse(_should_try_vision(school, P()))
 
     def test_should_try_vision_on_phone_photo_no_barcode(self):
         """Missing barcode + unusable title (phone cover) -> Vision."""

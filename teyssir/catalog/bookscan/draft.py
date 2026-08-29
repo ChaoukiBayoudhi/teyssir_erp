@@ -10,6 +10,8 @@ class BookDraft:
     barcode_raw: str = ""
     barcode_symbology: str = ""
     barcode_kind: str = ""  # isbn13 | gtin | local_product | ""
+    # school_cnp | isbn_edition | unknown — Tunisian CNP vs 978/979 novels
+    edition_kind: str = ""
     title: str = ""
     subtitle: str = ""
     authors: list = field(default_factory=list)
