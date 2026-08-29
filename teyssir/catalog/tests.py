@@ -1541,6 +1541,114 @@ class TitleSearchGatingTests(unittest.TestCase):
         self.assertEqual(out.language_detected, "mixed:ar+fr")
         self.assertEqual(out.barcode_raw, "")
 
+    def test_vision_content_hash_cache_hit_on_repeat(self):
+        """P15-T3: identical cover bytes skip a second Ollama call (local FS cache)."""
+        import shutil
+        import tempfile
+        from django.test import override_settings
+        from PIL import Image
+
+        from teyssir.catalog.bookscan import vision_cache
+        from teyssir.catalog.bookscan.vision import analyze_covers
+
+        cache_root = tempfile.mkdtemp(prefix="vision_cache_")
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(cache_root, ignore_errors=True))
+        self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
+        front = os.path.join(tmp, "f.png")
+        back = os.path.join(tmp, "b.png")
+        Image.new("RGB", (48, 64), "white").save(front)
+        Image.new("RGB", (48, 64), "navy").save(back)
+
+        reply = json.dumps({
+            "title": "Cached Book",
+            "language_detected": "en",
+            "description": "First sentence. Second sentence. Third.",
+            "authors": ["Author"],
+            "isbn13": "",
+        })
+        calls = {"n": 0}
+
+        def transport(images_b64):
+            calls["n"] += 1
+            return reply
+
+        with override_settings(
+            VISION_CACHE_ENABLED=True,
+            VISION_CACHE_DIR=cache_root,
+            VISION_CACHE_TTL_SECONDS=3600,
+            VISION_CACHE_MAX_ENTRIES=50,
+            VISION_MODEL="test-vision",
+            VISION_IMAGE_MAX_EDGE=128,
+        ):
+            vision_cache.clear()
+            raw1, d1 = analyze_covers(
+                front, back, transport=transport, timeout=5, use_cache=True,
+            )
+            raw2, d2 = analyze_covers(
+                front, back, transport=transport, timeout=5, use_cache=True,
+            )
+
+        self.assertEqual(calls["n"], 1)
+        self.assertEqual(d1.title, "Cached Book")
+        self.assertEqual(d2.title, "Cached Book")
+        self.assertFalse(d1.raw.get("vision_cache_hit"))
+        self.assertTrue(d2.raw.get("vision_cache_hit"))
+        self.assertEqual(raw1, raw2)
+        # Same visual content under a new path still hits
+        front2 = os.path.join(tmp, "f_copy.png")
+        shutil.copy(front, front2)
+        back2 = os.path.join(tmp, "b_copy.png")
+        shutil.copy(back, back2)
+        with override_settings(
+            VISION_CACHE_ENABLED=True,
+            VISION_CACHE_DIR=cache_root,
+            VISION_CACHE_TTL_SECONDS=3600,
+            VISION_CACHE_MAX_ENTRIES=50,
+            VISION_MODEL="test-vision",
+            VISION_IMAGE_MAX_EDGE=128,
+        ):
+            _, d3 = analyze_covers(
+                front2, back2, transport=transport, timeout=5, use_cache=True,
+            )
+        self.assertEqual(calls["n"], 1)
+        self.assertTrue(d3.raw.get("vision_cache_hit"))
+
+    def test_vision_cache_ttl_and_size_cap(self):
+        """P15-T3: expired entries miss; max_entries evicts oldest."""
+        import shutil
+        import tempfile
+        import time
+        from django.test import override_settings
+
+        from teyssir.catalog.bookscan import vision_cache
+
+        cache_root = tempfile.mkdtemp(prefix="vision_cache_ttl_")
+        self.addCleanup(lambda: shutil.rmtree(cache_root, ignore_errors=True))
+
+        with override_settings(
+            VISION_CACHE_ENABLED=True,
+            VISION_CACHE_DIR=cache_root,
+            VISION_CACHE_TTL_SECONDS=1,
+            VISION_CACHE_MAX_ENTRIES=2,
+        ):
+            vision_cache.clear()
+            vision_cache.put("aaa", raw='{"t":1}', draft={"title": "A"}, model="m")
+            time.sleep(0.05)
+            vision_cache.put("bbb", raw='{"t":2}', draft={"title": "B"}, model="m")
+            self.assertIsNotNone(vision_cache.get("aaa"))
+            # Force expiry
+            path = Path(cache_root) / "aaa.json"
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data["created_at"] = time.time() - 10
+            path.write_text(json.dumps(data), encoding="utf-8")
+            self.assertIsNone(vision_cache.get("aaa"))
+
+            vision_cache.put("ccc", raw='{"t":3}', draft={"title": "C"}, model="m")
+            vision_cache.put("ddd", raw='{"t":4}', draft={"title": "D"}, model="m")
+            remaining = list(Path(cache_root).glob("*.json"))
+            self.assertLessEqual(len(remaining), 2)
+
     def test_maybe_vision_draft_dual_image_once(self):
         """_maybe_vision_draft uses analyze_covers once (front+back), not two sequential calls."""
         import tempfile

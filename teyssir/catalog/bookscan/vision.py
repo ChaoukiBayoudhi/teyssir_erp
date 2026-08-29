@@ -61,8 +61,8 @@ _VISION_SCALAR_KEYS = {
 }
 
 
-def image_to_b64(image_path: str, max_edge: int | None = None) -> str:
-    """JPEG-encode a downscaled cover for Ollama (phone photos are multi-MB otherwise)."""
+def image_to_jpeg_bytes(image_path: str, max_edge: int | None = None) -> bytes:
+    """JPEG-encode a downscaled cover (phone photos are multi-MB otherwise)."""
     from PIL import Image
 
     from .ocr import _downscale_max_edge
@@ -75,7 +75,12 @@ def image_to_b64(image_path: str, max_edge: int | None = None) -> str:
         im = _downscale_max_edge(im, edge)
         buf = io.BytesIO()
         im.save(buf, format="JPEG", quality=85, optimize=True)
-        return base64.b64encode(buf.getvalue()).decode()
+        return buf.getvalue()
+
+
+def image_to_b64(image_path: str, max_edge: int | None = None) -> str:
+    """JPEG-encode a downscaled cover for Ollama (phone photos are multi-MB otherwise)."""
+    return base64.b64encode(image_to_jpeg_bytes(image_path, max_edge=max_edge)).decode()
 
 
 def sanitize_vision_isbn(draft: BookDraft | None) -> BookDraft | None:
@@ -221,21 +226,61 @@ def analyze_covers(
     timeout: float | None = None,
     transport: Callable[[list[str]], str] | None = None,
     max_edge: int | None = None,
+    use_cache: bool | None = None,
 ) -> tuple[str, BookDraft]:
     """One dual-image Vision call → (raw JSON text, sanitized BookDraft).
 
     Both images (when present) are downscaled and sent in a single Ollama request.
+    Results are keyed by content-hash of those JPEGs (P15-T3 local FS cache).
     """
-    images: list[str] = [image_to_b64(front_path, max_edge=max_edge)]
+    from . import vision_cache
+
+    edge = max_edge
+    if edge is None:
+        edge = int(getattr(settings, "VISION_IMAGE_MAX_EDGE", 1280) or 1280)
+    model = getattr(settings, "VISION_MODEL", None) or DEFAULT_VISION_MODEL
+
+    jpeg_blobs: list[bytes] = [image_to_jpeg_bytes(front_path, max_edge=edge)]
     dual = False
     if back_path:
         try:
-            images.append(image_to_b64(back_path, max_edge=max_edge))
+            jpeg_blobs.append(image_to_jpeg_bytes(back_path, max_edge=edge))
             dual = True
         except Exception as exc:
             logger.info("vision back image skipped: %s", exc)
 
-    raw = ollama_generate(images, timeout=timeout, transport=transport)
+    images = [base64.b64encode(b).decode() for b in jpeg_blobs]
+    cache_on = vision_cache.cache_enabled() if use_cache is None else bool(use_cache)
+    # Injected transports are for unit tests — skip disk cache unless explicitly on.
+    if transport is not None and use_cache is not True:
+        cache_on = False
+
+    cache_key = ""
+    if cache_on:
+        cache_key = vision_cache.content_hash(jpeg_blobs, model=model, max_edge=int(edge))
+        hit = vision_cache.get(cache_key)
+        if hit:
+            draft = BookDraft(**{
+                k: v for k, v in (hit["draft"] or {}).items()
+                if k in BookDraft.__dataclass_fields__
+            })
+            # Nested list/dict fields may arrive as plain JSON — keep raw intact.
+            if not isinstance(draft.raw, dict):
+                draft.raw = {}
+            draft.raw = {
+                **(draft.raw or {}),
+                "vision_downscaled": True,
+                "vision_dual_image": dual,
+                "vision_image_count": len(images),
+                "cover_role": "front+back" if dual else "front",
+                "vision_cache_hit": True,
+                "vision_cache_key": cache_key[:16],
+            }
+            if not draft.source:
+                draft.source = "vision"
+            return hit["raw"], draft
+
+    raw = ollama_generate(images, timeout=timeout, transport=transport, model=model)
     draft = draft_from_vision_json(raw)
     draft = sanitize_vision_isbn(draft)
     draft = strip_vision_barcodes(draft)
@@ -245,7 +290,14 @@ def analyze_covers(
         "vision_dual_image": dual,
         "vision_image_count": len(images),
         "cover_role": "front+back" if dual else "front",
+        "vision_cache_hit": False,
     }
+    if cache_key:
+        draft.raw["vision_cache_key"] = cache_key[:16]
+        try:
+            vision_cache.put(cache_key, raw=raw, draft=draft.as_dict(), model=model)
+        except Exception as exc:
+            logger.info("vision cache store skipped: %s", exc)
     if not draft.source:
         draft.source = "vision"
     return raw, draft
