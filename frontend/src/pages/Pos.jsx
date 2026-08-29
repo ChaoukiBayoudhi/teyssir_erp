@@ -335,6 +335,7 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
               {camera && (
                 <CameraScanner
                   mode="pos"
+                  stopOnDetect
                   onDetect={onCameraCode}
                   onClose={() => setCamera(false)}
                 />
