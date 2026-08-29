@@ -161,15 +161,54 @@ async function assessCapturesQuality(files) {
   const results = [];
   for (const f of files) {
     try {
-      results.push(await assessImageQuality(f));
+      const q = await assessImageQuality(f);
+      const fill = await estimateBookFillRatio(f);
+      results.push({ ...q, bookFillRatio: fill, bookTooSmall: fill < 0.22 });
     } catch {
-      results.push({ blurry: false, lowContrast: false });
+      results.push({ blurry: false, lowContrast: false, bookFillRatio: 1, bookTooSmall: false });
     }
   }
+  const fills = results.map((r) => r.bookFillRatio).filter((x) => Number.isFinite(x));
+  const minFill = fills.length ? Math.min(...fills) : 1;
   return {
     blurry: results.some((r) => r.blurry),
     lowContrast: results.some((r) => r.lowContrast),
+    bookTooSmall: results.some((r) => r.bookTooSmall) || minFill < 0.22,
+    bookFillRatio: minFill,
   };
+}
+
+/** Rough book-vs-frame ratio: saturated / non-white pixels (distant XTRIKE shots). */
+async function estimateBookFillRatio(file) {
+  const bmp = await createImageBitmap(file);
+  const size = 160;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) {
+    bmp.close?.();
+    return 1;
+  }
+  ctx.drawImage(bmp, 0, 0, size, size);
+  bmp.close?.();
+  const { data } = ctx.getImageData(0, 0, size, size);
+  let interesting = 0;
+  const total = size * size;
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const sat = max === 0 ? 0 : (max - min) / max;
+    const bright = (r + g + b) / 3;
+    // Book ink/color vs bright window / white wall / hand skin is harder —
+    // count mid-tone saturated or darkish non-white pixels.
+    if (sat > 0.18 && bright < 245) interesting += 1;
+    else if (bright < 140 && sat > 0.05) interesting += 1;
+  }
+  return interesting / Math.max(total, 1);
 }
 
 const EMPTY = {
@@ -474,6 +513,13 @@ export default function BookCreate({ onBack, onLogout }) {
           setBusyLabel("");
           return;
         }
+        if (q.bookTooSmall) {
+          setError(t("bookCloserShot"));
+          setInfo(t("bookCloserShotHint"));
+          setBusy(false);
+          setBusyLabel("");
+          return;
+        }
       }
       setBusyLabel(t("detectingIsbn"));
       const detected = await detectIsbnFromImages(files);
@@ -508,8 +554,16 @@ export default function BookCreate({ onBack, onLogout }) {
         || d.edition_kind === "isbn_edition"
         || (d.barcode_kind === "isbn13" && !isSchoolEdition)
       );
-      // NEVER ask to recrop ISBN for school/CNP — even when barcode decode failed
-      const showIsbnCloseup = isbnMissing && !hasProductBarcode && !isSchoolEdition;
+      const bookFill = Number(d.raw?.book_fill_ratio);
+      const bookTooSmall = !!(
+        d.raw?.book_too_small
+        || (Number.isFinite(bookFill) && bookFill < 0.22)
+      );
+      const bookFillsFrame = !bookTooSmall;
+      // ISBN recrop ONLY when book fills frame, verso likely has ISBN, decode failed
+      const showIsbnCloseup = isbnMissing && !hasProductBarcode && !isSchoolEdition
+        && bookFillsFrame
+        && !!(d.raw?.verso_isbn_band_likely || d.raw?.isbn_band_visible);
       const priceMissing = !d.price;
       const ocrErr = d.raw?.ocr_error || d.raw?.back?.ocr_error;
       const lowConf = d.raw?.ocr_low_confidence || (d.confidence != null && d.confidence < 0.35);
@@ -519,6 +573,7 @@ export default function BookCreate({ onBack, onLogout }) {
       const missingAra = !!(d.raw?.tess_missing_ara || (d.raw?.tess_missing_langs || []).includes?.("ara"));
       const weakTitleSearch = d.raw?.title_search_weak || (d.raw?.title_search && isbnMissing);
       const metaOk = !!(resolvedIsbn && (d.source === "openlibrary" || d.source === "googlebooks" || d.confidence >= 0.8));
+      const weakDistant = bookTooSmall || garbageOcr || (lowConf && !d.title) || !!d.raw?.manual_assist;
       let warn = "";
       let note = "";
       if (ocrErr) {
@@ -532,8 +587,18 @@ export default function BookCreate({ onBack, onLogout }) {
           note = `${note}\n${t("noIsbnTitleAssist")}`;
         }
         if (garbageOcr && !hasProductBarcode) {
-          // Soft OCR hint only — still no ISBN recrop
           note = note ? `${note}\n${t("ocrWeak")}` : t("ocrWeak");
+        }
+        if (bookTooSmall) {
+          note = note ? `${note}\n${t("bookCloserShot")}` : t("bookCloserShot");
+        }
+      } else if (bookTooSmall || (weakDistant && !hasProductBarcode && isbnMissing && !metaOk)) {
+        // Distant / tiny book in frame — closer shot is the primary advice (not ISBN recrop)
+        warn = t("bookCloserShot");
+        if (garbageOcr && (d.raw?.rejected_title || d.raw?.suggested_title)) {
+          note = `${t("ocrGarbageTitleHint")} — ${d.raw.rejected_title || d.raw.suggested_title}`;
+        } else if (lowConf) {
+          note = t("ocrWeak");
         }
       } else if (garbageOcr || missingAra) {
         warn = missingAra ? t("ocrMissingAra") : t("ocrArabicWeak");
@@ -544,13 +609,17 @@ export default function BookCreate({ onBack, onLogout }) {
           note = note ? `${note}\n${t("localBarcodeDetected")}` : t("localBarcodeDetected");
         } else if (showIsbnCloseup) {
           note = note ? `${note}\n${t("barcodeCloseupHint")}` : t("barcodeCloseupHint");
+        } else if (!d.title) {
+          note = note ? `${note}\n${t("bookCloserShot")}` : t("bookCloserShot");
         }
       } else if (lowConf && !d.title && !resolvedIsbn && !hasProductBarcode && !isSchoolEdition) {
-        warn = t("imageBlurryRetry");
+        warn = t("bookCloserShot");
       } else if (lowConf && !metaOk && !hasProductBarcode && !isSchoolEdition) {
         note = `${t("ocrWeak")}${d.raw?.suggested_title ? ` — ${d.raw.suggested_title}` : ""}`;
         if (showIsbnCloseup) {
           note = `${note}\n${t("barcodeCloseupHint")}`;
+        } else if (isbnMissing) {
+          note = `${note}\n${t("bookCloserShot")}`;
         }
       } else if (isbnMissing && hasProductBarcode) {
         // Local CNP / product barcode without ISBN — success path, never ask to recrop ISBN
@@ -564,6 +633,7 @@ export default function BookCreate({ onBack, onLogout }) {
       } else if (isbnMissing && !isSchoolEdition) {
         warn = `${t("isbnNotDetected")}\n${t("isbnManualHint")}`;
         if (showIsbnCloseup) warn = `${warn}\n${t("barcodeCloseupHint")}`;
+        else warn = `${warn}\n${t("bookCloserShot")}`;
       } else if (d.raw?.metadata_miss && !d.title) {
         warn = t("metadataMiss");
       } else if (d.source === "manual" || d.raw?.ocr_available === false) {
@@ -591,8 +661,12 @@ export default function BookCreate({ onBack, onLogout }) {
       const livre = cats.find((c) => /livre|book|كتاب|manuel/i.test(c.name_fr || ""));
       const tva7 = taxes.find((x) => Number(x.rate_percent) === 7);
       // Do not present garbage OCR as a confident title; keep languages=ar when likely Arabic
-      const safeTitle = garbageOcr && !isSchoolEdition ? "" : (d.title || d.raw?.suggested_title || "");
-      const rawAuthors = garbageOcr && !isSchoolEdition ? "" : (d.authors || []).join(", ");
+      const safeTitle = (garbageOcr || !!d.raw?.ocr_title_unusable) && !isSchoolEdition
+        ? ""
+        : (d.title || "");
+      const rawAuthors = (garbageOcr || !!d.raw?.ocr_title_unusable) && !isSchoolEdition
+        ? ""
+        : (d.authors || []).join(", ");
       const safeAuthors = scrubAuthors(rawAuthors, safeTitle);
       let langList = d.languages || [];
       if (isSchoolEdition) {
@@ -600,7 +674,8 @@ export default function BookCreate({ onBack, onLogout }) {
         if (!langList.includes("fr") && !langList.includes("ar")) langList = ["fr"];
         else if (!langList.includes("fr") && langList.includes("ar")) langList = ["ar", "fr"];
       } else if (garbageOcr && !langList.includes("ar")) {
-        langList = ["ar"];
+        // Don't invent ``ar`` for Latin mush — clear fake ``en`` instead
+        langList = langList.filter((x) => x !== "en");
       }
       // Drop junk "Book: nologie…" descriptions
       let safeDesc = d.description || "";
