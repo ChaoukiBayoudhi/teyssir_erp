@@ -97,11 +97,13 @@ rest of the PWA.
 
 ## Phase 2F — books_photos regression harness
 
-Ground-truth fixtures live in `fixtures/bookscan/expected/*.json` (Books A–D: Beauty,
-Le premier, History CNP, Math CNP). Each fixture lists photo filename needles, expected
-`title_contains` / `languages` / `isbn13` / `barcode_raw` / `price` (with `allow_empty`),
-and **honesty** rules (619 never ISBN, digit-OCR confidence cap, no high conf without
-barcode/metadata).
+Ground-truth fixtures live in `fixtures/bookscan/expected/*.json` (Books A–F + blur:
+Beauty, Le premier, History CNP, Math CNP, French/Math Case E, Mixed FR+AR Case F,
+and `B_blur` soft-focus Premier under `fixtures/bookscan/images/`). Each fixture lists
+photo filename needles (or an explicit `file`), expected `title_contains` / `languages` /
+`isbn13` / `barcode_raw` / `price` (with `allow_empty`), and **honesty** rules (619 never
+ISBN, digit-OCR confidence cap, no high conf without barcode/metadata). Baseline JSON:
+`fixtures/bookscan/baseline/`.
 
 ```text
 # Offline Tess (Vision skipped) — macOS / Linux
