@@ -3,7 +3,7 @@ import { Box, Button, Stack, Alert, Typography, Chip } from "@mui/material";
 import { useTranslation } from "react-i18next";
 import { scanBook, pollScanJob } from "../api";
 
-const BARCODE_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "qr_code"];
+const BARCODE_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code", "itf"];
 
 /** High-res like BookCreate (XPC01 / USB cams); fall back so older webcams still open. */
 const POS_VIDEO_CONSTRAINTS = {
@@ -17,8 +17,14 @@ const LIVE_THROTTLE_NATIVE_MS = 180;
 const LIVE_THROTTLE_ZXING_MS = 400;
 /** Ignore duplicate detections for this long after a hit. */
 const DETECT_COOLDOWN_MS = 1800;
-/** Still-frame analyse budget (ms) — barcode only, never book OCR. */
-const STILL_BUDGET_MS = 1800;
+/**
+ * Still-frame analyse budget (ms) — barcode only, never book OCR.
+ * Product packaging (Fournitures) needs more time than a flat ISBN strip:
+ * large webcam frames + band×scale×angle variants burn budget fast.
+ */
+const STILL_BUDGET_MS = 4800;
+/** Cap longest edge before ZXing — full 1080p burns the whole budget on band 1. */
+const STILL_MAX_EDGE = 1280;
 const MAX_CAPTURES = 4;
 
 /** Guide overlay fractions (must match the green strip UI). */
@@ -59,9 +65,24 @@ let zxingReaderPromise = null;
 
 function getZxingReader() {
   if (!zxingReaderPromise) {
-    zxingReaderPromise = import("@zxing/browser").then(
-      ({ BrowserMultiFormatReader }) => new BrowserMultiFormatReader(),
-    );
+    zxingReaderPromise = Promise.all([
+      import("@zxing/browser"),
+      import("@zxing/library"),
+    ]).then(([{ BrowserMultiFormatReader, BarcodeFormat }, { DecodeHintType }]) => {
+      const hints = new Map();
+      hints.set(DecodeHintType.TRY_HARDER, true);
+      hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+        BarcodeFormat.EAN_13,
+        BarcodeFormat.EAN_8,
+        BarcodeFormat.UPC_A,
+        BarcodeFormat.UPC_E,
+        BarcodeFormat.CODE_128,
+        BarcodeFormat.CODE_39,
+        BarcodeFormat.ITF,
+        BarcodeFormat.QR_CODE,
+      ]);
+      return new BrowserMultiFormatReader(hints);
+    });
   }
   return zxingReaderPromise;
 }
@@ -157,6 +178,14 @@ function rotateCanvas(src, deg) {
   return c;
 }
 
+/** Shrink large stills so ZXing finishes before the analyse budget expires. */
+function limitCanvasEdge(src, maxEdge = STILL_MAX_EDGE) {
+  if (!src?.width) return src;
+  const edge = Math.max(src.width, src.height);
+  if (edge <= maxEdge) return src;
+  return scaleCanvas(src, maxEdge / edge);
+}
+
 /** Grayscale + contrast boost (helps faint webcam barcode labels). */
 function grayscaleContrast(src, contrast = 1.8) {
   const c = document.createElement("canvas");
@@ -176,6 +205,38 @@ function grayscaleContrast(src, contrast = 1.8) {
   }
   ctx.putImageData(img, 0, 0);
   return c;
+}
+
+/** Invert (helps light bars on dark / green packaging labels). */
+function invertCanvas(src) {
+  const c = document.createElement("canvas");
+  c.width = src.width;
+  c.height = src.height;
+  const ctx = c.getContext("2d");
+  ctx.drawImage(src, 0, 0);
+  const img = ctx.getImageData(0, 0, c.width, c.height);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    d[i] = 255 - d[i];
+    d[i + 1] = 255 - d[i + 1];
+    d[i + 2] = 255 - d[i + 2];
+  }
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+
+/** Simple threshold binarize after grayscale (curved / glossy stickers). */
+function binarizeCanvas(src, threshold = 128) {
+  const gray = grayscaleContrast(src, 1.4);
+  const ctx = gray.getContext("2d");
+  const img = ctx.getImageData(0, 0, gray.width, gray.height);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const v = d[i] >= threshold ? 255 : 0;
+    d[i] = d[i + 1] = d[i + 2] = v;
+  }
+  ctx.putImageData(img, 0, 0);
+  return gray;
 }
 
 /**
@@ -245,44 +306,74 @@ async function detectCodeFromSource(source, { preferIsbn = false } = {}) {
 }
 
 /**
- * Strengthen still-frame decode: band crops, upscale, grayscale/contrast, ±10° rotations,
- * BarcodeDetector + ZXing — early-exit on first plausible code; hard budget STILL_BUDGET_MS.
+ * Strengthen still-frame decode for retail packaging + books:
+ * downscale first, try barcode bands BEFORE full frame (avoids budget starvation),
+ * upscale / grayscale / invert / binarize / small + 90° rotations,
+ * BarcodeDetector + ZXing TRY_HARDER — early-exit on first plausible code.
  */
 async function detectCodeFromStill(canvas, { preferIsbn = false, budgetMs = STILL_BUDGET_MS } = {}) {
   if (!canvas?.width) return "";
+  const base = limitCanvasEdge(canvas);
   const deadline = Date.now() + budgetMs;
   let incomplete = "";
 
-  // Priority order: full → middle (guide) → lower (common retail sticker) → mid-high.
+  // Crops first (fast, high hit-rate on packaging stickers); full frame last.
   const bands = [
-    [0, 0, 1, 1],
     [GUIDE.left, GUIDE.top, GUIDE.right, GUIDE.top + GUIDE.height],
-    [0.05, 0.55, 0.95, 0.98],
-    [0.05, 0.35, 0.95, 0.7],
+    [0.04, 0.55, 0.96, 0.98],
+    [0.04, 0.42, 0.96, 0.78],
+    [0.08, 0.18, 0.92, 0.55],
+    [0.12, 0.28, 0.88, 0.72],
+    [0.2, 0.35, 0.8, 0.65],
+    [0, 0, 1, 1],
   ];
-  const scales = [1, 1.75, 2.5];
-  const angles = [0, -10, 10];
+  // Phase A: upright, modest scales. Phase B: tilt + vertical barcodes.
+  const phases = [
+    { scales: [1, 1.6, 2.4], angles: [0], hardVariants: false },
+    { scales: [1.2, 2.0, 3.0], angles: [0, -8, 8, -15, 15], hardVariants: true },
+    { scales: [1.5, 2.5], angles: [90, -90], hardVariants: true },
+  ];
 
-  for (const band of bands) {
-    const cropped = cropFrac(canvas, band[0], band[1], band[2], band[3]);
-    for (const scale of scales) {
-      const sized = scaleCanvas(cropped, scale);
-      for (const angle of angles) {
-        if (Date.now() > deadline) return incomplete && isPlausibleProductBarcode(incomplete) ? incomplete : "";
-        const rotated = rotateCanvas(sized, angle);
-        const variants = [
-          rotated,
-          grayscaleContrast(rotated, 1.6),
-          grayscaleContrast(rotated, 2.3),
-        ];
-        for (const v of variants) {
+  const tryVariant = async (v) => {
+    if (Date.now() > deadline) return "deadline";
+    const code = await detectCodeFromSource(v, { preferIsbn });
+    if (!code) return "";
+    if (isPlausibleProductBarcode(code)) return { hit: code };
+    if (!incomplete || code.length > incomplete.length) incomplete = code;
+    return "";
+  };
+
+  for (const phase of phases) {
+    for (const band of bands) {
+      const cropped = cropFrac(base, band[0], band[1], band[2], band[3]);
+      for (const scale of phase.scales) {
+        const sized = scaleCanvas(cropped, scale);
+        for (const angle of phase.angles) {
           if (Date.now() > deadline) {
             return incomplete && isPlausibleProductBarcode(incomplete) ? incomplete : "";
           }
-          const code = await detectCodeFromSource(v, { preferIsbn });
-          if (!code) continue;
-          if (isPlausibleProductBarcode(code)) return code;
-          if (!incomplete || code.length > incomplete.length) incomplete = code;
+          const rotated = rotateCanvas(sized, angle);
+          const variants = phase.hardVariants
+            ? [
+                rotated,
+                grayscaleContrast(rotated, 1.6),
+                grayscaleContrast(rotated, 2.4),
+                invertCanvas(rotated),
+                binarizeCanvas(rotated, 110),
+                binarizeCanvas(rotated, 145),
+              ]
+            : [
+                rotated,
+                grayscaleContrast(rotated, 1.7),
+                grayscaleContrast(rotated, 2.2),
+              ];
+          for (const v of variants) {
+            const r = await tryVariant(v);
+            if (r === "deadline") {
+              return incomplete && isPlausibleProductBarcode(incomplete) ? incomplete : "";
+            }
+            if (r?.hit) return r.hit;
+          }
         }
       }
     }
@@ -346,7 +437,8 @@ async function bumpTrackResolution(stream) {
 
 /**
  * Shared camera barcode scanner.
- * - mode="pos" (default): fast ZXing/BarcodeDetector only — never book Vision/OCR, never ISBN banners.
+ * - mode="pos" | mode="product" (default pos): still-first ZXing/BarcodeDetector —
+ *   never book Vision/OCR, never ISBN banners. Used by POS + Nouvel article (Fournitures).
  * - mode="book": still-frame + optional /catalog/books/scan OCR fallback (ISBN/title).
  */
 export default function CameraScanner({
@@ -514,7 +606,7 @@ export default function CameraScanner({
     // Quick still decode on this capture (strengthened path).
     try {
       const canvas = await fileToCanvas(file);
-      const code = await detectCodeFromStill(canvas, { preferIsbn, budgetMs: 900 });
+      const code = await detectCodeFromStill(canvas, { preferIsbn, budgetMs: 2200 });
       if (code && isPlausibleProductBarcode(code)) {
         lastRef.current = { value: code, at: Date.now() };
         setInfo(`${t("codeDetected")}: ${code}`);
@@ -550,7 +642,7 @@ export default function CameraScanner({
       }
       withCanvas.sort((a, b) => b.score - a.score);
 
-      const perPhotoBudget = Math.max(400, Math.floor(STILL_BUDGET_MS / Math.max(1, withCanvas.length)));
+      const perPhotoBudget = Math.max(2800, Math.floor(STILL_BUDGET_MS / Math.max(1, Math.min(withCanvas.length, 2))));
       let code = "";
       let incomplete = "";
       for (const item of withCanvas) {
@@ -565,7 +657,7 @@ export default function CameraScanner({
         if (hit && (!incomplete || hit.length > incomplete.length)) incomplete = hit;
       }
 
-      // POS / article: barcode decode only — never call bookscan Vision/OCR.
+      // POS / article (Fournitures): barcode decode only — never call bookscan Vision/OCR.
       if (isPos) {
         if (code && isPlausibleProductBarcode(code)) {
           lastRef.current = { value: code, at: Date.now() };
@@ -579,6 +671,7 @@ export default function CameraScanner({
           setInfo(t("scannerRecaptureBarcode"));
         } else {
           // Keep photos for retry — do not clear captures.
+          // Prefer actionable illegible copy (not a false ISBN banner).
           setError(t("barcodeIllegible"));
           setInfo(t("scannerRecaptureBarcode"));
         }
