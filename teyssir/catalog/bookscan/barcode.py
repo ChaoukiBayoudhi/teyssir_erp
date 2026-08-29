@@ -220,6 +220,8 @@ def _barcode_regions(img) -> Iterator[tuple[str, object]]:
     if h > 60:
         yield "lower30", img.crop((0, int(h * 0.68), w, h))
     if w > 100 and h > 80:
+        # CNP / PVP stickers often sit bottom-left on Tunisian school books
+        yield "bl_corner", img.crop((0, int(h * 0.55), int(w * 0.55), h))
         yield "br_corner", img.crop((int(w * 0.45), int(h * 0.65), w, h))
         yield "bottom_band", img.crop((0, int(h * 0.78), w, h))
     yield "gray_lower", ImageOps.autocontrast(
@@ -270,7 +272,7 @@ def _roi_band_regions(img, prepare: "CoverPreprocessResult | None") -> Iterator[
     """Yield preprocess ROI crops (white sticker first) — budgeted barcode tries."""
     if prepare is None:
         return
-    from .preprocess import iter_roi_crops
+    from .preprocess import RoiBox, iter_roi_crops
 
     w, h = img.size
     # Prefer sticker → barcode_band → price_band (title unused for barcodes)
@@ -284,6 +286,20 @@ def _roi_band_regions(img, prepare: "CoverPreprocessResult | None") -> Iterator[
         clamped = box.clamp(w, h)
         if clamped.width < 12 or clamped.height < 12:
             continue
+        # Phone photos: white_label contour is often just the CNP header text —
+        # pad so EAN bars below/above the blob stay in-frame for zbar/OpenCV.
+        if name == "white_label":
+            pad_x = max(40, int(clamped.width * 0.35))
+            pad_up = max(30, int(clamped.height * 0.4))
+            pad_down = max(120, int(clamped.height * 1.8))
+            expanded = RoiBox(
+                x0=max(0, clamped.x0 - pad_x),
+                y0=max(0, clamped.y0 - pad_up),
+                x1=min(w, clamped.x1 + pad_x),
+                y1=min(h, clamped.y1 + pad_down),
+            ).clamp(w, h)
+            crop = img.crop(expanded.as_tuple())
+            yield "white_label_pad", crop
         crop = img.crop(clamped.as_tuple())
         yield name, crop
         # One tight mid-sticker crop (bars often sit in the middle third)
@@ -294,6 +310,8 @@ def _roi_band_regions(img, prepare: "CoverPreprocessResult | None") -> Iterator[
         if name == "barcode_band" and crop.height > 50:
             cw, ch = crop.size
             yield "barcode_band_lower", crop.crop((0, int(ch * 0.35), cw, ch))
+            # Left half of barcode band (CNP PVP stickers are often bottom-left)
+            yield "barcode_band_left", crop.crop((0, 0, max(1, int(cw * 0.55)), ch))
 
 
 def _roi_variants(region) -> Iterator[tuple[str, object]]:
@@ -357,9 +375,9 @@ def decode_product_barcode(
             if key in seen:
                 continue
             seen.add(key)
-            # OpenCV on a few upscales of barcode/sticker ROIs (phone photos need it);
+            # OpenCV on upscales of barcode/sticker ROIs (phone photos need it);
             # keep pyzbar-only on tilts to avoid explosion.
-            allow_cv = vlabel in ("raw", "x3", "x4") and (
+            allow_cv = vlabel in ("raw", "x2", "x3", "x4", "x3_contrast", "x4_contrast") and (
                 rlabel.startswith("barcode") or rlabel.startswith("white_label")
             )
             hit = _pick_best(_decode_hits(variant, allow_opencv=allow_cv))

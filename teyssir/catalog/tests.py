@@ -348,6 +348,10 @@ class PriceAndLangTests(unittest.TestCase):
         self.assertIn("الثلاثي", merge_bilingual_title("الثلاثي الاول", "Le premier"))
         # Single script passthrough
         self.assertEqual(merge_bilingual_title("Le Petit Prince"), "Le Petit Prince")
+        # Garbage Arabic peel + glued Latin → clean Latin only
+        cleaned = merge_bilingual_title("(المسمد مایه) PMathématiques")
+        self.assertEqual(cleaned, "Mathématiques")
+        self.assertNotIn("المسمد", cleaned)
 
         draft = _draft_from_text(
             "الثلاثي الاول\nLe premier\n",
@@ -1205,6 +1209,51 @@ class TitleSearchGatingTests(unittest.TestCase):
             },
         )
         self.assertFalse(_should_try_vision(cnp_title, P()))
+        # Local CNP + price even with weak/noisy title → skip Vision (shop speed)
+        cnp_price = BookDraft(
+            title="", barcode_raw="6192202502353", barcode_kind="local_product",
+            price="4.200", source="tesseract", confidence=0.3,
+            raw={
+                "barcode_detected": True,
+                "barcode_non_isbn": True,
+                "ocr_mean_confidence": 30,
+                "ocr_garbage_latin": True,
+            },
+        )
+        self.assertFalse(_should_try_vision(cnp_price, P()))
+        # ISBN barcode + price, no title → skip
+        isbn_price = BookDraft(
+            title="", isbn13="9782070612758", price="12.000",
+            source="tesseract", confidence=0.4,
+            raw={"isbn_from_barcode": True, "barcode_detected": True},
+        )
+        self.assertFalse(_should_try_vision(isbn_price, P()))
+
+    def test_local_barcode_without_isbn_is_success_identity(self):
+        """CNP 619 barcode without ISBN is a valid identity — never promote to isbn13."""
+        from teyssir.catalog.bookscan.merge import merge_scan_layers
+        from teyssir.catalog.bookscan.draft import BookDraft
+
+        ocr = BookDraft(
+            title="Mathématiques",
+            barcode_raw="6192202502353",
+            barcode_kind="local_product",
+            barcode_symbology="EAN13",
+            price="4.200",
+            source="tesseract",
+            confidence=0.55,
+            raw={
+                "barcode_detected": True,
+                "barcode_non_isbn": True,
+                "isbn_not_detected": True,
+            },
+        )
+        out = merge_scan_layers(metadata=None, vision=None, ocr=ocr)
+        self.assertEqual(out.barcode_raw, "6192202502353")
+        self.assertEqual(out.barcode_kind, "local_product")
+        self.assertEqual(out.isbn13, "")
+        self.assertFalse((out.isbn13 or "").startswith("619"))
+        self.assertTrue(out.raw.get("barcode_non_isbn") or out.barcode_kind == "local_product")
 
     def test_should_try_vision_on_phone_photo_no_barcode(self):
         """Missing barcode + unusable title (phone cover) -> Vision."""

@@ -461,6 +461,13 @@ export default function BookCreate({ onBack, onLogout }) {
       const resolvedIsbn = serverIsbn
         || (!d.raw?.isbn_unconfirmed && !d.raw?.isbn_not_detected && isbnHint ? isbnHint : "");
       const isbnMissing = !resolvedIsbn;
+      const hasProductBarcode = !!(
+        (d.barcode_raw && String(d.barcode_raw).trim())
+        || d.barcode_kind === "local_product"
+        || d.raw?.barcode_detected
+        || d.raw?.barcode_non_isbn
+      );
+      const showIsbnCloseup = isbnMissing && !hasProductBarcode;
       const priceMissing = !d.price;
       const ocrErr = d.raw?.ocr_error || d.raw?.back?.ocr_error;
       const lowConf = d.raw?.ocr_low_confidence || (d.confidence != null && d.confidence < 0.35);
@@ -479,25 +486,35 @@ export default function BookCreate({ onBack, onLogout }) {
         if (d.raw?.rejected_title || d.raw?.suggested_title) {
           note = `${t("ocrGarbageTitleHint")} — ${d.raw.rejected_title || d.raw.suggested_title}`;
         }
-        if (isbnMissing) {
+        if (hasProductBarcode) {
+          note = note ? `${note}\n${t("localBarcodeDetected")}` : t("localBarcodeDetected");
+        } else if (showIsbnCloseup) {
           note = note ? `${note}\n${t("barcodeCloseupHint")}` : t("barcodeCloseupHint");
         }
-      } else if (lowConf && !d.title && !resolvedIsbn) {
+      } else if (lowConf && !d.title && !resolvedIsbn && !hasProductBarcode) {
         warn = t("imageBlurryRetry");
-      } else if (lowConf && !metaOk) {
+      } else if (lowConf && !metaOk && !hasProductBarcode) {
         note = `${t("ocrWeak")}${d.raw?.suggested_title ? ` — ${d.raw.suggested_title}` : ""}`;
-        if (isbnMissing) {
+        if (showIsbnCloseup) {
           note = `${note}\n${t("barcodeCloseupHint")}`;
         }
+      } else if (isbnMissing && hasProductBarcode) {
+        // Local CNP / product barcode without ISBN — success path, never ask to recrop ISBN
+        note = t("localBarcodeDetected");
+        if (!d.title && (d.raw?.suggested_title || garbageOcr)) {
+          note = `${note}\n${t("noIsbnTitleAssist")}`;
+        }
       } else if (isbnMissing && d.title) {
-        warn = `${t("isbnNotDetected")}\n${t("noIsbnTitleAssist")}\n${t("barcodeCloseupHint")}`;
+        warn = `${t("isbnNotDetected")}\n${t("noIsbnTitleAssist")}`;
+        if (showIsbnCloseup) warn = `${warn}\n${t("barcodeCloseupHint")}`;
       } else if (isbnMissing) {
-        warn = `${t("isbnNotDetected")}\n${t("isbnManualHint")}\n${t("barcodeCloseupHint")}`;
+        warn = `${t("isbnNotDetected")}\n${t("isbnManualHint")}`;
+        if (showIsbnCloseup) warn = `${warn}\n${t("barcodeCloseupHint")}`;
       } else if (d.raw?.metadata_miss && !d.title) {
         warn = t("metadataMiss");
       } else if (d.source === "manual" || d.raw?.ocr_available === false) {
         warn = t("ocrUnavailable");
-      } else if (!d.title && !resolvedIsbn) {
+      } else if (!d.title && !resolvedIsbn && !hasProductBarcode) {
         warn = t("ocrEmptyManual");
       } else if (weakTitleSearch) {
         note = t("titleSearchWeak");
@@ -506,8 +523,10 @@ export default function BookCreate({ onBack, onLogout }) {
       }
       if (!isbnMissing && priceMissing) {
         note = note ? `${note}\n${t("priceNotDetected")}` : t("priceNotDetected");
+      } else if (isbnMissing && hasProductBarcode && priceMissing) {
+        note = note ? `${note}\n${t("priceNotDetected")}` : t("priceNotDetected");
       }
-      if (d.raw?.suggested_isbn && isbnMissing) {
+      if (d.raw?.suggested_isbn && isbnMissing && !hasProductBarcode) {
         note = note
           ? `${note}\n${t("isbnManualHint")} (${d.raw.suggested_isbn})`
           : `${t("isbnManualHint")} (${d.raw.suggested_isbn})`;

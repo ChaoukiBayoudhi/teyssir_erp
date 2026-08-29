@@ -172,7 +172,7 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
     provider = get_ocr_provider()
 
     # Phase 2A: rectify covers before barcode + OCR (temps cleaned on exit).
-    _emit("preprocess")
+    _emit("preprocess", 12)
     with prepared_cover_paths(image_paths or []) as (prep_paths, prep_results):
         work_paths = prep_paths if prep_paths else list(image_paths or [])
         return _scan_book_prepared(
@@ -213,7 +213,7 @@ def _scan_book_prepared(
     product_bc: DecodedBarcode | None = None
     barcode_isbn = ""
     isbn_source = ""
-    _emit("barcode")
+    _emit("barcode", 25)
     if image_paths:
         product_bc = _product_barcode_from_paths(image_paths, prepared)
         if product_bc and product_bc.kind == "isbn13" and not isbn:
@@ -235,7 +235,7 @@ def _scan_book_prepared(
                     isbn = dig
                     break
 
-    _emit("ocr")
+    _emit("ocr", 40)
     texts, front, back = _extract_pair(
         provider,
         image_paths,
@@ -306,14 +306,14 @@ def _scan_book_prepared(
             ocr_draft.raw["isbn_client_hint"] = True
 
     # Phase 15.5: language milestone after OCR (final apply still runs post-merge).
-    _emit("language")
+    _emit("language", 55)
     from .language import apply_language_detected
     apply_language_detected(ocr_draft, front=ocr_draft, back=None)
 
     # Phase 15.3: Vision is a separate layer (not an in-place OCR overwrite).
     vision_draft = None
     if image_paths and _should_try_vision(ocr_draft, provider):
-        _emit("vision")
+        _emit("vision", 68)
         vision_draft = _maybe_vision_draft(image_paths, ocr_draft)
         if vision_draft:
             if not isbn and vision_draft.isbn13:
@@ -321,7 +321,7 @@ def _scan_book_prepared(
             if vision_draft.raw.get("vision_text"):
                 ocr_text = f"{ocr_text}\n---\n{vision_draft.raw.get('vision_text')}"
 
-    _emit("metadata")
+    _emit("metadata", 82)
     metadata_draft = enrich(isbn) if isbn else None
     metadata_hit = metadata_draft is not None
     if metadata_hit and isbn_source == "digit_ocr":
@@ -332,7 +332,7 @@ def _scan_book_prepared(
             "isbn_digit_ocr_confirmed": True,
         }
 
-    _emit("merge")
+    _emit("merge", 92)
     draft = merge_scan_layers(
         metadata=metadata_draft,
         vision=vision_draft,
@@ -481,7 +481,7 @@ def _scan_book_prepared(
     from .language import apply_language_detected
 
     apply_language_detected(draft, front=ocr_draft, back=None)
-    _emit("done")
+    _emit("done", 100)
 
     logger.info(
         "scan_book done ms=%s title=%r isbn=%s barcode=%s conf=%s lang=%s sources=%s",
@@ -602,14 +602,14 @@ def _should_try_vision(draft, provider) -> bool:
     """Phase 2E / 15.4 Vision gate: run when Tess path is weak; skip when strong.
 
     Skip Vision when:
-      * strong barcode ISBN + usable title (metadata will enrich — fast path)
-      * non-ISBN product barcode + usable title + decent confidence
-      * usable Latin/French title without garbage flags
+      * barcode ISBN **or** local/product barcode + (usable title **or** price)
+        — CNP school books must not wait on the LLM
+      * usable Latin/French title without garbage flags (no barcode needed)
 
     ALWAYS prefer Vision when:
-      * no ISBN / weak or missing title
-      * Arabic calligraphy / weak ``ar`` confidence
-      * garbage Latin/Arabic OCR
+      * no barcode, weak/missing title (and no price+barcode fast path)
+      * Arabic calligraphy / weak ``ar`` confidence without a product barcode
+      * garbage Latin/Arabic OCR without barcode+(title|price)
       * phone photo with no barcode and no usable title
     """
     from django.conf import settings
@@ -636,8 +636,12 @@ def _should_try_vision(draft, provider) -> bool:
     title_ok = is_usable_ocr_title(title, mean_conf=mean_conf)
     has_barcode_isbn = bool(draft.isbn13 and raw.get("isbn_from_barcode"))
     has_product_barcode = bool(
-        raw.get("barcode_detected") or draft.barcode_raw or has_barcode_isbn
+        raw.get("barcode_detected")
+        or (draft.barcode_raw or "").strip()
+        or draft.barcode_kind == "local_product"
+        or has_barcode_isbn
     )
+    has_price = bool(draft.price)
     metadata_hit = bool(raw.get("metadata_hit"))
 
     garbage = bool(
@@ -650,27 +654,22 @@ def _should_try_vision(draft, provider) -> bool:
         or (title and is_garbage_arabic_ocr(title, mean_conf=mean_conf))
     )
 
-    # Force Vision: no ISBN + weak/missing title, garbage, Arabic calligraphy
+    # Fast path FIRST: local/ISBN barcode + (usable title OR price) → skip Vision.
+    # CNP 619… school books often have a usable price sticker even when title OCR
+    # is noisy — do not block the shop on Ollama.
+    if (has_barcode_isbn or has_product_barcode) and (title_ok or has_price):
+        return False
+
+    # Force Vision: garbage / weak title when no barcode fast path above
     if garbage:
         return True
-    if not draft.isbn13 and not title_ok:
+    if not draft.isbn13 and not title_ok and not has_product_barcode:
         return True
 
-    # Strong barcode ISBN + usable title (+ optional metadata_hit) → skip
-    if has_barcode_isbn and title_ok and not garbage:
-        return False
+    # Strong barcode ISBN + metadata (title may still improve later)
     if has_barcode_isbn and metadata_hit and title_ok:
         return False
-    if has_barcode_isbn:
-        # ISBN barcode alone is enough for OpenLibrary unless title is garbage
-        if not garbage:
-            return False
-    if (
-        has_product_barcode
-        and title_ok
-        and (draft.confidence or 0) >= 0.45
-        and not garbage
-    ):
+    if has_barcode_isbn and not garbage:
         return False
 
     # Digit-OCR ISBN is unverified — allow Vision for title / better ISBN below.
@@ -683,18 +682,19 @@ def _should_try_vision(draft, provider) -> bool:
     ):
         return False
 
-    # Arabic calligraphy / weak ar path — always prefer Vision
+    # Arabic calligraphy / weak ar path — prefer Vision unless barcode fast path
     is_ar = (
         "ar" in (draft.languages or [])
         or raw.get("arabic_script_detected")
         or arabic_char_ratio(title) >= 0.15
     )
-    if is_ar and (draft.confidence or 0) < 0.5:
-        return True
-    if is_ar and mean_conf is not None and mean_conf < 50:
-        return True
-    if is_ar and not title_ok:
-        return True
+    if is_ar and not has_product_barcode:
+        if (draft.confidence or 0) < 0.5:
+            return True
+        if mean_conf is not None and mean_conf < 50:
+            return True
+        if not title_ok:
+            return True
 
     # Phone photos: missing barcode + no usable title → Vision
     if not has_product_barcode and not title_ok:
