@@ -3,7 +3,7 @@ import { Box, Button, Stack, Alert, Typography, Chip } from "@mui/material";
 import { useTranslation } from "react-i18next";
 import { scanBook, pollScanJob } from "../api";
 
-const BARCODE_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code", "itf"];
+const BARCODE_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "qr_code"];
 
 /** High-res like BookCreate (XPC01 / USB cams); fall back so older webcams still open. */
 const POS_VIDEO_CONSTRAINTS = {
@@ -17,6 +17,12 @@ const LIVE_THROTTLE_NATIVE_MS = 180;
 const LIVE_THROTTLE_ZXING_MS = 400;
 /** Ignore duplicate detections for this long after a hit. */
 const DETECT_COOLDOWN_MS = 1800;
+/** Still-frame analyse budget (ms) — barcode only, never book OCR. */
+const STILL_BUDGET_MS = 1800;
+const MAX_CAPTURES = 4;
+
+/** Guide overlay fractions (must match the green strip UI). */
+const GUIDE = { left: 0.08, right: 0.92, top: 0.42, height: 0.16 };
 
 /** ISBN-13 check digit (978/979). Prefer valid ISBN when several codes are in frame (book mode). */
 function isbn13CheckOk(raw) {
@@ -76,7 +82,128 @@ function sourceToCanvas(source) {
     canvas.getContext("2d").drawImage(source, 0, 0);
     return canvas;
   }
+  if (source instanceof HTMLImageElement) {
+    if (!source.naturalWidth) return null;
+    canvas.width = source.naturalWidth;
+    canvas.height = source.naturalHeight;
+    canvas.getContext("2d").drawImage(source, 0, 0);
+    return canvas;
+  }
   return null;
+}
+
+async function fileToCanvas(file) {
+  if (!file) return null;
+  try {
+    if (typeof createImageBitmap === "function") {
+      const bmp = await createImageBitmap(file);
+      const c = sourceToCanvas(bmp);
+      try { bmp.close?.(); } catch { /* */ }
+      return c;
+    }
+  } catch { /* fall through */ }
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const c = sourceToCanvas(img);
+      URL.revokeObjectURL(url);
+      resolve(c);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(null);
+    };
+    img.src = url;
+  });
+}
+
+function cropFrac(src, x0, y0, x1, y1) {
+  const sx = Math.max(0, Math.floor(x0 * src.width));
+  const sy = Math.max(0, Math.floor(y0 * src.height));
+  const sw = Math.max(1, Math.floor((x1 - x0) * src.width));
+  const sh = Math.max(1, Math.floor((y1 - y0) * src.height));
+  const c = document.createElement("canvas");
+  c.width = sw;
+  c.height = sh;
+  c.getContext("2d").drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh);
+  return c;
+}
+
+function scaleCanvas(src, factor) {
+  if (factor === 1) return src;
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(src.width * factor));
+  c.height = Math.max(1, Math.round(src.height * factor));
+  const ctx = c.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(src, 0, 0, c.width, c.height);
+  return c;
+}
+
+function rotateCanvas(src, deg) {
+  if (!deg) return src;
+  const rad = (deg * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(rad));
+  const sin = Math.abs(Math.sin(rad));
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(src.width * cos + src.height * sin));
+  c.height = Math.max(1, Math.round(src.width * sin + src.height * cos));
+  const ctx = c.getContext("2d");
+  ctx.translate(c.width / 2, c.height / 2);
+  ctx.rotate(rad);
+  ctx.drawImage(src, -src.width / 2, -src.height / 2);
+  return c;
+}
+
+/** Grayscale + contrast boost (helps faint webcam barcode labels). */
+function grayscaleContrast(src, contrast = 1.8) {
+  const c = document.createElement("canvas");
+  c.width = src.width;
+  c.height = src.height;
+  const ctx = c.getContext("2d");
+  ctx.drawImage(src, 0, 0);
+  const img = ctx.getImageData(0, 0, c.width, c.height);
+  const d = img.data;
+  const c255 = contrast * 255;
+  const factor = (259 * (c255 + 255)) / (255 * (259 - c255));
+  for (let i = 0; i < d.length; i += 4) {
+    let g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    g = factor * (g - 128) + 128;
+    g = g < 0 ? 0 : g > 255 ? 255 : g;
+    d[i] = d[i + 1] = d[i + 2] = g;
+  }
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+
+/**
+ * Rough score: barcodes have strong horizontal high-frequency energy in the lower/middle band.
+ * Used to prefer barcode-looking stills when analysing multiple captures.
+ */
+function barcodeLikenessScore(canvas) {
+  if (!canvas?.width) return 0;
+  const band = cropFrac(canvas, 0.05, 0.4, 0.95, 0.95);
+  const w = Math.min(band.width, 160);
+  const h = Math.min(band.height, 80);
+  const tiny = document.createElement("canvas");
+  tiny.width = w;
+  tiny.height = h;
+  const ctx = tiny.getContext("2d");
+  ctx.drawImage(band, 0, 0, w, h);
+  const { data } = ctx.getImageData(0, 0, w, h);
+  let edges = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 1; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const j = (y * w + x - 1) * 4;
+      const g1 = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      const g0 = 0.299 * data[j] + 0.587 * data[j + 1] + 0.114 * data[j + 2];
+      if (Math.abs(g1 - g0) > 28) edges += 1;
+    }
+  }
+  return edges / Math.max(1, w * h);
 }
 
 async function detectWithZxing(source) {
@@ -115,6 +242,60 @@ async function detectCodeFromSource(source, { preferIsbn = false } = {}) {
     } catch { /* fall through to ZXing */ }
   }
   return detectWithZxing(source);
+}
+
+/**
+ * Strengthen still-frame decode: band crops, upscale, grayscale/contrast, ±10° rotations,
+ * BarcodeDetector + ZXing — early-exit on first plausible code; hard budget STILL_BUDGET_MS.
+ */
+async function detectCodeFromStill(canvas, { preferIsbn = false, budgetMs = STILL_BUDGET_MS } = {}) {
+  if (!canvas?.width) return "";
+  const deadline = Date.now() + budgetMs;
+  let incomplete = "";
+
+  // Priority order: full → middle (guide) → lower (common retail sticker) → mid-high.
+  const bands = [
+    [0, 0, 1, 1],
+    [GUIDE.left, GUIDE.top, GUIDE.right, GUIDE.top + GUIDE.height],
+    [0.05, 0.55, 0.95, 0.98],
+    [0.05, 0.35, 0.95, 0.7],
+  ];
+  const scales = [1, 1.75, 2.5];
+  const angles = [0, -10, 10];
+
+  for (const band of bands) {
+    const cropped = cropFrac(canvas, band[0], band[1], band[2], band[3]);
+    for (const scale of scales) {
+      const sized = scaleCanvas(cropped, scale);
+      for (const angle of angles) {
+        if (Date.now() > deadline) return incomplete && isPlausibleProductBarcode(incomplete) ? incomplete : "";
+        const rotated = rotateCanvas(sized, angle);
+        const variants = [
+          rotated,
+          grayscaleContrast(rotated, 1.6),
+          grayscaleContrast(rotated, 2.3),
+        ];
+        for (const v of variants) {
+          if (Date.now() > deadline) {
+            return incomplete && isPlausibleProductBarcode(incomplete) ? incomplete : "";
+          }
+          const code = await detectCodeFromSource(v, { preferIsbn });
+          if (!code) continue;
+          if (isPlausibleProductBarcode(code)) return code;
+          if (!incomplete || code.length > incomplete.length) incomplete = code;
+        }
+      }
+    }
+  }
+  return incomplete;
+}
+
+/** Live path: only decode inside the green guide strip (avoids face / room noise). */
+function guideStripCanvas(video) {
+  if (!video?.videoWidth || !video?.videoHeight) return null;
+  const full = sourceToCanvas(video);
+  if (!full) return null;
+  return cropFrac(full, GUIDE.left, GUIDE.top, GUIDE.right, GUIDE.top + GUIDE.height);
 }
 
 function frameToBlob(video) {
@@ -182,6 +363,7 @@ export default function CameraScanner({
   const streamRef = useRef(null);
   const lastRef = useRef({ value: "", at: 0 });
   const decodingRef = useRef(false);
+  const capturesRef = useRef([]);
   const [fatal, setFatal] = useState("");
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
@@ -190,8 +372,12 @@ export default function CameraScanner({
   const [stream, setStream] = useState(null);
   const [captures, setCaptures] = useState([]); // { file, url }
 
-  const aimHint = () => (isPos ? t("scannerAimProductBarcode") : t("scannerAimBarcode"));
+  const aimHint = () => (isPos ? t("scannerAimStrip") : t("scannerAimBarcode"));
   const captureHint = () => (isPos ? t("scannerCaptureHintPos") : t("scannerCaptureHint"));
+
+  useEffect(() => {
+    capturesRef.current = captures;
+  }, [captures]);
 
   const stopTracks = () => {
     const s = streamRef.current;
@@ -205,9 +391,14 @@ export default function CameraScanner({
     }
   };
 
+  const revokeAllCaptures = (list) => {
+    (list || []).forEach((c) => c.url && URL.revokeObjectURL(c.url));
+  };
+
   const handleClose = () => {
     stopTracks();
-    captures.forEach((c) => c.url && URL.revokeObjectURL(c.url));
+    revokeAllCaptures(capturesRef.current);
+    setCaptures([]);
     onClose?.();
   };
 
@@ -215,7 +406,8 @@ export default function CameraScanner({
     onDetect?.(value);
     if (stopOnDetect) {
       stopTracks();
-      captures.forEach((c) => c.url && URL.revokeObjectURL(c.url));
+      revokeAllCaptures(capturesRef.current);
+      setCaptures([]);
       onClose?.();
     }
   };
@@ -224,6 +416,7 @@ export default function CameraScanner({
     let raf;
     let stopped = false;
     let lastTickAt = 0;
+    let missTicks = 0;
 
     (async () => {
       let media;
@@ -256,13 +449,25 @@ export default function CameraScanner({
         lastTickAt = now;
         decodingRef.current = true;
         try {
-          const value = await detectCodeFromSource(videoRef.current, { preferIsbn });
+          // Live: only the green guide strip — never treat a face frame as a failed Analyser.
+          const strip = guideStripCanvas(videoRef.current);
+          const value = strip
+            ? await detectCodeFromSource(strip, { preferIsbn })
+            : "";
           if (value && isPlausibleProductBarcode(value)) {
+            missTicks = 0;
             if (value !== lastRef.current.value || now - lastRef.current.at > DETECT_COOLDOWN_MS) {
               lastRef.current = { value, at: now };
               setInfo(`${t("codeDetected")}: ${value}`);
               setError("");
               emitDetect(value);
+            }
+          } else {
+            missTicks += 1;
+            // Soft hint after a few empty strips — never yellow "non détecté" from live.
+            if (missTicks === 8) {
+              setError("");
+              setInfo(t("scannerAimStrip"));
             }
           }
         } catch { /* frame not ready */ }
@@ -297,68 +502,93 @@ export default function CameraScanner({
     const file = new File([blob], `scan-${Date.now()}.jpg`, { type: "image/jpeg" });
     const url = URL.createObjectURL(file);
     setCaptures((prev) => {
-      prev.forEach((c) => c.url && URL.revokeObjectURL(c.url));
-      return [{ file, url }];
+      const next = [...prev, { file, url }];
+      if (next.length > MAX_CAPTURES) {
+        const dropped = next.splice(0, next.length - MAX_CAPTURES);
+        revokeAllCaptures(dropped);
+      }
+      return next;
     });
     setInfo(isPos ? t("captureReadyAnalyzePos") : t("captureReadyAnalyze"));
 
+    // Quick still decode on this capture (strengthened path).
     try {
-      const code = await detectCodeFromSource(await createImageBitmap(file), { preferIsbn });
+      const canvas = await fileToCanvas(file);
+      const code = await detectCodeFromStill(canvas, { preferIsbn, budgetMs: 900 });
       if (code && isPlausibleProductBarcode(code)) {
         lastRef.current = { value: code, at: Date.now() };
         setInfo(`${t("codeDetected")}: ${code}`);
+        setError("");
         emitDetect(code);
-      } else if (code) {
-        setError(t("barcodeIncomplete"));
-        setInfo(t("scannerRecaptureBarcode"));
       }
-    } catch { /* still-frame detect optional */ }
+    } catch { /* still-frame detect optional on capture */ }
   };
 
   const analyze = async () => {
     setError("");
     setBusy(true);
     try {
-      let file = captures[0]?.file;
-      if (!file) {
+      let list = capturesRef.current.slice();
+      if (!list.length) {
         const blob = await frameToBlob(videoRef.current);
         if (!blob) {
           setError(t("cameraNotReady"));
           return;
         }
-        file = new File([blob], `scan-${Date.now()}.jpg`, { type: "image/jpeg" });
+        const file = new File([blob], `scan-${Date.now()}.jpg`, { type: "image/jpeg" });
         const url = URL.createObjectURL(file);
-        setCaptures((prev) => {
-          prev.forEach((c) => c.url && URL.revokeObjectURL(c.url));
-          return [{ file, url }];
-        });
+        list = [{ file, url }];
+        setCaptures(list);
       }
 
+      // Decode captured stills first (never the live face frame when photos exist).
+      // Prefer barcode-looking photos (high horizontal edge energy).
+      const withCanvas = [];
+      for (const c of list) {
+        const canvas = await fileToCanvas(c.file);
+        if (canvas) withCanvas.push({ ...c, canvas, score: barcodeLikenessScore(canvas) });
+      }
+      withCanvas.sort((a, b) => b.score - a.score);
+
+      const perPhotoBudget = Math.max(400, Math.floor(STILL_BUDGET_MS / Math.max(1, withCanvas.length)));
       let code = "";
-      try {
-        code = await detectCodeFromSource(await createImageBitmap(file), { preferIsbn });
-      } catch { /* */ }
+      let incomplete = "";
+      for (const item of withCanvas) {
+        const hit = await detectCodeFromStill(item.canvas, {
+          preferIsbn,
+          budgetMs: perPhotoBudget,
+        });
+        if (hit && isPlausibleProductBarcode(hit)) {
+          code = hit;
+          break;
+        }
+        if (hit && (!incomplete || hit.length > incomplete.length)) incomplete = hit;
+      }
 
       // POS / article: barcode decode only — never call bookscan Vision/OCR.
       if (isPos) {
         if (code && isPlausibleProductBarcode(code)) {
           lastRef.current = { value: code, at: Date.now() };
           setInfo(`${t("codeDetected")}: ${code}`);
+          setError("");
           emitDetect(code);
           return;
         }
-        if (code) {
+        if (incomplete) {
           setError(t("barcodeIncomplete"));
+          setInfo(t("scannerRecaptureBarcode"));
         } else {
-          setError(t("barcodeNotDetected"));
+          // Keep photos for retry — do not clear captures.
+          setError(t("barcodeIllegible"));
+          setInfo(t("scannerRecaptureBarcode"));
         }
-        setInfo(t("scannerRecaptureBarcode"));
         return;
       }
 
-      // Book mode: optional OCR / title search fallback.
+      // Book mode: optional OCR / title search fallback (uses first capture).
       if (!code || !isPlausibleProductBarcode(code)) {
         setInfo(t("runningOcr"));
+        const file = list[list.length - 1]?.file || list[0]?.file;
         let draft = await scanBook([file]);
         if (draft.status === "pending") {
           setInfo(t("waitingOcr"));
@@ -433,15 +663,20 @@ export default function CameraScanner({
             }}
           />
         </Box>
-        {captures[0]?.url && (
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Box
-              component="img"
-              src={captures[0].url}
-              alt=""
-              sx={{ width: 56, height: 56, objectFit: "cover", borderRadius: 1, border: "1px solid", borderColor: "divider" }}
-            />
-            <Typography variant="caption" color="text.secondary">{t("choosePhotos")}: 1</Typography>
+        {captures.length > 0 && (
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+            {captures.map((c, i) => (
+              <Box
+                key={c.url || i}
+                component="img"
+                src={c.url}
+                alt=""
+                sx={{ width: 56, height: 56, objectFit: "cover", borderRadius: 1, border: "1px solid", borderColor: "divider" }}
+              />
+            ))}
+            <Typography variant="caption" color="text.secondary">
+              {t("choosePhotos")}: {captures.length}
+            </Typography>
             {liveOk && <Chip size="small" label={t("liveScanOn")} color="success" variant="outlined" />}
           </Stack>
         )}

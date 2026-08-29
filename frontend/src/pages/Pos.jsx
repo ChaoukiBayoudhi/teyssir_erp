@@ -180,7 +180,14 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
                 <Button variant={camera ? "contained" : "outlined"} sx={{ minWidth: 52, height: 56 }}
                         onClick={() => setCamera((c) => !c)} aria-label={t("scanWithCamera")}>📷</Button>
               </Stack>
-              {camera && <CameraScanner mode="pos" onDetect={onCameraCode} onClose={() => setCamera(false)} />}
+              {camera && (
+                <CameraScanner
+                  mode="pos"
+                  stopOnDetect
+                  onDetect={onCameraCode}
+                  onClose={() => setCamera(false)}
+                />
+              )}
               <List dense>
                 {results.length === 0 && (
                   <Typography color="text.secondary" sx={{ p: 1 }}>{t("noResults")}</Typography>
