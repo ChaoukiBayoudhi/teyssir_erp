@@ -307,6 +307,28 @@ def _arabic_title_quality(text: str, *, mean_conf: float | None = None) -> float
     return ar / 20.0 + bonus + min(len(s), 40) / 120.0
 
 
+def _strip_leading_ocr_glue(text: str, *, mean_conf: float | None = None) -> str:
+    """Drop a single leading Latin letter glued onto a Capitalized title (``PMathématiques``)."""
+    s = (text or "").strip()
+    m = re.match(r"^([A-Za-z])([A-ZÀ-Ÿ].+)$", s)
+    if not m:
+        return s
+    rest = m.group(2)
+    if _latin_title_quality(rest, mean_conf=mean_conf) > _latin_title_quality(
+        s, mean_conf=mean_conf
+    ):
+        return rest
+    # Known school-book tokens even when quality scores are close
+    if re.search(
+        r"^(Mathématiques|Mathematiques|Histoire|Sciences|Physique|Chimie|"
+        r"Français|Francais|Arabe|Anglais|Premier|Beauty)\b",
+        rest,
+        re.I,
+    ):
+        return rest
+    return s
+
+
 def merge_bilingual_title(
     *parts: str,
     mean_conf: float | None = None,
@@ -317,6 +339,8 @@ def merge_bilingual_title(
     Preferred form: ``Le premier (الثلاثي الاول)``. Falls back to `` / `` separator
     when ``style='slash'``. Single-script input is returned unchanged (cleaned).
     Never drops a usable Latin title when Arabic is also present.
+    When the Arabic side is garbage OCR, prefer the clean Latin title alone
+    (e.g. ``(المسمد مایه) PMathématiques`` → ``Mathématiques``).
     """
     best_latin = ""
     best_latin_score = 0.0
@@ -326,10 +350,12 @@ def merge_bilingual_title(
         s = (raw or "").strip()
         if not s:
             continue
-        # Already merged? peel sides
-        if re.search(r"[/（(]", s) and (arabic_char_ratio(s) >= 0.15):
-            for chunk in re.split(r"\s*[/(（]\s*", s):
-                chunk = chunk.rstrip(")）").strip()
+        # Already merged / paren peel? split on open and close paren / slash
+        if re.search(r"[/（()）]", s) and (
+            arabic_char_ratio(s) >= 0.12 or "(" in s or "（" in s
+        ):
+            for chunk in re.split(r"\s*[/(（)）]\s*", s):
+                chunk = chunk.strip()
                 if not chunk:
                     continue
                 ls = _latin_title_quality(chunk, mean_conf=mean_conf)
@@ -345,6 +371,26 @@ def merge_bilingual_title(
         as_ = _arabic_title_quality(s, mean_conf=mean_conf)
         if as_ > best_arabic_score:
             best_arabic_score, best_arabic = as_, s
+
+    if best_latin:
+        best_latin = _strip_leading_ocr_glue(best_latin, mean_conf=mean_conf)
+        best_latin_score = _latin_title_quality(best_latin, mean_conf=mean_conf)
+    # Drop unusable Arabic side — prefer clean Latin alone
+    if best_arabic and (
+        is_garbage_arabic_ocr(best_arabic, mean_conf=mean_conf)
+        or best_arabic_score < 0.35
+    ):
+        best_arabic = ""
+    # Strong Latin title shape + clearly weaker Arabic peel → Latin only
+    # (keeps real bilingual like Le premier + الثلاثي؛ drops noisy AR beside Mathématiques)
+    if best_latin and best_arabic:
+        latin_words = [w for w in re.split(r"\s+", best_latin) if w]
+        if (
+            _latin_title_shape_ok(best_latin, latin_words)
+            and best_latin_score >= 1.0
+            and best_arabic_score < 0.65
+        ):
+            best_arabic = ""
 
     if best_latin and best_arabic:
         if style == "slash":
@@ -669,13 +715,20 @@ def _fast_path_ready(
     *,
     bilingual_pending: bool = False,
 ) -> bool:
-    """Early-exit gate: usable title + (ISBN | local barcode | price).
+    """Early-exit gate: usable title + (ISBN | local barcode | price),
+    or local barcode + price even when title is still noisy (CNP school books).
 
     Never exit early while a bilingual second lang pass is still required.
     """
     if bilingual_pending:
         return False
-    if not is_usable_ocr_title(draft.title or "", mean_conf=mean_conf):
+    has_bc = bool((draft.barcode_raw or "").strip() or draft.isbn13)
+    has_price = bool(draft.price)
+    title_ok = is_usable_ocr_title(draft.title or "", mean_conf=mean_conf)
+    # Barcode + price is enough to leave Tess (Vision gate still decides separately)
+    if has_bc and has_price:
+        return True
+    if not title_ok:
         return False
     if draft.isbn13:
         return True

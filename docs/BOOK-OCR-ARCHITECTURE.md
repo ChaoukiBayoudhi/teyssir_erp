@@ -154,6 +154,26 @@ Env: `TEYSSIR_VISION_MODEL`, `TEYSSIR_OCR_VISION_FALLBACK=true`, keep `TEYSSIR_O
 for day-to-day. **CPU** works (cold start tens of seconds); GPU/Metal speeds warm inference.
 Fully **offline** after pull. Details: `docs/LOCAL-AI.md`.
 
+### Accuracy vs speed (`TEYSSIR_BOOKSCAN_ACCURACY`)
+
+Default is **off** (fast shop path: script probe, capped Tess variants, Vision only when
+the draft is weak). Set `TEYSSIR_BOOKSCAN_ACCURACY=1` only for debugging low-quality
+covers (extra title_band Tess passes + slightly longer Vision budget).
+
+**macOS LaunchAgent shop use:** keep accuracy off. If you enabled it for testing:
+
+```bash
+# Turn off for speed (edit plist, then reload)
+plutil -replace EnvironmentVariables.TEYSSIR_BOOKSCAN_ACCURACY -string 0 \
+  ~/Library/LaunchAgents/com.teyssir.backend.plist
+# or remove the key entirely (unset = off)
+launchctl kickstart -k "gui/$(id -u)/com.teyssir.backend"
+```
+
+`deploy/macos/Install-BackendService.sh` does **not** set `TEYSSIR_BOOKSCAN_ACCURACY`
+(defaults off). Vision is also skipped when a local CNP / ISBN barcode is present
+**and** (usable title **or** price) — CNP school books should not wait on Ollama.
+
 ## Status / phasing
 - **Phase A (this milestone):** models + migration, provider abstractions (`OcrProvider`,
   `BookMetadataProvider` + OpenLibrary), `scan_book` + create services, scan/create/image API,

@@ -24,3 +24,18 @@ bash deploy/macos/install.sh --role hub
 ```
 
 Verified live on a MacBook Pro M1. Uses only free/open-source tools (Python, waitress, WhiteNoise, launchd).
+
+### Book scan speed (`TEYSSIR_BOOKSCAN_ACCURACY`)
+
+Shop default: **accuracy off** (fast Tess path; Vision only for weak drafts).
+`Install-BackendService.sh` does not set this env var.
+
+If a LaunchAgent was configured with `TEYSSIR_BOOKSCAN_ACCURACY=1` for testing, turn it
+off for day-to-day Nouveau livre:
+
+```bash
+# Set to 0 (or delete the key — unset means off)
+/usr/libexec/PlistBuddy -c "Set :EnvironmentVariables:TEYSSIR_BOOKSCAN_ACCURACY 0" \
+  ~/Library/LaunchAgents/com.teyssir.backend.plist
+launchctl kickstart -k "gui/$(id -u)/com.teyssir.backend"
+```
