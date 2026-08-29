@@ -328,6 +328,20 @@ class PriceAndLangTests(unittest.TestCase):
             extract_price_dt("6192302468921\n34.900"),
             "",
         )
+        # P15-T2: weak "DT 4" must not beat a real millime sticker (Premier 17.000)
+        self.assertEqual(
+            extract_price_dt("17,000 , 5204\nLe DT 4 mens\n17,000 JR 152743"),
+            "17.000",
+        )
+        self.assertEqual(extract_price_dt("Le DT 4 mens"), "4.000")
+        # ISBN digit soup must not invent 5.000
+        self.assertEqual(extract_price_dt("ISBN 9789973352743\n5.000"), "")
+        # History CNP bleed: 24.900 alone with barcode context → reject
+        self.assertEqual(extract_price_dt("24.900\n6192202606921"), "")
+        self.assertEqual(
+            extract_price_dt("نس نيم تعسرم 4,900\n19330282\n24,900"),
+            "4.900",
+        )
 
     def test_detect_script_langs(self):
         from teyssir.catalog.bookscan.ocr import detect_script_langs

@@ -105,7 +105,7 @@ def _is_barcode_fragment_price(raw: str, text: str) -> bool:
     # Leading barcode digit glued on: ZX.YYY where X.YYY is a plausible millime
     # and Z appears in barcode digit runs (not merely in the price itself).
     norm = (raw or "").replace(",", ".")
-    if "." not in norm or not runs:
+    if "." not in norm:
         return False
     whole, _, frac = norm.partition(".")
     if len(frac) != 3 or not _plausible_bare_millime(frac) or len(whole) < 2:
@@ -115,6 +115,13 @@ def _is_barcode_fragment_price(raw: str, text: str) -> bool:
         return False
     lead = whole[0]
     rest_digs = _price_digits(rest_raw)
+    # Standalone lead digit on its own line (History OCR: "3\\n…34,900") — glue FP
+    if len(whole) == 2 and re.search(
+        rf"(?m)^(?:\D*){re.escape(lead)}(?:\D*)$", text or ""
+    ):
+        return True
+    if not runs:
+        return False
     for run in runs:
         if digs in run:
             continue
@@ -186,7 +193,13 @@ def extract_price_dt(text: str) -> str:
         if _is_barcode_fragment_price(raw, text):
             continue
         amount = _to_amount(raw)
-        if amount is not None:
+        if amount is None:
+            continue
+        # Weak "DT 4" / "4 DT" without millime decimals is OCR mush (beats real
+        # stickers like 17,000). Keep millime currency hits (4,900 د.ت) as labeled.
+        if not re.search(r"[.,]\d", raw or ""):
+            _append_unique(unlabeled, amount)
+        else:
             _append_unique(labeled, amount)
 
     for line in (text or "").splitlines() or [text]:
@@ -212,6 +225,11 @@ def extract_price_dt(text: str) -> str:
     def _pick(pool: list[str]) -> str:
         if not pool:
             return ""
+        # Prefer multi-dinar stickers (17.000) over single-digit OCR mush (4.000 / 5.000)
+        # when both appear — real CNP stickers like 4.900 stay when alone.
+        multi = [c for c in pool if len(c.split(".", 1)[0]) >= 2]
+        if multi and len(multi) < len(pool):
+            pool = multi
         # Round dinar (.000) beats off-by-one millime (17.900 vs 17.000) when both present
         zeros = [c for c in pool if c.endswith(".000")]
         if zeros and any(c.endswith(".000") for c in pool):
@@ -232,10 +250,22 @@ def extract_price_dt(text: str) -> str:
 
     if labeled:
         return _pick(labeled)
-    # When ISBN/CNP digits / barcode soup are present, bare millimes are OCR noise —
-    # unless we already stripped barcode-prefixed siblings (34.900→4.900), or the
-    # only survivors are single-dinar sticker amounts (4.900 not 34.900).
+    # ISBN bookland soup (978/979): never guess a bare millime (5.000 from digit noise).
+    # Empty is honest — fixtures allow price_allow_empty.
+    if re.search(r"(?:isbn|978\d{9,}|979\d{9,})", text or "", re.I) and not dropped_prefixed:
+        return ""
+    # When CNP/barcode soup is present, bare millimes are usually OCR noise.
+    # Prefer real multi-dinar stickers (17.000) over single-digit mush (4.000/5.000)
+    # that the old "small only" path wrongly kept when digit soup made barcodeish=True.
+    # Fall back to single-dinar stickers (4.900) only when no multi-dinar candidate remains
+    # (after barcode-prefixed siblings like 24.900→4.900 were stripped).
     if barcodeish and not dropped_prefixed:
+        multi = [
+            c for c in unlabeled
+            if "." in c and len(c.split(".", 1)[0]) >= 2
+        ]
+        if multi:
+            return _pick(multi)
         small = [
             c for c in unlabeled
             if "." in c and len(c.split(".", 1)[0]) == 1
