@@ -11,6 +11,7 @@ Scripts to install and run Teyssir on macOS.
 | `Install-DesktopApp.sh` | **Teyssir ERP.app** on Desktop + `~/Applications` with branding `.icns`. |
 | `open-teyssir.sh` | Wait for `/health/` then `open http://localhost:8000`. |
 | `serve.py` | Service entry: migrate + waitress. |
+| `launch-backend.sh` | LaunchAgent wrapper (Python.app; avoids EX_CONFIG). |
 | `uninstall.sh` | Remove LaunchAgents + shortcuts (keeps data). |
 | `start-teyssir.sh` | Manual Terminal server **if** the agent is not running. |
 | `register-autostart.sh` | Ensures backend agent + till sync schedule. |
@@ -39,3 +40,11 @@ off for day-to-day Nouveau livre:
   ~/Library/LaunchAgents/com.teyssir.backend.plist
 launchctl kickstart -k "gui/$(id -u)/com.teyssir.backend"
 ```
+
+## LaunchAgent notes (macOS)
+
+- Plist path is **user-local only**: `~/Library/LaunchAgents/com.teyssir.backend.plist` — do not commit it.
+- Working tree for Phase 15 book OCR: run `bash deploy/macos/Install-BackendService.sh` from the **bookocr worktree** so `WorkingDirectory` and `launch-backend.sh` point there.
+- The agent runs `/bin/bash deploy/macos/launch-backend.sh`, which execs Homebrew **Python.app** with the worktree venv. Calling `.venv/bin/python` directly from launchd often fails with **exit 78 `EX_CONFIG`** (Homebrew python is a `posix_spawn` stub blocked by Launch Constraints).
+- LaunchAgent `StandardOutPath`/`StandardErrorPath` must **not** live under `Documents/` (TCC): use `~/Library/Logs/teyssir/`.
+- Wrapper executed by launchd: `~/Library/Application Support/Teyssir/launch-backend.sh` (not the copy under Documents).

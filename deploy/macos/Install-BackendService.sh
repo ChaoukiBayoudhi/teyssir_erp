@@ -7,6 +7,10 @@
 #     bash deploy/macos/Install-BackendService.sh --printer tcp:192.168.1.100:9100
 #     bash deploy/macos/Install-BackendService.sh --remove
 #  TEYSSIR_PRINTER is taken from --printer, else .env, else dummy.
+#
+#  Program is /bin/bash + launch-backend.sh (not .venv/bin/python): Homebrew's
+#  python posix_spawn stub exits 78 EX_CONFIG under launchd Launch Constraints.
+#  Plist lives in ~/Library/LaunchAgents (user-local; do not commit).
 # ===========================================================
 set -euo pipefail
 
@@ -29,8 +33,37 @@ PLIST="$LA/$LABEL.plist"
 OLD_PLIST="$LA/com.teyssir.server.plist"
 PYTHON="$ROOT/.venv/bin/python"
 SERVE="$ROOT/deploy/macos/serve.py"
-LOG_DIR="$ROOT/logs"
-mkdir -p "$LA" "$LOG_DIR"
+LAUNCH_SRC="$ROOT/deploy/macos/launch-backend.sh"
+SUPPORT_DIR="$HOME/Library/Application Support/Teyssir"
+LAUNCH="$SUPPORT_DIR/launch-backend.sh"
+LOG_DIR="$HOME/Library/Logs/teyssir"
+mkdir -p "$LA" "$LOG_DIR" "$SUPPORT_DIR"
+
+# LaunchAgent cannot execute scripts under Documents/ (TCC → exit 126).
+# Install a copy under ~/Library/Application Support with absolute Python.app.
+PYAPP=""
+for cand in \
+  /opt/homebrew/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python \
+  /opt/homebrew/Cellar/python@3.14/*/Frameworks/Python.framework/Versions/*/Resources/Python.app/Contents/MacOS/Python
+do
+  if [ -x "$cand" ]; then PYAPP="$cand"; break; fi
+done
+if [ -z "$PYAPP" ]; then
+  echo "[ERROR] Homebrew Python.app not found"
+  exit 1
+fi
+cat > "$LAUNCH" <<LAUNCH_EOF
+#!/bin/bash
+set -euo pipefail
+ROOT="$ROOT"
+cd "\$ROOT"
+export VIRTUAL_ENV="\$ROOT/.venv"
+export PATH="\$VIRTUAL_ENV/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PYTHONUNBUFFERED=1
+export __PYVENV_LAUNCHER__="\$VIRTUAL_ENV/bin/python"
+exec "$PYAPP" "\$ROOT/deploy/macos/serve.py"
+LAUNCH_EOF
+chmod +x "$LAUNCH"
 
 TESS_CMD="/opt/homebrew/bin/tesseract"
 for cand in /opt/homebrew/bin/tesseract /usr/local/bin/tesseract; do
@@ -73,6 +106,10 @@ if [ ! -x "$PYTHON" ] || [ ! -f "$SERVE" ]; then
   echo "[ERROR] Missing .venv or serve.py. Run: bash deploy/macos/install.sh first."
   exit 1
 fi
+if [ ! -x "$LAUNCH" ]; then
+  echo "[ERROR] Failed to install $LAUNCH"
+  exit 1
+fi
 
 # Drop legacy agent that called start-teyssir.sh (avoid two servers on :8000).
 if [ -f "$OLD_PLIST" ]; then
@@ -97,8 +134,8 @@ cat > "$PLIST" <<EOF
   <string>$LABEL</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$PYTHON</string>
-    <string>$SERVE</string>
+    <string>/bin/bash</string>
+    <string>$LAUNCH</string>
   </array>
   <key>WorkingDirectory</key>
   <string>$ROOT</string>
@@ -128,6 +165,10 @@ cat > "$PLIST" <<EOF
     <string>$TESS_CMD</string>
     <key>TEYSSIR_PRINTER</key>
     <string>$PRINTER</string>
+    <key>TEYSSIR_OCR_VISION_FALLBACK</key>
+    <string>true</string>
+    <key>TEYSSIR_BOOKSCAN_ACCURACY</key>
+    <string>0</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
