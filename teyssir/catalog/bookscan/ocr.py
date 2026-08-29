@@ -1406,6 +1406,9 @@ class TesseractOcrProvider(OcrProvider):
                     digit_blob = barcode_isbn
                     used.append("barcode")
                 elif product_bc:
+                    # Seed CNP/GTIN digits so price OCR can reject barcode bleed
+                    # (24.900 / 34.900) even when digit-OCR is skipped.
+                    digit_blob = product_bc.raw or digit_blob
                     used.append("barcode_non_isbn")
                 elif known_barcode is None:
                     barcode_isbn, isbn_source = decode_isbn_with_source(
