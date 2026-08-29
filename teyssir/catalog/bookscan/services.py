@@ -271,6 +271,24 @@ def _scan_book_prepared(
     ocr_draft = merge_cover_drafts(front, back) if image_paths else front
     ocr_text = "\n---\n".join(texts)
 
+    # Propagate capture geometry from preprocess (distant-shot Vision / UX gate)
+    if prepared:
+        fills = [
+            float(getattr(p, "book_fill_ratio", 1.0) or 1.0)
+            for p in prepared
+            if p is not None
+        ]
+        if fills:
+            fill = min(fills)
+            ocr_draft.raw = {
+                **(ocr_draft.raw or {}),
+                "book_fill_ratio": fill,
+                "book_too_small": fill < 0.22,
+                "preprocess_methods": [
+                    getattr(p, "method", "") for p in prepared if p is not None
+                ],
+            }
+
     # Attach product barcode (ISBN or CNP/GTIN). Prefer path-level zbar hit.
     if product_bc:
         _apply_barcode_hit(ocr_draft, product_bc)
@@ -485,6 +503,31 @@ def _scan_book_prepared(
     from .edition import refine_school_draft
 
     refine_school_draft(draft)
+    # Final safety: never leave ultra-garbage / unusable OCR titles in the form
+    from .ocr import (
+        is_garbage_latin_ocr,
+        is_ultra_garbage_title,
+        is_usable_ocr_title,
+    )
+
+    if draft.title and (
+        is_ultra_garbage_title(draft.title)
+        or is_garbage_latin_ocr(draft.title)
+        or not is_usable_ocr_title(draft.title)
+    ):
+        draft.raw = {
+            **(draft.raw or {}),
+            "rejected_title": draft.title,
+            "suggested_title": (draft.raw or {}).get("suggested_title") or draft.title,
+            "ocr_garbage_latin": True,
+            "ocr_title_unusable": True,
+            "manual_assist": True,
+        }
+        draft.title = ""
+        if not (draft.raw or {}).get("ocr_arabic_likely"):
+            draft.languages = [x for x in (draft.languages or []) if x == "ar"]
+        if draft.source == "tesseract" and (draft.confidence or 0) > 0.15 and not draft.isbn13:
+            draft.confidence = min(draft.confidence or 0.1, 0.1)
     # School / no usable title: never leave "Book: garbage…" descriptions
     if (draft.raw or {}).get("school_edition") or (draft.edition_kind == "school_cnp"):
         from .ocr import is_usable_ocr_title
@@ -501,6 +544,14 @@ def _scan_book_prepared(
             draft.raw["rejected_description"] = draft.description
             draft.description = ""
             draft.raw["manual_assist"] = True
+    # Vision language wins for children's / weak OCR covers
+    if (draft.raw or {}).get("vision_fallback") and getattr(draft, "language_detected", ""):
+        from .language import parse_script_probe
+
+        vis_langs = parse_script_probe(draft.language_detected)
+        if vis_langs:
+            draft.languages = vis_langs
+            draft.raw["detected_langs"] = list(vis_langs)
     _emit("done", 100)
 
     logger.info(
@@ -627,8 +678,10 @@ def _should_try_vision(draft, provider) -> bool:
         — CNP school books must not wait on the LLM
       * usable Latin/French title without garbage flags (no barcode needed)
 
-    ALWAYS prefer Vision when:
-      * no barcode, weak/missing title (and no price+barcode fast path)
+    ALWAYS prefer Vision when (even if ``TEYSSIR_BOOKSCAN_ACCURACY=0``):
+      * confidence ≤ ~0.15 (distant / failed OCR)
+      * book fill ratio too small (tiny cover in frame)
+      * no barcode, weak/missing/unusable title
       * Arabic calligraphy / weak ``ar`` confidence without a product barcode
       * garbage Latin/Arabic OCR without barcode+(title|price)
       * phone photo with no barcode and no usable title
@@ -639,6 +692,7 @@ def _should_try_vision(draft, provider) -> bool:
         arabic_char_ratio,
         is_garbage_arabic_ocr,
         is_garbage_latin_ocr,
+        is_ultra_garbage_title,
         is_usable_ocr_title,
     )
 
@@ -685,6 +739,19 @@ def _should_try_vision(draft, provider) -> bool:
         or raw.get("tess_missing_ara")
         or (title and is_garbage_latin_ocr(title, mean_conf=mean_conf))
         or (title and is_garbage_arabic_ocr(title, mean_conf=mean_conf))
+        or (title and is_ultra_garbage_title(title))
+        or (raw.get("rejected_title") and is_ultra_garbage_title(str(raw.get("rejected_title") or "")))
+    )
+
+    fill_ratio = None
+    try:
+        if raw.get("book_fill_ratio") is not None:
+            fill_ratio = float(raw.get("book_fill_ratio"))
+    except (TypeError, ValueError):
+        fill_ratio = None
+    book_too_small = bool(
+        raw.get("book_too_small")
+        or (fill_ratio is not None and fill_ratio < 0.22)
     )
 
     # Fast path FIRST: local/ISBN barcode + (usable title OR price) → skip Vision.
@@ -694,12 +761,24 @@ def _should_try_vision(draft, provider) -> bool:
         return False
     # School cover classified without barcode: skip Vision only for solid Latin/FR
     # titles (Mathématiques) or a price sticker — weak Arabic calligraphy still
-    # benefits from Vision.
-    if is_school and has_price:
+    # benefits from Vision. Never skip when title is garbage / book tiny.
+    if is_school and has_price and not book_too_small and not garbage:
         return False
-    if is_school and title_ok and arabic_char_ratio(title) < 0.15:
+    if (
+        is_school
+        and title_ok
+        and arabic_char_ratio(title) < 0.15
+        and not book_too_small
+        and not garbage
+    ):
         return False
 
+    # Force Vision: ultra-low confidence (distant shot / failed Tess) — no barcode
+    if (draft.confidence or 0) <= 0.15:
+        return True
+    # Force Vision: book occupies too little of the frame
+    if book_too_small:
+        return True
     # Force Vision: garbage / weak title when no barcode fast path above
     if garbage:
         return True
@@ -743,7 +822,7 @@ def _should_try_vision(draft, provider) -> bool:
         return True
 
     # Usable Latin/French title — prefer fast path + title search over Vision
-    if title_ok:
+    if title_ok and not book_too_small:
         return False
 
     if raw.get("ocr_available") is False:

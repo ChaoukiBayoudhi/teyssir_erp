@@ -447,6 +447,7 @@ class PriceAndLangTests(unittest.TestCase):
         for junk in (
             "wis! Boot ay", "9 or et O.", 'ol YI a "Teeny"', "arr", "FRE pte",
             "PEL oe nee", "ead chien", "herbe", "Whee",
+            r"QU \ a7", "QU a7", "QU / a7",
         ):
             self.assertTrue(
                 is_garbage_latin_ocr(junk, mean_conf=35),
@@ -455,10 +456,30 @@ class PriceAndLangTests(unittest.TestCase):
             self.assertNotIn("en", detect_script_langs(junk, mean_conf=35))
             self.assertFalse(is_usable_ocr_title(junk, mean_conf=35))
 
+        # Distant-shot mush must be garbage even at misleadingly high mean_conf
+        from teyssir.catalog.bookscan.ocr import is_ultra_garbage_title
+
+        for junk in (r"QU \ a7", "QU a7", "QUa7"):
+            self.assertTrue(is_ultra_garbage_title(junk), msg=junk)
+            self.assertTrue(
+                is_garbage_latin_ocr(junk, mean_conf=90),
+                msg=f"high-conf mush must still be garbage: {junk!r}",
+            )
+            self.assertFalse(is_usable_ocr_title(junk, mean_conf=90))
+
+        # Cleared from draft (no Titre autofill)
+        qu = _draft_from_text(r"QU \ a7", role="front", mean_conf=70)
+        self.assertEqual(qu.title, "")
+        self.assertTrue(qu.raw.get("ocr_garbage_latin") or qu.raw.get("ocr_title_unusable"))
+        self.assertTrue(qu.raw.get("manual_assist"))
+        self.assertNotIn("en", qu.languages)
+
         self.assertFalse(is_garbage_latin_ocr("The Little Prince", mean_conf=70))
         self.assertFalse(is_garbage_latin_ocr("Beauty and the Beast", mean_conf=55))
         self.assertFalse(is_garbage_latin_ocr("Mathématiques", mean_conf=55))
         self.assertFalse(is_garbage_latin_ocr("Le premier", mean_conf=55))
+        self.assertFalse(is_ultra_garbage_title("Cendrillon"))
+        self.assertFalse(is_ultra_garbage_title("The Cat"))
         self.assertTrue(is_usable_ocr_title("The Little Prince", mean_conf=70))
         self.assertTrue(is_usable_ocr_title("كتاب الفقه", mean_conf=40))
 
@@ -1371,6 +1392,50 @@ class TitleSearchGatingTests(unittest.TestCase):
             raw={"ocr_garbage_latin": True, "ocr_mean_confidence": 30},
         )
         self.assertTrue(_should_try_vision(garb, P()))
+
+    def test_should_try_vision_on_low_conf_and_small_fill(self):
+        """Distant children's cover: force Vision even with ACCURACY=0 / price-only."""
+        from django.test import override_settings
+
+        from teyssir.catalog.bookscan.services import _should_try_vision
+
+        class P:
+            name = "tesseract"
+
+        # Conf ≤0.15 — even if a mush title somehow remained
+        low = BookDraft(
+            title=r"QU \ a7", source="tesseract", confidence=0.1, price="4.000",
+            raw={"ocr_mean_confidence": 12, "isbn_not_detected": True},
+        )
+        with override_settings(BOOKSCAN_ACCURACY=False, OCR_VISION_FALLBACK=True):
+            self.assertTrue(_should_try_vision(low, P()))
+
+        # Book too small in frame — force Vision without barcode
+        tiny = BookDraft(
+            title="Something Long Enough", source="tesseract", confidence=0.4,
+            raw={
+                "book_fill_ratio": 0.12,
+                "book_too_small": True,
+                "ocr_mean_confidence": 40,
+                "isbn_not_detected": True,
+            },
+        )
+        with override_settings(BOOKSCAN_ACCURACY=False, OCR_VISION_FALLBACK=True):
+            self.assertTrue(_should_try_vision(tiny, P()))
+
+        # Cleared garbage + rejected_title still forces Vision
+        cleared = BookDraft(
+            title="", source="tesseract", confidence=0.1, price="4.000",
+            raw={
+                "ocr_garbage_latin": True,
+                "ocr_title_unusable": True,
+                "rejected_title": r"QU \ a7",
+                "manual_assist": True,
+                "isbn_not_detected": True,
+            },
+        )
+        with override_settings(BOOKSCAN_ACCURACY=False, OCR_VISION_FALLBACK=True):
+            self.assertTrue(_should_try_vision(cleared, P()))
 
     def test_vision_rejects_invented_isbn_without_checksum(self):
         """Vision must never keep an ISBN that fails check digit."""

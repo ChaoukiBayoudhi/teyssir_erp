@@ -71,6 +71,8 @@ class CoverPreprocessResult:
     method: str
     deskew_deg: float = 0.0
     is_temp: bool = True
+    # Fraction of original frame occupied by detected book quad (1.0 = full / unknown)
+    book_fill_ratio: float = 1.0
 
     def to_dict(self) -> dict:
         return {
@@ -84,6 +86,7 @@ class CoverPreprocessResult:
             "white_label": self.white_label.to_dict() if self.white_label else None,
             "method": self.method,
             "deskew_deg": self.deskew_deg,
+            "book_fill_ratio": self.book_fill_ratio,
         }
 
 
@@ -179,8 +182,12 @@ def _quad_size(ordered):
     return max(1, int(max(w_top, w_bot))), max(1, int(max(h_left, h_right)))
 
 
-def _find_document_quad(bgr):
-    """Largest convex quadrilateral that looks like a book/page, or None."""
+def _find_document_quad(bgr, *, min_area_frac: float = 0.04):
+    """Largest convex quadrilateral that looks like a book/page, or None.
+
+    ``min_area_frac`` defaults lower than the old 0.12 so distant XTRIKE shots
+    (book ≪20% of frame) still get a tight crop instead of CLAHE on the room.
+    """
     import cv2
     import numpy as np
 
@@ -196,7 +203,7 @@ def _find_document_quad(bgr):
     best_area = 0.0
     for cnt in contours:
         area = float(cv2.contourArea(cnt))
-        if area < area_img * 0.12:
+        if area < area_img * min_area_frac:
             continue
         peri = cv2.arcLength(cnt, True)
         approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
@@ -215,19 +222,40 @@ def _find_document_quad(bgr):
         contours, _ = cv2.findContours(thr, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if contours:
             cnt = max(contours, key=cv2.contourArea)
-            if cv2.contourArea(cnt) >= area_img * 0.15:
+            if cv2.contourArea(cnt) >= area_img * min_area_frac:
                 rect = cv2.minAreaRect(cnt)
                 box = cv2.boxPoints(rect)
                 best = box
+                best_area = float(cv2.contourArea(cnt))
+
+    # Distant colorful cover (pink children's book) amid bright window: HSV sat blob
+    if best is None:
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        sat = hsv[:, :, 1]
+        val = hsv[:, :, 2]
+        mask = cv2.inRange(sat, 40, 255)
+        mask = cv2.bitwise_and(mask, cv2.inRange(val, 40, 245))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8), iterations=2)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8), iterations=1)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            cnt = max(contours, key=cv2.contourArea)
+            area = float(cv2.contourArea(cnt))
+            if area_img * 0.03 <= area <= area_img * 0.55:
+                rect = cv2.minAreaRect(cnt)
+                box = cv2.boxPoints(rect)
+                best = box
+                best_area = area
 
     if best is None:
-        return None
+        return None, 0.0
     ordered = _order_quad_points(best)
     qw, qh = _quad_size(ordered)
-    # Reject degenerate / tiny quads
-    if qw * qh < area_img * 0.12:
-        return None
-    return ordered
+    fill = (qw * qh) / max(area_img, 1.0)
+    # Reject degenerate quads
+    if qw * qh < area_img * min_area_frac * 0.85:
+        return None, fill
+    return ordered, float(min(fill, 1.0))
 
 
 def _warp_quad(bgr, ordered):
@@ -252,6 +280,22 @@ def _center_fallback(bgr, frac: float = 0.88):
     x0 = max(0, (w - mw) // 2)
     y0 = max(0, (h - mh) // 2)
     return bgr[y0 : y0 + mh, x0 : x0 + mw].copy()
+
+
+def _upscale_small_cover(bgr, *, min_edge: int = 900):
+    """Upscale a tight small-book crop so Tess/Vision see readable glyphs."""
+    import cv2
+
+    h, w = bgr.shape[:2]
+    m = max(h, w)
+    if m >= min_edge or m < 32:
+        return bgr
+    scale = min_edge / float(m)
+    return cv2.resize(
+        bgr,
+        (max(1, int(w * scale)), max(1, int(h * scale))),
+        interpolation=cv2.INTER_CUBIC,
+    )
 
 
 def _estimate_skew_deg(gray) -> float:
@@ -442,22 +486,33 @@ def _preprocess_opencv(image_path: str, *, max_edge: int, out_path: str) -> Cove
     max_edge = _clamp_max_edge(max_edge)
     bgr = _load_bgr_exif(image_path)
     bgr = _resize_max_edge(bgr, max_edge)
+    frame_area = float(bgr.shape[0] * bgr.shape[1])
 
     method = "opencv_center"
     deskew = 0.0
-    quad = _find_document_quad(bgr)
+    book_fill = 1.0
+    quad, fill = _find_document_quad(bgr)
+    if fill > 0:
+        book_fill = fill
     if quad is not None:
         try:
             warped = _warp_quad(bgr, quad)
             if warped is not None and warped.size > 0:
+                # Small distant cover: upscale BEFORE CLAHE (don't enhance the room)
+                if book_fill < 0.35:
+                    warped = _upscale_small_cover(warped, min_edge=1000)
+                    method = "opencv_quad_small"
+                else:
+                    method = "opencv_quad"
                 bgr = warped
-                method = "opencv_quad"
         except Exception:
             log.debug("quad warp failed; using center fallback", exc_info=True)
             bgr = _center_fallback(bgr)
             method = "opencv_center"
+            book_fill = min(book_fill, 0.88)
     else:
         bgr = _center_fallback(bgr)
+        book_fill = min(book_fill if book_fill < 1.0 else 0.88, 0.88)
 
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     skew = _estimate_skew_deg(gray)
@@ -475,6 +530,9 @@ def _preprocess_opencv(image_path: str, *, max_edge: int, out_path: str) -> Cove
     h, w = bgr.shape[:2]
     title, barcode, price = _band_rois(w, h, white)
     _save_bgr_jpeg(bgr, out_path)
+    # Recompute fill vs original frame when we warped a small quad
+    if method.startswith("opencv_quad") and frame_area > 0 and fill > 0:
+        book_fill = float(fill)
     return CoverPreprocessResult(
         path=out_path,
         original_path=image_path,
@@ -487,6 +545,7 @@ def _preprocess_opencv(image_path: str, *, max_edge: int, out_path: str) -> Cove
         method=method,
         deskew_deg=deskew,
         is_temp=True,
+        book_fill_ratio=float(book_fill),
     )
 
 

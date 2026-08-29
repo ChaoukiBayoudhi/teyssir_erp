@@ -156,11 +156,47 @@ def _latin_title_shape_ok(s: str, words: list[str]) -> bool:
     return False
 
 
+def is_ultra_garbage_title(text: str) -> bool:
+    """Conf-independent reject for mush like ``QU \\ a7`` / ``PEL oe`` / digit shards.
+
+    Distant XTRIKE shots often yield 2–4 letter + punct/digit blobs that must never
+    autofill Titre — even when Tesseract reports a misleadingly high mean_conf.
+    """
+    s = (text or "").strip().replace("\u200e", "").replace("\u200f", "")
+    if not s:
+        return False
+    if arabic_char_ratio(s) >= 0.12:
+        return False
+    letters = "".join(c for c in s if c.isalpha())
+    words = [w for w in re.split(r"\s+", s) if w]
+    if len(letters) < 3:
+        return True
+    # Backslash / pipe / underscore noise (``QU \ a7``)
+    if re.search(r"[\\|_]", s) and len(letters) <= 8:
+        return True
+    # Short Latin + digit without real title shape
+    if len(letters) <= 5 and re.search(r"\d", s) and not _latin_title_shape_ok(s, words):
+        return True
+    # 1–3 tiny tokens with digit/punct or no vowels (``QU a7``, ``zz kk``)
+    if (
+        len(words) <= 3
+        and len(letters) <= 6
+        and not _latin_title_shape_ok(s, words)
+        and not re.search(r"[àâäéèêëïîôùûüçœæÀÂÄÉÈÊËÏÎÔÙÛÜÇ]", s)
+        and (
+            re.search(r"[0-9\\/|_]", s)
+            or not re.search(r"[aeiouyAEIOUY]", s)
+        )
+    ):
+        return True
+    return False
+
+
 def is_garbage_latin_ocr(text: str, *, mean_conf: float | None = None) -> bool:
     """True when Latin OCR looks like a misread non-Latin (e.g. Arabic) cover.
 
     Examples from production: ``wis! Boot ay``, ``9 or et O.``, ``ol YI a "Teeny"``,
-    ``PEL oe nee``, ``ead chien``, ``herbe``, ``Whee``.
+    ``PEL oe nee``, ``ead chien``, ``herbe``, ``Whee``, ``QU \\ a7``.
     """
     s = (text or "").strip()
     if not s:
@@ -170,6 +206,9 @@ def is_garbage_latin_ocr(text: str, *, mean_conf: float | None = None) -> bool:
     # Strip common OCR junk for analysis
     letters = "".join(c for c in s if c.isalpha())
     if len(letters) < 3:
+        return True
+    # Always reject ultra-garbage — do not trust high mean_conf on tiny blobs
+    if is_ultra_garbage_title(s):
         return True
     words = [w for w in re.split(r"\s+", s) if w]
     alpha = sum(1 for c in s if c.isalpha())
@@ -1172,6 +1211,8 @@ def _draft_from_text(text, *, isbn_hint="", role="auto", mean_conf: float | None
     # Reject garbage Latin titles (Arabic calligraphy misread as Latin)
     if draft.title and is_garbage_latin_ocr(draft.title, mean_conf=mean_conf):
         draft.raw["ocr_garbage_latin"] = True
+        draft.raw["ocr_title_unusable"] = True
+        draft.raw["manual_assist"] = True
         draft.raw["suggested_title"] = draft.title
         draft.raw["rejected_title"] = draft.title
         draft.title = ""
@@ -1188,11 +1229,12 @@ def _draft_from_text(text, *, isbn_hint="", role="auto", mean_conf: float | None
             draft.raw.pop("detected_langs", None)
             draft.raw["detected_langs"] = list(draft.languages)
         else:
+            # Never leave fake ``en`` from Latin mush (distant children's covers)
             draft.languages = [x for x in (draft.languages or []) if x == "ar"]
             draft.raw.pop("ocr_arabic_likely", None)
             draft.raw["detected_langs"] = list(draft.languages)
             draft.raw.pop("arabic_script_detected", None)
-        # Spurious prices from garbage passes
+        # Spurious prices from garbage passes on front only
         if draft.price and role == "front":
             draft.raw["rejected_price"] = draft.price
             draft.price = ""
@@ -1202,6 +1244,7 @@ def _draft_from_text(text, *, isbn_hint="", role="auto", mean_conf: float | None
     if draft.title and is_garbage_arabic_ocr(draft.title, mean_conf=mean_conf):
         draft.raw["ocr_garbage_arabic"] = True
         draft.raw["ocr_title_unusable"] = True
+        draft.raw["manual_assist"] = True
         draft.raw["suggested_title"] = draft.title
         draft.raw["rejected_title"] = draft.title
         draft.title = ""
@@ -1211,6 +1254,20 @@ def _draft_from_text(text, *, isbn_hint="", role="auto", mean_conf: float | None
         if "ar" not in (draft.languages or []):
             draft.languages = ["ar", *(draft.languages or [])]
         draft.raw["ocr_arabic_likely"] = True
+
+    # Unusable title that slipped past garbage heuristics → clear + Vision/manual
+    if draft.title and not is_usable_ocr_title(draft.title, mean_conf=mean_conf):
+        draft.raw["ocr_title_unusable"] = True
+        draft.raw["manual_assist"] = True
+        draft.raw.setdefault("suggested_title", draft.title)
+        draft.raw.setdefault("rejected_title", draft.title)
+        if is_ultra_garbage_title(draft.title) or is_garbage_latin_ocr(
+            draft.title, mean_conf=mean_conf
+        ):
+            draft.raw["ocr_garbage_latin"] = True
+            draft.languages = [x for x in (draft.languages or []) if x == "ar"]
+            draft.raw["detected_langs"] = list(draft.languages)
+        draft.title = ""
 
     # Prefer languages inferred from the surviving title (not full verso blob)
     if draft.title and is_usable_ocr_title(draft.title, mean_conf=mean_conf):
@@ -1255,6 +1312,13 @@ def _draft_from_text(text, *, isbn_hint="", role="auto", mean_conf: float | None
             draft.confidence = 0.35 if draft.isbn13 else 0.45
         else:
             draft.confidence = 0.6 if draft.isbn13 else 0.45
+        # Price alone must not hide unusable title — keep weak flag for Vision gate
+        if not draft.title or not is_usable_ocr_title(draft.title, mean_conf=mean_conf):
+            draft.raw["ocr_weak"] = True
+            draft.raw["ocr_title_unusable"] = True
+            draft.raw["manual_assist"] = True
+            if draft.confidence and draft.confidence > 0.15 and not draft.isbn13:
+                draft.confidence = min(draft.confidence, 0.15)
     elif draft.title and is_usable_ocr_title(draft.title, mean_conf=mean_conf):
         # Reflect Tesseract mean when available — never hardcode a fake "35%" floor
         if mean_conf and mean_conf > 0:
@@ -1265,8 +1329,12 @@ def _draft_from_text(text, *, isbn_hint="", role="auto", mean_conf: float | None
     else:
         draft.confidence = 0.1
         draft.raw["ocr_weak"] = True
-        if not draft.title:
-            draft.raw["ocr_title_unusable"] = True
+        draft.raw["ocr_title_unusable"] = True
+        draft.raw["manual_assist"] = True
+        if draft.title:
+            draft.raw.setdefault("rejected_title", draft.title)
+            draft.raw.setdefault("suggested_title", draft.title)
+            draft.title = ""
     return draft
 
 

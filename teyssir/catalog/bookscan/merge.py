@@ -279,13 +279,39 @@ def merge_cover_drafts(front: BookDraft, back: BookDraft | None) -> BookDraft:
         if back.raw.get("barcode_non_isbn"):
             out.raw["barcode_non_isbn"] = True
 
-    from .ocr import is_usable_ocr_title, merge_bilingual_title
+    from .ocr import (
+        is_garbage_arabic_ocr,
+        is_garbage_latin_ocr,
+        is_ultra_garbage_title,
+        is_usable_ocr_title,
+        merge_bilingual_title,
+    )
 
     if front.title and back and back.title:
         merged = merge_bilingual_title(front.title, back.title)
         if merged and ("(" in merged or "/" in merged):
             out.title = merged
             out.raw["bilingual_title"] = True
+
+    # Never let a back-cover mush title refill after front rejected garbage
+    if out.title and (
+        is_ultra_garbage_title(out.title)
+        or is_garbage_latin_ocr(out.title)
+        or is_garbage_arabic_ocr(out.title)
+        or not is_usable_ocr_title(out.title)
+    ):
+        out.raw.setdefault("rejected_title", out.title)
+        out.raw.setdefault("suggested_title", out.title)
+        if is_ultra_garbage_title(out.title) or is_garbage_latin_ocr(out.title):
+            out.raw["ocr_garbage_latin"] = True
+        if is_garbage_arabic_ocr(out.title):
+            out.raw["ocr_garbage_arabic"] = True
+        out.raw["ocr_title_unusable"] = True
+        out.raw["manual_assist"] = True
+        out.title = ""
+        # Drop fake ``en`` from Latin mush
+        if not out.raw.get("ocr_arabic_likely"):
+            out.languages = [x for x in (out.languages or []) if x == "ar"]
 
     if out.isbn13 and (
         out.raw.get("isbn_from_barcode")
@@ -311,6 +337,13 @@ def merge_cover_drafts(front: BookDraft, back: BookDraft | None) -> BookDraft:
         out.confidence = max(front.confidence or 0, (back.confidence if back else 0) or 0)
     else:
         out.confidence = max(front.confidence or 0, (back.confidence if back else 0) or 0)
+        if not out.title:
+            out.raw["ocr_title_unusable"] = True
+            out.raw.setdefault("ocr_weak", True)
+            out.raw["manual_assist"] = True
+            # Price-only distant shot: keep confidence honest for Vision gate
+            if out.price and (out.confidence or 0) > 0.15 and not out.isbn13:
+                out.confidence = min(out.confidence or 0.15, 0.15)
 
     if out.isbn13:
         out.raw["isbn_detected"] = True
