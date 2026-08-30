@@ -125,20 +125,45 @@ Dans la suite, **« le dossier du projet »** désigne ce dossier (ex. `C:\Teyss
 
 ## 5. Installer chaque **CAISSE** (till)
 
-Sur **chaque** PC de caisse, dans le dossier du projet :
+Sur **chaque** PC de caisse, dans le dossier du projet.
+
+### 5.1 Scripts dédiés par caisse (recommandé)
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force
+# 1ʳᵉ caisse — wrapper fixe Terminal=C1 (idempotent) :
+.\deploy\windows\setup_caisse_C1.ps1 `
+  -HubUrl http://teyssir-hub.local:8000 -SyncKey COLLER-LA-CLE-DU-HUB -DiscoverPrinter
+# 2ᵉ / 3ᵉ :
+.\deploy\windows\setup_caisse_C2.ps1 -HubUrl http://teyssir-hub.local:8000 -SyncKey COLLER-LA-CLE-DU-HUB
+.\deploy\windows\setup_caisse_C3.ps1 -HubUrl http://teyssir-hub.local:8000 -SyncKey COLLER-LA-CLE-DU-HUB -StoreCode S1
+# Ou paramétré :
+.\deploy\windows\setup_caisse.ps1 -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey COLLER-LA-CLE-DU-HUB
+```
+
+Chaîne : `setup_caisse_Cx.ps1` → `setup_caisse.ps1` → `setup_app.ps1` → `install.ps1` (pas d'installeur parallèle).
+
+Contrôles sans réinstaller :
+```powershell
+.\deploy\windows\setup_caisse_C1.ps1 -ValidateOnly -HubUrl http://teyssir-hub.local:8000
+# Imprimante : .\deploy\windows\Discover-Printer.ps1
+# POS : raccourci Bureau « Teyssir ERP » ou .\deploy\windows\open-teyssir.ps1
+```
+
+### 5.2 Entrées génériques (équivalent)
+
+```powershell
 .\deploy\windows\install_all.ps1 -Role till -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey COLLER-LA-CLE-DU-HUB
-# Ou couche app seule (même paramètres) :
 .\deploy\windows\setup_app.ps1 -Role till -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey COLLER-LA-CLE-DU-HUB
 ```
 
-- **`-Terminal`** : `C1` pour la 1ʳᵉ caisse, `C2` pour la 2ᵉ, `C3` pour la 3ᵉ — **jamais deux fois le même**.
+- **`-Terminal` / wrapper Cx** : `C1`, `C2`, `C3` — **jamais deux fois le même** sur le réseau magasin.
 - **`-HubUrl`** : l'adresse du Hub (voir §6). Utilisez le **nom** (`teyssir-hub.local`) ou l'**IP** (ex. `http://192.168.1.10:8000`).
 - **`-SyncKey`** : **exactement** la clé affichée par le Hub à l'étape 4.3.
+- **`-StoreCode`** (optionnel) : code magasin (`TEYSSIR_STORE_CODE`), ex. `S1`.
 - **`-Printer tcp:IP:9100`** (optionnel) : imprimante ticket sur le LAN de **cette** caisse — voir §7.
-- **`-DiscoverPrinter`** (optionnel) : scan du /24 sur le port 9100 (ou `.\deploy\windows\Discover-Printer.ps1`). Pas d'IP magasin en dur.
+- **`-DiscoverPrinter`** (optionnel) : scan du /24 sur le port 9100 (ou `.\deploy\windows\Discover-Printer.ps1`). Pas d'IP magasin / Aclas en dur — sinon `dummy` ou valeur déjà dans `.env`.
+- Variables d'environnement (si param vide) : `TEYSSIR_TERMINAL`, `TEYSSIR_STORE_CODE`, `TEYSSIR_HUB_URL`, `TEYSSIR_SYNC_KEY`, `TEYSSIR_PRINTER`.
 
 Créez un compte utilisateur (caissier) quand c'est demandé (sauté si un admin existe déjà).
 Le raccourci **Teyssir ERP** est créé sur le Bureau ; le service `TeyssirBackend` démarre tout seul.

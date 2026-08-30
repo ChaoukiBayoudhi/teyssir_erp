@@ -8,6 +8,8 @@ Scripts to install and run Teyssir on the client's Windows PCs (1 Hub + up to 3 
 |------|---------|
 | **`install_all.ps1`** | **Preferred full entry:** log file, hub auto-elevate, host deps (winget), LLM, then `install.ps1`. |
 | **`setup_app.ps1`** | **App-layer bootstrap (Phase 3):** git pull/clone if needed → LLM if missing → `install.ps1` → validate (`django check`, migrate, `frontend\dist`, `/health/`). Run after deps or alone when Python is present. |
+| **`setup_caisse.ps1`** | **Per-caisse entry (Phase 4):** `-Terminal C1\|C2\|C3` → `setup_app.ps1 -Role till …`. Optional StoreCode / HubUrl / SyncKey / Printer / `-DiscoverPrinter`. Post-checks: hub `/health/`, Discover-Printer path, POS launch. |
+| `setup_caisse_C1.ps1` / `_C2` / `_C3` | Thin ID wrappers → `setup_caisse.ps1 -Terminal Cx` (same optional flags). |
 | `Install-HostDependencies.ps1` | Idempotent host deps: Python ≥3.11, optional Git, Node LTS if needed, Tesseract + eng/fra/ara verify. No Redis. |
 | `install.ps1` | Full app installer (idempotent): venv, Hub PostgreSQL or SQLite, seeds, Ollama, **Windows service**, **desktop shortcut**. |
 | `Discover-Printer.ps1` | LAN scan for ESC/POS on TCP 9100 → `tcp:IP:9100` or `dummy` (never hardcodes a shop IP). |
@@ -33,16 +35,22 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 # App layer only (after deps, or when host tools already installed):
 .\deploy\windows\setup_app.ps1 -Role hub
 .\deploy\windows\setup_app.ps1 -Role till -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey <hub-key>
+# Per-caisse (Phase 4) — prefer these on till PCs:
+.\deploy\windows\setup_caisse_C1.ps1 -HubUrl http://teyssir-hub.local:8000 -SyncKey <hub-key> -DiscoverPrinter
+.\deploy\windows\setup_caisse.ps1 -Terminal C2 -HubUrl http://teyssir-hub.local:8000 -SyncKey <hub-key> -StoreCode S1
+# Checks only (hub /health/, printer + POS paths):
+.\deploy\windows\setup_caisse_C1.ps1 -ValidateOnly -HubUrl http://teyssir-hub.local:8000
 # Ticket printer (optional): -DiscoverPrinter  or  .\deploy\windows\Discover-Printer.ps1
-# Double-click  Teyssir ERP  on the Desktop
+# Double-click  Teyssir ERP  on the Desktop  (or .\deploy\windows\open-teyssir.ps1)
 ```
 
 **Notes**
 - Till installs do **not** force UAC elevate (`-NoElevate` soft path). Hub auto-elevates unless `-NoElevate`.
-- **Chain:** `install_all.ps1` (host) → `setup_app.ps1` (app) → `install.ps1` (shared spine). `setup_app` is a thin wrapper: git ensure + LLM-if-missing + `install.ps1` + validation.
+- **Chain:** `install_all.ps1` (host) → `setup_app.ps1` (app) → `install.ps1` (shared spine). Per-caisse: `setup_caisse_Cx.ps1` → `setup_caisse.ps1` → `setup_app.ps1` → `install.ps1`.
+- **Env fallbacks (caisse):** `TEYSSIR_TERMINAL`, `TEYSSIR_STORE_CODE`, `TEYSSIR_HUB_URL`, `TEYSSIR_SYNC_KEY`, `TEYSSIR_PRINTER` when matching params are empty.
 - **Local AI (default):** `install_all.ps1` / `setup_app.ps1` detect Ollama → install/pull **mistral** + **qwen2.5vl:3b** when missing. Soft-fail on disk/network. Opt out: `-SkipLlm` / `-SkipVision`.
 - **libzbar** (pyzbar ISBN): no winget package on Windows — bundle `libzbar-64.dll` or use client BarcodeDetector + digit-OCR fallback (see `docs/INSTALL-WINDOWS.md`).
-- **Discover-Printer** kept — never hardcodes a shop ticket-printer IP.
+- **Discover-Printer** kept — never hardcodes a shop ticket-printer IP (no fake Aclas IP).
 - **No Redis** in this kit.
 
 Everything here uses only free/open-source tools (Python, waitress, WhiteNoise, NSSM).
