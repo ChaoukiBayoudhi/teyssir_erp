@@ -2,6 +2,11 @@
 
 Scripts to install and run Teyssir on the client's Windows PCs (1 Hub + up to 3 tills).
 
+> **Source of truth:** this full kit lives on
+> `feature/pdf-conversion-async-optimization` and tag `v1.0.0-windows-rc1`.  
+> Default GitHub `master` / **Code ▸ Download ZIP** is **incomplete** (no
+> `install_all.ps1` / `setup_caisse_C*.ps1`). See [`docs/INSTALL-WINDOWS.md`](../../docs/INSTALL-WINDOWS.md) §3.
+
 👉 **Full step-by-step guide (operators):** [`docs/INSTALL-WINDOWS.md`](../../docs/INSTALL-WINDOWS.md)  
 👉 **Acceptance gate (Win11 dry-run):** [`docs/INSTALLATION-QA.md`](../../docs/INSTALLATION-QA.md#win11-dry-run-checklist-phase-7)
 

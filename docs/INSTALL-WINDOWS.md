@@ -80,17 +80,34 @@ synchronise avec le **PC Hub** (le serveur central du magasin) dès qu'il est di
 
 ## 3. Récupérer Teyssir
 
-**Option A — avec Git** (si Git est installé) :
+> ⚠️ **Branche obligatoire (kit Windows complet).**  
+> La branche par défaut GitHub (`master`) **n’a pas** le kit complet
+> (`install_all.ps1`, `setup_caisse_C*.ps1`, etc.).  
+> Utilisez le tag **RC** ou la branche feature ci-dessous — **pas** un clone nu de `master`,
+> et **pas** le bouton GitHub **Code ▸ Download ZIP** (celui-ci télécharge `master`).
+
+**Option A — avec Git** (recommandé) :
 ```powershell
 git clone https://github.com/ChaoukiBayoudhi/teyssir_erp.git
 cd teyssir_erp
+git fetch --tags origin
+# Release candidate (kit Windows) — préféré pour installation magasin :
+git checkout v1.0.0-windows-rc1
+# Ou tip le plus récent (corrections post-RC) :
+# git checkout feature/pdf-conversion-async-optimization
 ```
 
-**Option B — sans Git :** téléchargez le ZIP depuis GitHub (bouton **Code ▸ Download ZIP**),
-puis décompressez-le, par exemple dans `C:\Teyssir`.
+**Option B — sans Git (ZIP du bon tag) :**  
+Sur GitHub → page **Releases / Tags** → tag **`v1.0.0-windows-rc1`** →
+**Download ZIP** (ou URL directe) :
+`https://github.com/ChaoukiBayoudhi/teyssir_erp/archive/refs/tags/v1.0.0-windows-rc1.zip`  
+Décompressez dans `C:\Teyssir` (le dossier s’appellera souvent
+`teyssir_erp-1.0.0-windows-rc1`).
 
 Dans la suite, **« le dossier du projet »** désigne ce dossier (ex. `C:\Teyssir\teyssir_erp`).
-Vous devez y voir `manage.py` et le dossier `deploy\windows`.
+Vous devez y voir `manage.py`, `deploy\windows\install_all.ps1` et
+`deploy\windows\setup_caisse_C1.ps1`. Si ces fichiers manquent, vous êtes sur la mauvaise
+branche / le mauvais ZIP.
 
 ---
 
@@ -587,10 +604,16 @@ On each shop PC that already pulled a bad candidate build:
 # In the project folder (Administrator PowerShell if service is installed)
 git fetch --tags origin
 git checkout v0.9.0-pre-windows-kit
-# Re-run the install path that matches this PC's role, e.g.:
-#   .\deploy\windows\install_all.ps1 -Role hub
-#   or start-teyssir.bat / restart service TeyssirBackend
+# That tag is pre-kit master: it has install.ps1 / start-teyssir.bat,
+# NOT install_all.ps1 / setup_caisse_C*.ps1. Re-run what exists, e.g.:
+#   .\deploy\windows\install.ps1 -Role hub
+#   .\deploy\windows\start-teyssir.bat
+#   # or: Restart-Service TeyssirBackend   (if the service was registered)
 ```
+
+To leave an RC/feature install but keep the **new** kit scripts, stay on
+`v1.0.0-windows-rc1` / `feature/pdf-conversion-async-optimization` and fix forward —
+do not expect `install_all.ps1` on `v0.9.0-pre-windows-kit`.
 
 If the feature branch was never merged to `master`, production clients on `master`
 are already at the stable tip — just avoid deploying `v1.0.0-windows-rc*` until dry-run passes.
