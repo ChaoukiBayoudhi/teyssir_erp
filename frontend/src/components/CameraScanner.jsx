@@ -401,12 +401,20 @@ async function detectCodeFromStill(canvas, {
   return incomplete && isPlausibleProductBarcode(incomplete) ? incomplete : "";
 }
 
-/** Live path: only decode inside the green guide strip (avoids face / room noise). */
+/** Live path: decode inside the green guide strip (avoids face / room noise). */
 function guideStripCanvas(video) {
   if (!video?.videoWidth || !video?.videoHeight) return null;
   const full = sourceToCanvas(video);
   if (!full) return null;
   return cropFrac(full, GUIDE.left, GUIDE.top, GUIDE.right, GUIDE.top + GUIDE.height);
+}
+
+/** Live POS fallback: lower packaging band when the sticker sits below the guide. */
+function lowerBandCanvas(video) {
+  if (!video?.videoWidth || !video?.videoHeight) return null;
+  const full = sourceToCanvas(video);
+  if (!full) return null;
+  return cropFrac(full, 0.04, 0.52, 0.96, 0.98);
 }
 
 function frameToBlob(video) {
@@ -457,8 +465,9 @@ async function bumpTrackResolution(stream) {
 
 /**
  * Shared camera barcode scanner.
- * - mode="pos" | mode="product" (default pos): still-first ZXing/BarcodeDetector —
- *   never book Vision/OCR, never ISBN banners. Used by POS + Nouvel article (Fournitures).
+ * - mode="pos" | mode="product" (default pos): continuous live decode (guide strip +
+ *   lower band) via BarcodeDetector/ZXing → onDetect; Capturer/Analyser as fallback.
+ *   Never book Vision/OCR, never ISBN banners. Used by POS + Nouvel article.
  * - mode="book": still-frame + optional /catalog/books/scan OCR fallback (ISBN/title).
  */
 export default function CameraScanner({
@@ -473,7 +482,7 @@ export default function CameraScanner({
   const preferIsbn = !isPos;
   const videoRef = useRef(null);
   const streamRef = useRef(null);
-  const lastRef = useRef({ value: "", at: 0 });
+  const lastRef = useRef({ value: "", at: 0, needsClear: false });
   const decodingRef = useRef(false);
   const capturesRef = useRef([]);
   const [fatal, setFatal] = useState("");
@@ -547,8 +556,9 @@ export default function CameraScanner({
       setStream(media);
 
       const hasNative = "BarcodeDetector" in window;
+      // Live decode always runs (BD and/or ZXing) — never tell cashiers live is "off".
       setLiveOk(true);
-      setInfo(hasNative ? aimHint() : captureHint());
+      setInfo(aimHint());
       const throttleMs = hasNative ? LIVE_THROTTLE_NATIVE_MS : LIVE_THROTTLE_ZXING_MS;
 
       const tick = async () => {
@@ -561,21 +571,35 @@ export default function CameraScanner({
         lastTickAt = now;
         decodingRef.current = true;
         try {
-          // Live: only the green guide strip — never treat a face frame as a failed Analyser.
+          // Live: guide strip first; POS also tries lower band (sticker below strip).
           const strip = guideStripCanvas(videoRef.current);
-          const value = strip
+          let value = strip
             ? await detectCodeFromSource(strip, { preferIsbn })
             : "";
+          if ((!value || !isPlausibleProductBarcode(value)) && isPos) {
+            const lower = lowerBandCanvas(videoRef.current);
+            if (lower) {
+              const alt = await detectCodeFromSource(lower, { preferIsbn });
+              if (alt && isPlausibleProductBarcode(alt)) value = alt;
+            }
+          }
           if (value && isPlausibleProductBarcode(value)) {
             missTicks = 0;
-            if (value !== lastRef.current.value || now - lastRef.current.at > DETECT_COOLDOWN_MS) {
-              lastRef.current = { value, at: now };
+            const same = value === lastRef.current.value;
+            // Cooldown + require barcode to leave frame before re-adding the same code.
+            if (same && lastRef.current.needsClear) {
+              /* still in frame after a hit — wait for misses */
+            } else if (!same || now - lastRef.current.at > DETECT_COOLDOWN_MS) {
+              lastRef.current = { value, at: now, needsClear: true };
               setInfo(`${t("codeDetected")}: ${value}`);
               setError("");
               emitDetect(value);
             }
           } else {
             missTicks += 1;
+            if (missTicks >= 3 && lastRef.current.needsClear) {
+              lastRef.current = { ...lastRef.current, needsClear: false };
+            }
             // Soft hint after a few empty strips — never yellow "non détecté" from live.
             if (missTicks === 8) {
               setError("");
@@ -632,7 +656,7 @@ export default function CameraScanner({
         closeup: isPos,
       });
       if (code && isPlausibleProductBarcode(code)) {
-        lastRef.current = { value: code, at: Date.now() };
+        lastRef.current = { value: code, at: Date.now(), needsClear: true };
         setInfo(`${t("codeDetected")}: ${code}`);
         setError("");
         emitDetect(code);
@@ -690,7 +714,7 @@ export default function CameraScanner({
       // POS / article (Fournitures): barcode decode only — never call bookscan Vision/OCR.
       if (isPos) {
         if (code && isPlausibleProductBarcode(code)) {
-          lastRef.current = { value: code, at: Date.now() };
+          lastRef.current = { value: code, at: Date.now(), needsClear: true };
           setInfo(`${t("codeDetected")}: ${code}`);
           setError("");
           emitDetect(code);
@@ -736,7 +760,7 @@ export default function CameraScanner({
         return;
       }
 
-      lastRef.current = { value: code, at: Date.now() };
+      lastRef.current = { value: code, at: Date.now(), needsClear: true };
       setInfo(`${t("codeDetected")}: ${code}`);
       emitDetect(code);
     } catch (err) {
@@ -800,10 +824,10 @@ export default function CameraScanner({
             <Typography variant="caption" color="text.secondary">
               {t("choosePhotos")}: {captures.length}
             </Typography>
-            {liveOk && <Chip size="small" label={t("liveScanOn")} color="success" variant="outlined" />}
           </Stack>
         )}
-        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap alignItems="center">
+          {liveOk && <Chip size="small" label={t("liveScanOn")} color="success" variant="outlined" />}
           <Button size="small" variant="contained" onClick={capture} disabled={busy}>
             {t("capture")}
           </Button>
