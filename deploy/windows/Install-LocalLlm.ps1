@@ -1,9 +1,11 @@
 <#
     Teyssir — local LLM (Ollama) helper for Windows Hub/tills.
-    Called by install.ps1. Never throws: the ERP must install even if AI setup fails.
+    Called by install_all.ps1 (explicit Phase 2) and install.ps1. Never throws:
+    the ERP must install even if AI setup fails.
 
-    Phase 15.7: pulls the bookscan vision model (qwen2.5vl:3b) by default after the
-    text model, so gated Vision fallback works offline. Use -SkipVision to omit.
+    Default: detect Ollama → winget/silent install if missing → ensure text model
+    (mistral) and vision model (qwen2.5vl:3b). Idempotent: skips pulls when
+    already present. Soft-fail on disk/network. -SkipVision / -SkipPull to opt out.
 
     Usage:
         .\deploy\windows\Install-LocalLlm.ps1 -Model mistral
@@ -130,21 +132,42 @@ function Start-OllamaService {
     return $false
 }
 
+function Test-OllamaModelPresent {
+    param([string]$Name)
+    if (-not $Name) { return $false }
+    $exe = Get-OllamaExe
+    if (-not $exe) { return $false }
+    try {
+        $list = & $exe list 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -and -not $list) { return $false }
+        # Match name or name:tag prefix (e.g. mistral, mistral:latest, qwen2.5vl:3b)
+        $esc = [regex]::Escape($Name)
+        return [bool]($list -match ("(?im)^\s*" + $esc + "(\s|:|$)"))
+    }
+    catch {
+        return $false
+    }
+}
+
 function Pull-OllamaModel {
     param([string]$Name, [string]$Kind = "model")
     if (-not $Name) { return $false }
-    Write-Llm ("Ensuring $Kind '$Name' (ollama pull) ...") "Yellow"
+    if (Test-OllamaModelPresent -Name $Name) {
+        Write-Llm ("$Kind '$Name' already present — skip pull.") "Green"
+        return $true
+    }
+    Write-Llm ("$Kind '$Name' missing — ollama pull (soft-fail on disk/network) ...") "Yellow"
     try {
         & (Get-OllamaExe) pull $Name
-        if ($LASTEXITCODE -eq 0) {
-            Write-Llm "$Kind $Name is available." "Green"
+        if ($LASTEXITCODE -eq 0 -or (Test-OllamaModelPresent -Name $Name)) {
+            Write-Llm ("$Kind $Name is available.") "Green"
             return $true
         }
-        Write-Llm ("ollama pull $Name exited " + $LASTEXITCODE + " — continuing without it.") "Yellow"
+        Write-Llm ("ollama pull $Name exited " + $LASTEXITCODE + " — continuing without it (ERP still runs).") "Yellow"
         return $false
     }
     catch {
-        Write-Llm ("$Kind pull skipped: " + $_.Exception.Message) "Yellow"
+        Write-Llm ("$Kind pull skipped: " + $_.Exception.Message + " — ERP continues without it.") "Yellow"
         return $false
     }
 }
@@ -153,49 +176,50 @@ function Pull-OllamaModel {
 try {
     if (-not (Install-OllamaSilent)) {
         Write-Llm "Ollama is not available. Teyssir will run without local AI." "Yellow"
-        return
-    }
-    $ver = & (Get-OllamaExe) --version 2>&1 | Select-Object -First 1
-    Write-Llm "ollama --version: $ver" "Green"
-
-    if (Start-OllamaService -and (Test-OllamaApi -TimeoutSec 5)) {
-        $script:LlmReady = $true
-        Write-Llm ("API ready at " + $OllamaUrl) "Green"
     }
     else {
-        Write-Llm "Ollama API did not respond on $OllamaUrl — ERP continues without AI." "Yellow"
-    }
+        $ver = & (Get-OllamaExe) --version 2>&1 | Select-Object -First 1
+        Write-Llm "ollama --version: $ver" "Green"
 
-    if ($script:LlmReady -and -not $SkipPull) {
-        if ($Model) {
-            $script:ModelReady = Pull-OllamaModel -Name $Model -Kind "text model"
+        if (Start-OllamaService -and (Test-OllamaApi -TimeoutSec 5)) {
+            $script:LlmReady = $true
+            Write-Llm ("API ready at " + $OllamaUrl) "Green"
+        }
+        else {
+            Write-Llm "Ollama API did not respond on $OllamaUrl — ERP continues without AI." "Yellow"
         }
 
-        # Phase 15.7: auto-pull vision for bookscan gated fallback (CPU-friendly 3B).
-        # -SkipVision opts out; -PullVision is a no-op synonym (pull is already default).
-        if ($SkipVision) {
-            Write-Llm "Skipping vision model (-SkipVision). Bookscan Vision fallback needs: ollama pull $VisionModel" "Gray"
-        }
-        elseif ($VisionModel) {
-            $null = $PullVision  # accepted for backward-compatible callers
-            $script:VisionReady = Pull-OllamaModel -Name $VisionModel -Kind "vision model"
-            if (-not $script:VisionReady) {
-                Write-Llm "Vision pull failed — bookscan keeps Tesseract; retry: Install-LocalLlm.ps1 (no -SkipVision)." "Yellow"
+        if ($script:LlmReady -and -not $SkipPull) {
+            if ($Model) {
+                $script:ModelReady = Pull-OllamaModel -Name $Model -Kind "text model"
             }
-        }
 
-        if ($script:ModelReady) {
-            try {
-                $body = @{ model = $Model; prompt = "Reply with the single word: pong"; stream = $false } | ConvertTo-Json
-                $gen = Invoke-RestMethod -Uri ($OllamaUrl.TrimEnd("/") + "/api/generate") `
-                    -Method Post -Body $body -ContentType "application/json" -TimeoutSec 120
-                $snippet = [string]$gen.response
-                if ($snippet) {
-                    Write-Llm ("Probe response: " + $snippet.Trim().Substring(0, [Math]::Min(80, $snippet.Trim().Length))) "Green"
+            # Phase 15.7: auto-pull vision for bookscan gated fallback (CPU-friendly 3B).
+            # -SkipVision opts out; -PullVision is a no-op synonym (pull is already default).
+            if ($SkipVision) {
+                Write-Llm "Skipping vision model (-SkipVision). Bookscan Vision fallback needs: ollama pull $VisionModel" "Gray"
+            }
+            elseif ($VisionModel) {
+                $null = $PullVision  # accepted for backward-compatible callers
+                $script:VisionReady = Pull-OllamaModel -Name $VisionModel -Kind "vision model"
+                if (-not $script:VisionReady) {
+                    Write-Llm "Vision pull failed — bookscan keeps Tesseract; retry: Install-LocalLlm.ps1 (no -SkipVision)." "Yellow"
                 }
             }
-            catch {
-                Write-Llm ("Model probe skipped: " + $_.Exception.Message) "Yellow"
+
+            if ($script:ModelReady) {
+                try {
+                    $body = @{ model = $Model; prompt = "Reply with the single word: pong"; stream = $false } | ConvertTo-Json
+                    $gen = Invoke-RestMethod -Uri ($OllamaUrl.TrimEnd("/") + "/api/generate") `
+                        -Method Post -Body $body -ContentType "application/json" -TimeoutSec 120
+                    $snippet = [string]$gen.response
+                    if ($snippet) {
+                        Write-Llm ("Probe response: " + $snippet.Trim().Substring(0, [Math]::Min(80, $snippet.Trim().Length))) "Green"
+                    }
+                }
+                catch {
+                    Write-Llm ("Model probe skipped: " + $_.Exception.Message) "Yellow"
+                }
             }
         }
     }
@@ -204,9 +228,13 @@ catch {
     Write-Llm ("LLM setup skipped: " + $_.Exception.Message) "Yellow"
 }
 
-# Exported for the caller (install.ps1)
+# Exported for the caller (install_all.ps1 / install.ps1) — always set
 $global:TeyssirLlmReady = [bool]$script:LlmReady
 $global:TeyssirLlmModelReady = [bool]$script:ModelReady
 $global:TeyssirLlmModel = $Model
 $global:TeyssirVisionModelReady = [bool]$script:VisionReady
 $global:TeyssirVisionModel = $VisionModel
+Write-Llm ("Summary — Ollama API:{0} text({1}):{2} vision({3}):{4}" -f `
+        $(if ($script:LlmReady) { "OK" } else { "no" }), `
+        $Model, $(if ($script:ModelReady) { "OK" } else { "miss/skip" }), `
+        $VisionModel, $(if ($SkipVision) { "skipped" } elseif ($script:VisionReady) { "OK" } else { "miss/skip" })) "Gray"

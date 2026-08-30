@@ -429,9 +429,31 @@ if (-not $tessCmd) {
     }
     $tessCmd = $tessCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 }
+$global:TeyssirTesseractLangsOk = $false
 if ($tessCmd) {
     $global:TeyssirTesseractReady = $true
     Write-Host ("Tesseract found: " + $tessCmd) -ForegroundColor Green
+    # Post-verify eng+fra+ara (soft-fail if packs missing)
+    try {
+        $langRaw = & $tessCmd --list-langs 2>&1 | Out-String
+        $have = @()
+        foreach ($line in ($langRaw -split "`r?`n")) {
+            $t = $line.Trim().ToLowerInvariant()
+            if ($t -and $t -notmatch "list of available|available languages") { $have += $t }
+        }
+        $need = @("eng", "fra", "ara")
+        $missingLangs = @($need | Where-Object { $have -notcontains $_ })
+        if ($missingLangs.Count -eq 0) {
+            $global:TeyssirTesseractLangsOk = $true
+            Write-Host "  Tesseract languages eng+fra+ara present." -ForegroundColor Green
+        }
+        else {
+            Write-Warning ("Tesseract missing language packs: {0}. Re-run UB Mannheim installer and tick eng, fra, ara. Soft-fail — OCR continues with installed packs." -f ($missingLangs -join ","))
+        }
+    }
+    catch {
+        Write-Warning ("Could not list Tesseract languages: " + $_.Exception.Message)
+    }
 }
 else {
     Write-Warning "Tesseract not found — book OCR will use manual/vision fallback. See docs/INSTALL-WINDOWS.md (OCR Troubleshooting)."
@@ -591,7 +613,12 @@ if ($resolvedPrinter) {
     Write-Host ("Printer:             TEYSSIR_PRINTER=" + $resolvedPrinter + "  (Menu → Diagnostics to verify)")
 }
 if ($global:TeyssirTesseractReady) {
-    Write-Host "OCR (Tesseract):     ready — see Menu → Diagnostics"
+    if ($global:TeyssirTesseractLangsOk) {
+        Write-Host "OCR (Tesseract):     ready (eng+fra+ara) — see Menu → Diagnostics"
+    }
+    else {
+        Write-Host "OCR (Tesseract):     binary OK — verify eng+fra+ara packs (Menu → Diagnostics / docs/INSTALL-WINDOWS.md)"
+    }
 }
 else {
     Write-Host "OCR (Tesseract):     not found (manual entry still works). docs/INSTALL-WINDOWS.md"
