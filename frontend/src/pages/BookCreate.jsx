@@ -233,12 +233,12 @@ function looksLikeSchoolDraft(d) {
     ...(d.raw?.title_candidates || []),
     d.raw?.rejected_title, d.raw?.suggested_title, d.raw?.pre_repair_title,
   ].filter(Boolean).join(" ");
-  return /math[eé]matiques?|ématiques|matiques|technologie\s+de\s+l['’]?informati|nologie\s+de\s+l['’]?informati|\bCNP\b|centre\s+national|ann[eé]e\s+(?:secondaire|primaire)|enseignement\s+secondaire|كتاب|مركز\s+وطني|histoire|2[eè]me\s+ann/i.test(blob);
+  return /math[eé]matiques?|ématiques|matiques|technologie\s+de\s+l['’]?informati|nologie\s+de\s+l['’]?informati|\bCNP\b|centre\s+national|ann[eé]e\s+(?:secondaire|primaire)|enseignement\s+secondaire|كتاب|مركز\s+وطني|التاريخ|تاريخ|جغرافيا|histoire|2[eè]me\s+ann/i.test(blob);
 }
 
 /** Drop OCR subject shards that must never autofill as authors. */
 function scrubAuthors(authorsStr, title) {
-  const blocked = /math|ématiques|matiques|nologie|technologie|informati|histoire|sciences?|physique|chimie|fran[cç]ais|anglais|arabe|ann[eé]e|tome|secondaire|enseignement|manuel|scolaire|^cnp$|كتاب/i;
+  const blocked = /math|ématiques|matiques|nologie|technologie|informati|histoire|التاريخ|تاريخ|جغرافيا|sciences?|physique|chimie|fran[cç]ais|anglais|arabe|ann[eé]e|tome|secondaire|enseignement|manuel|scolaire|^cnp$|كتاب/i;
   return String(authorsStr || "")
     .split(",")
     .map((s) => s.trim())

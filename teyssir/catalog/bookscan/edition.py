@@ -19,6 +19,9 @@ _SCHOOL_TITLE_REPAIRS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^matiques\b|^ématiques\b|^athématiques\b", re.I), "Mathématiques"),
     (re.compile(r"technologie\s+de\s+l['’]?informati", re.I), "Technologie de l'Information"),
     (re.compile(r"^nologie\s+de\s+l['’]?informati", re.I), "Technologie de l'Information"),
+    # Arabic History CNP (Case D) — prefer Arabic canonical when script present
+    (re.compile(r"التاريخ(?:\s+و(?:ال)?جغرافيا)?"), "التاريخ"),
+    (re.compile(r"تاريخ(?:\s+و(?:ال)?جغرافيا)?"), "التاريخ"),
     (re.compile(r"histoire(?:\s+et\s+g[eé]ographie)?", re.I), "Histoire"),
     (re.compile(r"\bsciences?\b", re.I), "Sciences"),
     (re.compile(r"physique(?:\s+chimie)?", re.I), "Physique"),
@@ -36,6 +39,7 @@ _SCHOOL_SIGNAL = re.compile(
     r"ann[eé]e\s+(?:de\s+l['’]?enseignement|secondaire|primaire)|"
     r"enseignement\s+secondaire|manuel\s+scolaire|"
     r"كتاب|مركز\s+وطني|"
+    r"التاريخ|تاريخ|جغرافيا|"
     r"histoire(?:\s+et\s+g[eé]ographie)?|"
     r"2[eè]me\s+ann[eé]e|1[eè]re?\s+ann[eé]e|3[eè]me\s+ann[eé]e|"
     r"tome\s+[12]|السنة\s+(?:الأولى|الثانية|الثالثة)"
@@ -125,6 +129,9 @@ def repair_school_title(title: str, candidates: Iterable[str] | None = None) -> 
 
     if "Mathématiques" in repaired:
         return "Mathématiques"
+    # Prefer Arabic History canonical over French "Histoire" when both match
+    if "التاريخ" in repaired:
+        return "التاريخ"
     if repaired:
         return repaired[0]
 
@@ -139,10 +146,16 @@ def repair_school_title(title: str, candidates: Iterable[str] | None = None) -> 
 def prefer_school_languages(languages: list[str] | None, *, title: str = "") -> list[str]:
     """School CNP covers are French (often bilingual AR+FR) — never tag ``en`` from garbage."""
     langs = [x for x in (languages or []) if x]
+    arabic_title = bool(title and re.search(r"[\u0600-\u06FF]", title))
     if looks_like_school_text(title) or any(looks_like_school_text(x) for x in langs):
         out: list[str] = []
-        if "ar" in langs:
+        if "ar" in langs or arabic_title:
             out.append("ar")
+        # Arabic-primary History covers: keep ar first; add fr only if already tagged
+        if arabic_title and "التاريخ" in (title or ""):
+            if "fr" in langs and "fr" not in out:
+                out.append("fr")
+            return out or ["ar"]
         if "fr" not in out:
             out.append("fr")
         # drop en
@@ -153,6 +166,11 @@ def prefer_school_languages(languages: list[str] | None, *, title: str = "") -> 
         if "fr" not in out:
             out.append("fr")
         return out or ["fr"]
+    if arabic_title and re.search(r"التاريخ|تاريخ", title or ""):
+        out = [x for x in langs if x != "en"]
+        if "ar" not in out:
+            out.insert(0, "ar")
+        return out or ["ar"]
     return langs
 
 

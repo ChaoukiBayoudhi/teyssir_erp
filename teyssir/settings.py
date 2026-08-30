@@ -226,12 +226,14 @@ METADATA_PROVIDERS = [
 # Vision-LLM OCR (OCR_PROVIDER=vision): free, offline, local — Ollama + a vision model.
 OLLAMA_URL = os.environ.get("TEYSSIR_OLLAMA_URL", os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"))
 VISION_MODEL = os.environ.get("TEYSSIR_VISION_MODEL", "qwen2.5vl:3b")
-# Hard timeout for primary vision provider calls (OCR_PROVIDER=vision).
-VISION_TIMEOUT = int(os.environ.get("TEYSSIR_VISION_TIMEOUT", "45"))
-# Shorter timeout when vision is only a Tesseract fallback (skip if Ollama is slow/down).
-VISION_FALLBACK_TIMEOUT = float(os.environ.get("TEYSSIR_VISION_FALLBACK_TIMEOUT", "28"))
+# Hard timeout for primary vision / dual-cover fallback (CPU qwen2.5vl needs ~40–70s).
+VISION_TIMEOUT = int(os.environ.get("TEYSSIR_VISION_TIMEOUT", "120"))
+# Soft timeout when vision is only a Tesseract fallback (raised for dual-image).
+VISION_FALLBACK_TIMEOUT = float(os.environ.get("TEYSSIR_VISION_FALLBACK_TIMEOUT", "45"))
 # Max image edge (px) before base64→Ollama; phone photos are huge and starve the timeout budget.
 VISION_IMAGE_MAX_EDGE = int(os.environ.get("TEYSSIR_VISION_IMAGE_MAX_EDGE", "1280"))
+# Dual front+back: smaller edge so Ollama finishes under VISION_TIMEOUT on CPU.
+VISION_DUAL_MAX_EDGE = int(os.environ.get("TEYSSIR_VISION_DUAL_MAX_EDGE", "768"))
 # P15-T3: content-hash cache for dual-image Vision JSON (local FS under media/).
 VISION_CACHE_ENABLED = os.environ.get("TEYSSIR_VISION_CACHE", "true").strip().lower() in (
     "1", "true", "yes", "on",
