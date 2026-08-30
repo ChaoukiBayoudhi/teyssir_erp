@@ -168,10 +168,12 @@ Client revert and policy: [INSTALL-WINDOWS.md §17](INSTALL-WINDOWS.md#17-contro
 
 ```powershell
 # Prefer the RC tag or the feature branch (same tip at freeze)
+# Do NOT use bare clone of master / GitHub "Code ▸ Download ZIP" (incomplete kit).
 git fetch --tags origin
 git checkout v1.0.0-windows-rc1
 # or: git checkout feature/pdf-conversion-async-optimization
-cd <project-root>   # folder that contains manage.py
+# ZIP alternative: https://github.com/ChaoukiBayoudhi/teyssir_erp/archive/refs/tags/v1.0.0-windows-rc1.zip
+cd <project-root>   # folder that contains manage.py AND deploy\windows\install_all.ps1
 Set-ExecutionPolicy -Scope Process Bypass -Force
 ```
 
