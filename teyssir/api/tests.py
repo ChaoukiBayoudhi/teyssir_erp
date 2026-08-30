@@ -158,20 +158,26 @@ class ApiTests(TestCase):
             self.assertIn(key, body)
 
     def test_reprint_receipt_does_not_create_sale(self):
+        import os
+        from unittest.mock import patch
+
         from teyssir.sales.models import Sale
-        body = {
-            "terminal": "C1", "payment_method": "CASH",
-            "lines": [{"product": str(self.product.id), "qty": "1"}],
-        }
-        r = self.client.post("/api/v1/pos/checkout", body, format="json")
-        self.assertEqual(r.status_code, 201)
-        sale_id = r.json()["sale_id"]
-        before = Sale.objects.filter(status=Sale.FINALIZED).count()
-        rr = self.client.get(f"/api/v1/pos/sales/{sale_id}/receipt?print=1&format=json")
-        self.assertEqual(rr.status_code, 200)
-        self.assertTrue(rr.json().get("printed"))
-        self.assertIn("DUPLICATA", rr.json().get("text", ""))
-        self.assertEqual(Sale.objects.filter(status=Sale.FINALIZED).count(), before)
+
+        # Isolate from shop TEYSSIR_PRINTER (tcp:…) so CI/dev .env cannot flake this.
+        with patch.dict(os.environ, {"TEYSSIR_PRINTER": "dummy"}, clear=False):
+            body = {
+                "terminal": "C1", "payment_method": "CASH",
+                "lines": [{"product": str(self.product.id), "qty": "1"}],
+            }
+            r = self.client.post("/api/v1/pos/checkout", body, format="json")
+            self.assertEqual(r.status_code, 201)
+            sale_id = r.json()["sale_id"]
+            before = Sale.objects.filter(status=Sale.FINALIZED).count()
+            rr = self.client.get(f"/api/v1/pos/sales/{sale_id}/receipt?print=1&format=json")
+            self.assertEqual(rr.status_code, 200)
+            self.assertTrue(rr.json().get("printed"))
+            self.assertIn("DUPLICATA", rr.json().get("text", ""))
+            self.assertEqual(Sale.objects.filter(status=Sale.FINALIZED).count(), before)
 
     def test_me_lists_capabilities(self):
         r = self.client.get("/api/v1/me")

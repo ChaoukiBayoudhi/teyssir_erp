@@ -76,10 +76,69 @@ On a machine with PostgreSQL 17: `TEYSSIR_ROLE=hub` `TEYSSIR_DB=postgres` → `m
 1. Unzip or `git clone` into e.g. `C:\Teyssir\teyssir_erp`.
 2. **Administrator** PowerShell in that folder.
 3. `Set-ExecutionPolicy -Scope Process Bypass -Force`
-4. `.\deploy\windows\install.ps1 -Role hub` — copy the printed **SYNC KEY**.
-5. `deploy\windows\start-teyssir.bat` → <http://localhost:8000> and <http://localhost:8000/health/>.
-6. Each till: `.\deploy\windows\install.ps1 -Role till -Terminal C1 -HubUrl http://<hub>:8000 -SyncKey <key>` then `start-teyssir.bat`.
-7. Optional: `.\deploy\windows\register-autostart.ps1 -Role hub` (or `-Role till -SyncMinutes 5`).
+4. Prefer hub: `.\deploy\windows\install_all.ps1 -Role hub` (or legacy `install.ps1 -Role hub`) — copy the printed **SYNC KEY**.
+5. Desktop **Teyssir ERP** shortcut (or `start-teyssir.bat`) → <http://localhost:8000> and <http://localhost:8000/health/>.
+6. Each till: prefer `.\deploy\windows\setup_caisse_C1.ps1 -HubUrl http://<hub>:8000 -SyncKey <key> -DiscoverPrinter` (or `install_all.ps1 -Role till …`).
+7. Optional: `.\deploy\windows\register-autostart.ps1 -Role hub` (or `-Role till -SyncMinutes 5`). Use `-SkipAutostart` at install if you want service-only (no scheduled tasks).
 
 No other hidden steps are required for POS + sync. Vision weights are pulled with Ollama by
 default (opt out `-SkipVision`). Tesseract language packs and cloud-hub URLs remain optional.
+
+---
+
+## Win11 dry-run checklist (Phase 7)
+
+> **Honest scope:** validated on **macOS** (Django suite + PowerShell structure). Items below marked
+> **Win11 required** were **not** executed on this host (no winget / NSSM / Windows service).
+
+### A — macOS / CI already verified (2026-08-30)
+
+| Check | Result |
+|-------|--------|
+| `python manage.py test` | **217 OK**, 3 skipped |
+| Book OCR honesty fixtures (`BookScanRegressionFixtureTests`) | **3 OK**, live photo scan skipped (needs `TEYSSIR_BOOKSCAN_REGRESSION=1`) |
+| Install script brace balance (`install_all` → `setup_app` → `setup_caisse` / C1–C3 → `install.ps1`) | Balanced |
+| Flag consistency: `-DiscoverPrinter`, `-SkipAutostart`, `-SkipShortcut`, LLM (`Install-LocalLlm.ps1`) | Present and forwarded through chain |
+| `Discover-Printer.ps1` still in kit | Present; referenced by `setup_caisse` / `install_all` |
+| `uninstall.ps1` leaves project DB / `.env` / media | Documented + script comments confirm |
+
+### B — Win11 shop dry-run (do on a real Windows 11 PC)
+
+Tick each box on Hub and at least one till (`C1`).
+
+**Install hub**
+
+- [ ] Admin PowerShell in project root; `Set-ExecutionPolicy -Scope Process Bypass -Force`
+- [ ] `.\deploy\windows\install_all.ps1 -Role hub` completes (or soft-falls to SQLite with clear `[PG]` warning)
+- [ ] Printed **SYNC KEY** noted; `.env` UTF-8 **without BOM**
+- [ ] `ollama list` shows text model (`mistral`) and vision (`qwen2.5vl:3b`) unless `-SkipLlm` / `-SkipVision`
+- [ ] Service `TeyssirBackend` exists, Delayed Auto-start; **no** second process listening on **8000** (no duplicate Task Scheduler “Teyssir Server” + service)
+- [ ] Desktop shortcut **Teyssir ERP** opens default browser to `http://localhost:8000` **without** a persistent console window
+- [ ] `http://localhost:8000/health/` → `ok`; POS UI loads (login + caisse screen)
+
+**Install till C1**
+
+- [ ] `.\deploy\windows\setup_caisse_C1.ps1 -HubUrl http://<hub>:8000 -SyncKey <key> -DiscoverPrinter`
+- [ ] `.env` has `TEYSSIR_ROLE=till`, `TEYSSIR_TERMINAL=C1`, hub URL + sync key
+- [ ] Printer: `TEYSSIR_PRINTER` is `tcp:IP:9100` after discover, or intentional `dummy` (never a hardcoded fake shop IP)
+- [ ] Receipt: finalize a cash sale → ESC/POS attempt or Diagnostics printer TCP check
+- [ ] Autostart: reboot till → service up, `/health/` ok, **one** listener on 8000; sync task present unless `-SkipAutostart`
+
+**Uninstall reverse (data kept)**
+
+- [ ] `.\deploy\windows\uninstall.ps1` removes service, desktop shortcut, scheduled tasks
+- [ ] Project folder, SQLite/Postgres data, `media\`, and `.env` **still present**
+- [ ] Re-run `install_all.ps1` / `setup_caisse_C1.ps1` recovers without wiping secrets
+
+### C — POS / OCR / printing / DB — verified vs Win11
+
+| Area | Verified on macOS | Must verify on Win11 |
+|------|-------------------|----------------------|
+| POS checkout API + RBAC | Django tests | Live browser POS + offline queue flush |
+| Receipt reprint (`?print=1` DUPLICATA) | Tests with `TEYSSIR_PRINTER=dummy` | Real ESC/POS or LAN printer after `-DiscoverPrinter` |
+| Book OCR honesty (619≠ISBN, conf caps) | Fixture unit tests | Live `bookscan_regression --honesty-only` + camera Nouveau livre |
+| Vision / Ollama path | Mocked in suite | Models on disk; Diagnostics LLM green |
+| DB migrate / seed | Suite + local SQLite | Hub Postgres path + till SQLite + sync once |
+| Desktop shortcut / NSSM / winget | Script structure only | Full install_all + reboot smoke |
+
+Phase 8 should polish operator-facing prose in [INSTALL-WINDOWS.md](INSTALL-WINDOWS.md) (hub/till command preference, `-SkipAutostart`, discover-printer, uninstall data-kept) using this checklist as the acceptance gate — **no merge to main in Phase 7**.

@@ -1058,10 +1058,13 @@ class FastOcrPathTests(unittest.TestCase):
         self.assertLessEqual(bc._LEGACY_FALLBACK_BUDGET, 8)
         img = Image.new("RGB", (900, 1200), "white")
         regions = list(bc._barcode_regions(img))
-        self.assertLessEqual(len(regions), 5)
+        # Distant CNP / PVP: a few lower/corner bands (still << old corner explosion)
+        self.assertLessEqual(len(regions), 10)
+        self.assertGreaterEqual(len(regions), 5)
         variants = list(bc._variants(regions[0][1]))
-        # region×variant uncapped would explode; budget truncates decode tries
-        self.assertLessEqual(len(regions) * len(variants), 40)
+        # Uncapped region×variant would explode; decode path truncates via budget
+        self.assertGreater(len(regions) * len(variants), bc._LEGACY_FALLBACK_BUDGET)
+        self.assertLessEqual(bc._LEGACY_FALLBACK_BUDGET, 8)
 
     def test_preprocess_variants_prefer_title_band_and_cap(self):
         import tempfile
@@ -1133,7 +1136,7 @@ class FastOcrPathTests(unittest.TestCase):
         self.assertFalse(any(l.startswith("barcode_acc") for l in labels))
 
     def test_accuracy_mode_vision_timeout_slightly_longer(self):
-        """Phase 15.6: accuracy mode raises Vision soft budget; default stays 2C."""
+        """Accuracy mode raises Vision soft budget above default (shop CPU floor)."""
         import tempfile
         from unittest.mock import patch
         from django.test import override_settings
@@ -1151,6 +1154,7 @@ class FastOcrPathTests(unittest.TestCase):
             captured["timeout"] = timeout
             return "", BookDraft(title="Vision Title", source="vision")
 
+        # Budget = min(max(base*mult, 100), cap); with hard_cap=45 default hits the cap.
         with override_settings(
             BOOKSCAN_ACCURACY=False,
             VISION_FALLBACK_TIMEOUT=28,
@@ -1160,7 +1164,7 @@ class FastOcrPathTests(unittest.TestCase):
         ):
             _maybe_vision_draft([front], ocr_draft)
         default_to = captured["timeout"]
-        self.assertEqual(default_to, 28.0)
+        self.assertEqual(default_to, 45.0)
 
         captured.clear()
         with override_settings(

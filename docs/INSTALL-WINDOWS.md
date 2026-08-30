@@ -502,6 +502,14 @@ Ensuite vous pouvez supprimer le dossier du projet.
 
 Rapport de validation : [INSTALLATION-QA.md](INSTALLATION-QA.md).
 
+### Checklist dry-run Windows 11
+
+Avant la mise en production magasin, cocher la grille **Win11 dry-run checklist (Phase 7)** dans
+[INSTALLATION-QA.md](INSTALLATION-QA.md#win11-dry-run-checklist-phase-7) :
+`install_all.ps1` → `setup_caisse_C1` + `-DiscoverPrinter` → modèles Ollama → `/health/` + UI POS →
+raccourci sans console → service sans double écoute sur 8000 → ticket/imprimante →
+`uninstall.ps1` (données conservées).
+
 ---
 
 <p align="center"><sub>Teyssir — logiciel de gestion de librairie · 100&nbsp;% outils libres et gratuits.</sub></p>
