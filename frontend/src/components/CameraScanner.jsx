@@ -19,10 +19,10 @@ const LIVE_THROTTLE_ZXING_MS = 400;
 const DETECT_COOLDOWN_MS = 1800;
 /**
  * Still-frame analyse budget (ms) — barcode only, never book OCR.
- * Product packaging (Fournitures) needs more time than a flat ISBN strip:
- * large webcam frames + band×scale×angle variants burn budget fast.
+ * Product packaging (Fournitures) + green CNP stickers need headroom:
+ * large webcam frames + band×scale×angle×invert variants burn budget fast.
  */
-const STILL_BUDGET_MS = 4800;
+const STILL_BUDGET_MS = 7000;
 /** Cap longest edge before ZXing — full 1080p burns the whole budget on band 1. */
 const STILL_MAX_EDGE = 1280;
 const MAX_CAPTURES = 4;
@@ -310,26 +310,44 @@ async function detectCodeFromSource(source, { preferIsbn = false } = {}) {
  * downscale first, try barcode bands BEFORE full frame (avoids budget starvation),
  * upscale / grayscale / invert / binarize / small + 90° rotations,
  * BarcodeDetector + ZXing TRY_HARDER — early-exit on first plausible code.
+ *
+ * ``closeup`` (POS Analyser on captured photos): prefer lower/full frame first —
+ * green sticker close-ups often miss the live guide strip crop.
  */
-async function detectCodeFromStill(canvas, { preferIsbn = false, budgetMs = STILL_BUDGET_MS } = {}) {
+async function detectCodeFromStill(canvas, {
+  preferIsbn = false,
+  budgetMs = STILL_BUDGET_MS,
+  closeup = false,
+} = {}) {
   if (!canvas?.width) return "";
   const base = limitCanvasEdge(canvas);
   const deadline = Date.now() + budgetMs;
   let incomplete = "";
 
-  // Crops first (fast, high hit-rate on packaging stickers); full frame last.
-  const bands = [
-    [GUIDE.left, GUIDE.top, GUIDE.right, GUIDE.top + GUIDE.height],
-    [0.04, 0.55, 0.96, 0.98],
-    [0.04, 0.42, 0.96, 0.78],
-    [0.08, 0.18, 0.92, 0.55],
-    [0.12, 0.28, 0.88, 0.72],
-    [0.2, 0.35, 0.8, 0.65],
-    [0, 0, 1, 1],
-  ];
-  // Phase A: upright, modest scales. Phase B: tilt + vertical barcodes.
+  // Crops first (fast, high hit-rate on packaging stickers); full frame last by default.
+  // Close-up captures: try lower half + full frame before the live guide strip.
+  const bands = closeup
+    ? [
+        [0.02, 0.30, 0.98, 0.98],
+        [0.04, 0.45, 0.96, 0.98],
+        [0, 0, 1, 1],
+        [0.08, 0.15, 0.92, 0.55],
+        [GUIDE.left, GUIDE.top, GUIDE.right, GUIDE.top + GUIDE.height],
+        [0.12, 0.28, 0.88, 0.72],
+      ]
+    : [
+        [GUIDE.left, GUIDE.top, GUIDE.right, GUIDE.top + GUIDE.height],
+        [0.04, 0.55, 0.96, 0.98],
+        [0.04, 0.42, 0.96, 0.78],
+        [0.08, 0.18, 0.92, 0.55],
+        [0.12, 0.28, 0.88, 0.72],
+        [0.2, 0.35, 0.8, 0.65],
+        [0, 0, 1, 1],
+      ];
+  // Phase A: upright — include invert early (green / light-on-dark stickers).
+  // Phase B: tilt. Phase C: vertical barcodes.
   const phases = [
-    { scales: [1, 1.6, 2.4], angles: [0], hardVariants: false },
+    { scales: [1, 1.6, 2.4], angles: [0], hardVariants: true },
     { scales: [1.2, 2.0, 3.0], angles: [0, -8, 8, -15, 15], hardVariants: true },
     { scales: [1.5, 2.5], angles: [90, -90], hardVariants: true },
   ];
@@ -359,6 +377,7 @@ async function detectCodeFromStill(canvas, { preferIsbn = false, budgetMs = STIL
                 grayscaleContrast(rotated, 1.6),
                 grayscaleContrast(rotated, 2.4),
                 invertCanvas(rotated),
+                invertCanvas(grayscaleContrast(rotated, 1.8)),
                 binarizeCanvas(rotated, 110),
                 binarizeCanvas(rotated, 145),
               ]
@@ -366,6 +385,7 @@ async function detectCodeFromStill(canvas, { preferIsbn = false, budgetMs = STIL
                 rotated,
                 grayscaleContrast(rotated, 1.7),
                 grayscaleContrast(rotated, 2.2),
+                invertCanvas(rotated),
               ];
           for (const v of variants) {
             const r = await tryVariant(v);
@@ -378,7 +398,7 @@ async function detectCodeFromStill(canvas, { preferIsbn = false, budgetMs = STIL
       }
     }
   }
-  return incomplete;
+  return incomplete && isPlausibleProductBarcode(incomplete) ? incomplete : "";
 }
 
 /** Live path: only decode inside the green guide strip (avoids face / room noise). */
@@ -606,7 +626,11 @@ export default function CameraScanner({
     // Quick still decode on this capture (strengthened path).
     try {
       const canvas = await fileToCanvas(file);
-      const code = await detectCodeFromStill(canvas, { preferIsbn, budgetMs: 2200 });
+      const code = await detectCodeFromStill(canvas, {
+        preferIsbn,
+        budgetMs: isPos ? 3200 : 2200,
+        closeup: isPos,
+      });
       if (code && isPlausibleProductBarcode(code)) {
         lastRef.current = { value: code, at: Date.now() };
         setInfo(`${t("codeDetected")}: ${code}`);
@@ -642,13 +666,19 @@ export default function CameraScanner({
       }
       withCanvas.sort((a, b) => b.score - a.score);
 
-      const perPhotoBudget = Math.max(2800, Math.floor(STILL_BUDGET_MS / Math.max(1, Math.min(withCanvas.length, 2))));
+      // Give the best photo nearly the full budget (POS green stickers need invert variants).
+      const n = Math.max(1, Math.min(withCanvas.length, 2));
+      const perPhotoBudget = Math.max(
+        isPos ? 5500 : 2800,
+        Math.floor(STILL_BUDGET_MS / n),
+      );
       let code = "";
       let incomplete = "";
       for (const item of withCanvas) {
         const hit = await detectCodeFromStill(item.canvas, {
           preferIsbn,
           budgetMs: perPhotoBudget,
+          closeup: isPos,
         });
         if (hit && isPlausibleProductBarcode(hit)) {
           code = hit;

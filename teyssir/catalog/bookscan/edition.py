@@ -17,6 +17,9 @@ EDITION_UNKNOWN = "unknown"
 _SCHOOL_TITLE_REPAIRS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"math[eé]matiques?", re.I), "Mathématiques"),
     (re.compile(r"^matiques\b|^ématiques\b|^athématiques\b", re.I), "Mathématiques"),
+    # Mid-string truncations / camelCase glue (PMathématiques)
+    (re.compile(r"[A-Za-z]?[Mm]ath[eé]?m?atiques?", re.I), "Mathématiques"),
+    (re.compile(r"(?<![A-Za-z])ématiques", re.I), "Mathématiques"),
     (re.compile(r"technologie\s+de\s+l['’]?informati", re.I), "Technologie de l'Information"),
     (re.compile(r"^nologie\s+de\s+l['’]?informati", re.I), "Technologie de l'Information"),
     # Arabic History CNP (Case D) — prefer Arabic canonical when script present
@@ -250,12 +253,30 @@ def refine_school_draft(draft) -> None:
     title = (getattr(draft, "title", "") or "").strip()
     cands = list(raw.get("title_candidates") or [])
     if kind == EDITION_SCHOOL_CNP or looks_like_school_text(title, *cands):
+        from .ocr import is_ultra_garbage_title, is_usable_ocr_title
+
         repaired = repair_school_title(title, cands)
-        if repaired and repaired != title:
+        # Accept only a real subject repair / usable title — never re-inject
+        # garbage candidates like ``4è ta N`` after OCR cleared the title.
+        if (
+            repaired
+            and repaired != title
+            and is_usable_ocr_title(repaired)
+            and not is_ultra_garbage_title(repaired)
+        ):
             if title and not raw.get("rejected_title"):
                 raw["pre_repair_title"] = title
             draft.title = repaired
             title = repaired
+        elif title and (
+            is_ultra_garbage_title(title) or not is_usable_ocr_title(title)
+        ):
+            raw.setdefault("rejected_title", title)
+            raw.setdefault("suggested_title", title)
+            draft.title = ""
+            title = ""
+            raw["ocr_title_unusable"] = True
+            raw["manual_assist"] = True
         # Drop subject-line / fragment authors
         authors = list(getattr(draft, "authors", None) or [])
         kept = [
@@ -267,10 +288,36 @@ def refine_school_draft(draft) -> None:
             raw["rejected_authors"] = [a for a in authors if a not in kept]
         draft.authors = kept
         # Force fr (or ar+fr), never en-from-garbage
+        lang_title = title
+        if (
+            not lang_title
+            and repaired
+            and is_usable_ocr_title(repaired)
+            and not is_ultra_garbage_title(repaired)
+        ):
+            lang_title = repaired
         draft.languages = prefer_school_languages(
-            list(getattr(draft, "languages", None) or []), title=title or repaired,
+            list(getattr(draft, "languages", None) or []), title=lang_title,
         )
+        # School CNP with cleared garbage title: still force fr (never leave lone ``en``)
+        if kind == EDITION_SCHOOL_CNP or getattr(draft, "edition_kind", "") == EDITION_SCHOOL_CNP:
+            langs = [x for x in (draft.languages or []) if x and x != "en"]
+            if not langs:
+                langs = ["ar"] if (lang_title and re.search(r"[\u0600-\u06FF]", lang_title)) else ["fr"]
+            elif "fr" not in langs and "ar" not in langs:
+                langs.append("fr")
+            draft.languages = langs
         raw["detected_langs"] = list(draft.languages)
+        # Keep language chip in sync with languages[] (avoid en vs fr mismatch)
+        try:
+            from .language import format_language_detected
+
+            ld = format_language_detected(draft.languages) or "fr"
+            draft.language_detected = ld
+            raw["language_detected"] = ld
+        except Exception:
+            draft.language_detected = (draft.languages or ["fr"])[0]
+            raw["language_detected"] = draft.language_detected
         # Junk template descriptions like "Book: nologie…"
         desc = (getattr(draft, "description", "") or "").strip()
         if desc and (

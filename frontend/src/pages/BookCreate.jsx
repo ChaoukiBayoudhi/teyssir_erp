@@ -660,11 +660,14 @@ export default function BookCreate({ onBack, onLogout }) {
 
       const livre = cats.find((c) => /livre|book|كتاب|manuel/i.test(c.name_fr || ""));
       const tva7 = taxes.find((x) => Number(x.rate_percent) === 7);
-      // Do not present garbage OCR as a confident title; keep languages=ar when likely Arabic
-      const safeTitle = (garbageOcr || !!d.raw?.ocr_title_unusable) && !isSchoolEdition
+      // Do not present garbage OCR as a confident title — even for school CNP.
+      // Backend may repair to Mathématiques; keep only usable / repaired titles.
+      const titleLooksRepaired = /Mathématiques|Mathematiques|Histoire|Technologie|التاريخ|Sciences|Physique|Français/i
+        .test(d.title || "");
+      const safeTitle = (garbageOcr || !!d.raw?.ocr_title_unusable) && !titleLooksRepaired
         ? ""
         : (d.title || "");
-      const rawAuthors = (garbageOcr || !!d.raw?.ocr_title_unusable) && !isSchoolEdition
+      const rawAuthors = (garbageOcr || !!d.raw?.ocr_title_unusable) && !titleLooksRepaired
         ? ""
         : (d.authors || []).join(", ");
       const safeAuthors = scrubAuthors(rawAuthors, safeTitle);
@@ -935,7 +938,11 @@ export default function BookCreate({ onBack, onLogout }) {
                   )}
                   {draft?.language_detected && (
                     <Chip size="small" color="info" variant="outlined"
-                          label={`${t("languageDetected")}: ${draft.language_detected}`} />
+                          label={`${t("languageDetected")}: ${
+                            schoolMode
+                              ? ((form.languages || "fr").split(",")[0].trim() || "fr")
+                              : draft.language_detected
+                          }`} />
                   )}
                 </Stack>
               </Stack>
@@ -943,10 +950,7 @@ export default function BookCreate({ onBack, onLogout }) {
                 {schoolMode ? (
                   <>
                     <Grid item xs={12} sm={6}>
-                      {F(t("barcodeFieldLabel"), "barcode_raw", {
-                        helperText: t("isbnOptionalHint"),
-                        FormHelperTextProps: { sx: { mx: 0 } },
-                      })}
+                      {F(t("barcodeFieldLabel"), "barcode_raw")}
                     </Grid>
                     <Grid item xs={12} sm={6}>
                       {F(t("isbnFieldLabel"), "isbn13", {
