@@ -558,4 +558,51 @@ Rapport QA plus large : [INSTALLATION-QA.md](INSTALLATION-QA.md).
 
 ---
 
+## 17. Controlled release & rollback (Windows kit)
+
+> **Mandate:** do **not** squash-merge into `master` until a **real Windows 11** dry-run
+> is green. Wine / CrossOver / scripted macOS checks are **not** a substitute.
+
+### Tags (immutable markers)
+
+| Tag | Points to | Meaning |
+|-----|-----------|---------|
+| `v0.9.0-pre-windows-kit` | `master` @ `8c8ce0a` | Last known stable / production-ish baseline **before** Windows kit merge |
+| `v1.0.0-windows-rc1` | `feature/pdf-conversion-async-optimization` tip (Phase 8+) | Release **candidate** — kit present; **not** shop-validated |
+| `v1.0.0-windows-ready` | *(not created yet)* | Reserved for **after** Win11 dry-run PASS + squash merge |
+
+### Branch preservation
+
+- Keep `feature/pdf-conversion-async-optimization` on the remote **until** dry-run is green
+  and squash merge is explicitly approved. Do **not** delete it after merge either
+  (useful for bisect / cherry-picks).
+- Fixes during dry-run land on that feature branch; re-tag RC only if you need a new
+  freeze point (e.g. `v1.0.0-windows-rc2`).
+
+### Revert clients to tagged stable
+
+On each shop PC that already pulled a bad candidate build:
+
+```powershell
+# In the project folder (Administrator PowerShell if service is installed)
+git fetch --tags origin
+git checkout v0.9.0-pre-windows-kit
+# Re-run the install path that matches this PC's role, e.g.:
+#   .\deploy\windows\install_all.ps1 -Role hub
+#   or start-teyssir.bat / restart service TeyssirBackend
+```
+
+If the feature branch was never merged to `master`, production clients on `master`
+are already at the stable tip — just avoid deploying `v1.0.0-windows-rc*` until dry-run passes.
+
+### Gate before squash
+
+1. Complete §16 / [INSTALLATION-QA Win11 checklist](INSTALLATION-QA.md#win11-dry-run-checklist-phase-7) on real Win11.
+2. Only then: squash-merge → tag `v1.0.0-windows-ready` → update docs.
+
+Operator PowerShell runbook (exact commands): see
+[INSTALLATION-QA.md § Operator Win11 dry-run runbook](INSTALLATION-QA.md#operator-win11-dry-run-runbook).
+
+---
+
 <p align="center"><sub>Teyssir — logiciel de gestion de librairie · 100&nbsp;% outils libres et gratuits.</sub></p>

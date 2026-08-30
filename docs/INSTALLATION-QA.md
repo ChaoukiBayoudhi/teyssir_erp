@@ -142,3 +142,83 @@ Tick each box on Hub and at least one till (`C1`).
 | Desktop shortcut / NSSM / winget | Script structure only | Full install_all + reboot smoke |
 
 Phase 8 (docs) polished operator-facing prose in [INSTALL-WINDOWS.md](INSTALL-WINDOWS.md) (chemin rapide hub/till, `install_all` / `setup_app`, caisse Cx + `-DiscoverPrinter`, LLM `-SkipLlm`/`-SkipVision`, shortcut sans console, `-SkipAutostart` + unregister, troubleshooting port 8000 / PG→SQLite / Tesseract / OCR / printer / PWA hard-refresh) and points here as the acceptance gate — **no merge to main in Phase 8**; Phase 9 (squash/merge) needs explicit confirmation.
+
+---
+
+## Controlled release rollback (pre–squash merge)
+
+| Artifact | Value |
+|----------|--------|
+| Stable tag | `v0.9.0-pre-windows-kit` → `master` @ `8c8ce0a` |
+| RC tag (not ready) | `v1.0.0-windows-rc1` → feature tip (Phase 8 docs) |
+| Ready tag | `v1.0.0-windows-ready` — **do not create** until Win11 dry-run PASS |
+| Feature branch | Keep `feature/pdf-conversion-async-optimization` (do not delete) |
+| Squash to `master` | **Blocked** until § B checklist is green on a real Win11 host |
+
+Client revert and policy: [INSTALL-WINDOWS.md §17](INSTALL-WINDOWS.md#17-controlled-release--rollback-windows-kit).
+
+---
+
+## Operator Win11 dry-run runbook
+
+> **Host gate:** run on a **native Windows 11** PC (or Hyper-V / Parallels / VMware guest
+> with real Windows 11). **Wine is not acceptable.**
+
+### 0 — Prepare tree
+
+```powershell
+# Prefer the RC tag or the feature branch (same tip at freeze)
+git fetch --tags origin
+git checkout v1.0.0-windows-rc1
+# or: git checkout feature/pdf-conversion-async-optimization
+cd <project-root>   # folder that contains manage.py
+Set-ExecutionPolicy -Scope Process Bypass -Force
+```
+
+### 1 — Hub (Admin PowerShell)
+
+```powershell
+.\deploy\windows\install_all.ps1 -Role hub
+# Optional focused re-run after deps are present:
+# .\deploy\windows\setup_app.ps1 -Role hub
+
+# Note the printed SYNC KEY, then:
+# - Desktop "Teyssir ERP" shortcut → browser opens http://localhost:8000 (no console)
+# - Invoke-WebRequest http://localhost:8000/health/  → expect ok
+# - ollama list → mistral + qwen2.5vl:3b (unless -SkipLlm / -SkipVision)
+# - Get-Service TeyssirBackend ; confirm ONE listener on TCP 8000
+```
+
+### 2 — One caisse (C1)
+
+```powershell
+.\deploy\windows\setup_caisse_C1.ps1 `
+  -HubUrl http://<HUB-IP-OR-HOSTNAME>:8000 `
+  -SyncKey '<SYNC_KEY_FROM_HUB>' `
+  -DiscoverPrinter
+
+# Validate:
+# - .env: TEYSSIR_ROLE=till, TEYSSIR_TERMINAL=C1, hub URL + sync key
+# - TEYSSIR_PRINTER=tcp:IP:9100 after discover, or intentional dummy
+# - Finalize one cash sale → real receipt if printer found (else document hardware block)
+# - Reboot → service/autostart + /health/ + single :8000 listener
+```
+
+### 3 — Tick § B checklist above
+
+Copy results (PASS/FAIL + notes) back to the release engineer. On FAIL: fix on the
+feature branch, push, re-run from §0 — still **no squash**.
+
+### macOS verified vs Win11 required (this release gate)
+
+| Verified on macOS (dev host) | Must run on Win11 |
+|------------------------------|-------------------|
+| Feature branch + tags pushed; RC docs present | Full `install_all.ps1 -Role hub` (winget / EDB Postgres / NSSM) |
+| Script tree + flag forwarding (structure) | Hub DB `teyssir` create + migrate; `/health/` + POS UI |
+| Django test suite (see § A) | Ollama models on disk; camera + Tesseract + Vision path |
+| PowerShell sources parse on paper | `setup_caisse_C1.ps1 -DiscoverPrinter` + real ESC/POS :9100 if hardware |
+| — | Desktop shortcut without console; autostart; PATH/permission smoke |
+| — | `uninstall.ps1` keeps data; re-install recovers secrets |
+
+**Status 2026-08-30:** dry-run **BLOCKED** — no native Win11 / Parallels / VMware / SSH
+Windows host on the release engineer Mac. Do not claim PASS; do not squash.
