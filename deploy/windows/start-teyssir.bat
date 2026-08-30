@@ -9,7 +9,11 @@ sc query TeyssirBackend | findstr /I "RUNNING" >nul 2>&1
 if not errorlevel 1 (
   echo Teyssir Backend service is already running.
   echo Opening http://localhost:%PORT%
-  start "" powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%~dp0open-teyssir.ps1"
+  if exist "%~dp0open-teyssir.vbs" (
+    start "" wscript //nologo "%~dp0open-teyssir.vbs"
+  ) else (
+    start "" powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%~dp0open-teyssir.ps1"
+  )
   goto :eof
 )
 

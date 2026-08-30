@@ -1,6 +1,7 @@
 <#
     Create "Teyssir ERP" on the user Desktop (and Start Menu) with the branding icon.
     Opens the default browser at http://localhost:8000 after waiting for /health/.
+    Prefers open-teyssir.vbs via wscript so double-click shows no console flash.
 #>
 [CmdletBinding()]
 param()
@@ -15,8 +16,9 @@ function Write-Sc([string]$Message, [string]$Color = "Gray") {
 
 try {
     $openPs1 = Join-Path $PSScriptRoot "open-teyssir.ps1"
+    $openVbs = Join-Path $PSScriptRoot "open-teyssir.vbs"
     $ico = Join-Path $Root "assets\branding\teyssir.ico"
-    if (-not (Test-Path $ico)) { $ico = Join-Path $Root "assets\branding\icon.svg" }
+    if (-not (Test-Path $ico)) { $ico = Join-Path $Root "frontend\public\favicon.ico" }
     if (-not (Test-Path $openPs1)) { throw "open-teyssir.ps1 missing" }
 
     $desktop = [Environment]::GetFolderPath("Desktop")
@@ -25,10 +27,17 @@ try {
 
     $shell = New-Object -ComObject WScript.Shell
     $lnk = $shell.CreateShortcut($lnkPath)
-    $lnk.TargetPath = (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe")
-    $lnk.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$openPs1`""
+    if (Test-Path $openVbs) {
+        $lnk.TargetPath = (Join-Path $env:SystemRoot "System32\wscript.exe")
+        $lnk.Arguments = "//nologo `"$openVbs`""
+        $lnk.WindowStyle = 1
+    }
+    else {
+        $lnk.TargetPath = (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe")
+        $lnk.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$openPs1`""
+        $lnk.WindowStyle = 7
+    }
     $lnk.WorkingDirectory = $Root
-    $lnk.WindowStyle = 7
     $lnk.Description = "Teyssir ERP"
     if (Test-Path $ico) { $lnk.IconLocation = "$ico,0" }
     $lnk.Save()

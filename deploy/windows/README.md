@@ -14,7 +14,8 @@ Scripts to install and run Teyssir on the client's Windows PCs (1 Hub + up to 3 
 | `install.ps1` | Full app installer (idempotent): venv, Hub PostgreSQL or SQLite, seeds, Ollama, **Windows service**, **desktop shortcut**. |
 | `Discover-Printer.ps1` | LAN scan for ESC/POS on TCP 9100 → `tcp:IP:9100` or `dummy` (never hardcodes a shop IP). |
 | `Install-WindowsService.ps1` | NSSM service `TeyssirBackend` (waitress, auto-start, restart on failure, logs). |
-| `Install-DesktopShortcut.ps1` | Desktop + Start Menu shortcut **Teyssir ERP** with branding icon. |
+| `Install-DesktopShortcut.ps1` | Desktop + Start Menu shortcut **Teyssir ERP** with branding `.ico` (Phase 5). |
+| `open-teyssir.vbs` | Silent launcher (no console flash) → `open-teyssir.ps1`. |
 | `open-teyssir.ps1` | Wait for `/health/` then open the default browser. |
 | `serve.py` | Service entry: migrate + waitress (not `runserver`). |
 | `uninstall.ps1` | Remove service, shortcut, scheduled tasks (keeps data). |

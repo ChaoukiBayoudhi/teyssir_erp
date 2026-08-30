@@ -238,8 +238,9 @@ Après `install.ps1` (PowerShell **administrateur**) :
   * démarrage **automatique différé** au boot (sans terminal) ;
   * **redémarrage automatique** en cas de plantage ;
   * journaux dans `logs\teyssir-backend-stdout.log` et `logs\teyssir-backend-stderr.log`.
-* Un raccourci Bureau **« Teyssir ERP »** (icône Teyssir) ouvre le navigateur par défaut sur
-  `http://localhost:8000` dès que `/health/` répond.
+* Un raccourci Bureau **« Teyssir ERP »** (icône `assets/branding/teyssir.ico`, aussi menu Démarrer)
+  ouvre le navigateur par défaut sur `http://localhost:8000` dès que `/health/` répond —
+  via `open-teyssir.vbs` (pas de fenêtre console).
 * Les caisses enregistrent aussi la tâche **Teyssir Sync** (toutes les 5 min). Les ventes restent
   locales d'abord ; la sync ne fait que réconcilier avec le Hub.
 
