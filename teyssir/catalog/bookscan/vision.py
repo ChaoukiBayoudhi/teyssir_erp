@@ -238,16 +238,26 @@ def analyze_covers(
     edge = max_edge
     if edge is None:
         edge = int(getattr(settings, "VISION_IMAGE_MAX_EDGE", 1280) or 1280)
+    # Dual covers: cap edge so CPU Ollama finishes (1280×2 often exceeds soft timeout)
+    dual_cap = int(getattr(settings, "VISION_DUAL_MAX_EDGE", 896) or 896)
     model = getattr(settings, "VISION_MODEL", None) or DEFAULT_VISION_MODEL
 
-    jpeg_blobs: list[bytes] = [image_to_jpeg_bytes(front_path, max_edge=edge)]
+    jpeg_blobs: list[bytes] = []
     dual = False
+    # Shop CPU: keep vision JPEGs modest even for front-only (1280 starves timeout)
+    fallback_cap = int(getattr(settings, "VISION_DUAL_MAX_EDGE", 896) or 896)
+    edge = min(int(edge), fallback_cap)
     if back_path:
         try:
+            jpeg_blobs.append(image_to_jpeg_bytes(front_path, max_edge=edge))
             jpeg_blobs.append(image_to_jpeg_bytes(back_path, max_edge=edge))
             dual = True
         except Exception as exc:
             logger.info("vision back image skipped: %s", exc)
+            jpeg_blobs = [image_to_jpeg_bytes(front_path, max_edge=edge)]
+            dual = False
+    else:
+        jpeg_blobs = [image_to_jpeg_bytes(front_path, max_edge=edge)]
 
     images = [base64.b64encode(b).decode() for b in jpeg_blobs]
     cache_on = vision_cache.cache_enabled() if use_cache is None else bool(use_cache)

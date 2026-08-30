@@ -28,10 +28,11 @@ _LEGACY_TILTS = (-12, 12)
 _LEGACY_CARDINALS = (90, 270)
 
 # Budgeted ROI variants (upscale barcode bands; no sharp / binary fan-out).
-_ROI_TILTS = (-12, 12)
+_ROI_TILTS = (-12, 12, -18, 18)
 _ROI_SCALES = (2.0, 3.0, 4.0)
 # Hard cap on region×variant decode attempts after ROI miss (Phase 2C).
-_LEGACY_FALLBACK_BUDGET = 6
+# Slightly raised for distant phone versos (still << old combinatorial budget).
+_LEGACY_FALLBACK_BUDGET = 8
 
 # pyzbar type → catalog symbology label
 _SYMBOLOGY_MAP = {
@@ -219,12 +220,17 @@ def _barcode_regions(img) -> Iterator[tuple[str, object]]:
     w, h = img.size
     if h > 60:
         yield "lower30", img.crop((0, int(h * 0.68), w, h))
+        # Distant phone shots: barcode sits higher relative to frame
+        yield "lower45", img.crop((0, int(h * 0.55), w, h))
+        yield "mid_lower", img.crop((0, int(h * 0.42), w, int(h * 0.92)))
     if w > 100 and h > 80:
         # CNP / PVP stickers often sit bottom-left on Tunisian school books
         yield "bl_corner", img.crop((0, int(h * 0.55), int(w * 0.55), h))
         yield "bl_tight", img.crop((0, int(h * 0.72), int(w * 0.42), h))
         yield "br_corner", img.crop((int(w * 0.45), int(h * 0.65), w, h))
         yield "bottom_band", img.crop((0, int(h * 0.78), w, h))
+        # Wider left half for distant CNP stickers
+        yield "left_lower", img.crop((0, int(h * 0.5), int(w * 0.62), h))
     yield "gray_lower", ImageOps.autocontrast(
         ImageOps.grayscale(img.crop((0, int(h * 0.6), w, h) if h > 60 else (0, 0, w, h))).convert("RGB")
     )
@@ -303,6 +309,18 @@ def _roi_band_regions(img, prepare: "CoverPreprocessResult | None") -> Iterator[
             yield "white_label_pad", crop
         crop = img.crop(clamped.as_tuple())
         yield name, crop
+        # Pad barcode_band for distant phone versos (bars sit outside tight ROI)
+        if name == "barcode_band":
+            pad_x = max(50, int(clamped.width * 0.4))
+            pad_up = max(40, int(clamped.height * 0.5))
+            pad_down = max(80, int(clamped.height * 1.2))
+            expanded = RoiBox(
+                x0=max(0, clamped.x0 - pad_x),
+                y0=max(0, clamped.y0 - pad_up),
+                x1=min(w, clamped.x1 + pad_x),
+                y1=min(h, clamped.y1 + pad_down),
+            ).clamp(w, h)
+            yield "barcode_band_pad", img.crop(expanded.as_tuple())
         # One tight mid-sticker crop (bars often sit in the middle third)
         if name == "white_label" and crop.height > 40:
             cw, ch = crop.size
@@ -313,6 +331,10 @@ def _roi_band_regions(img, prepare: "CoverPreprocessResult | None") -> Iterator[
             yield "barcode_band_lower", crop.crop((0, int(ch * 0.35), cw, ch))
             # Left half of barcode band (CNP PVP stickers are often bottom-left)
             yield "barcode_band_left", crop.crop((0, 0, max(1, int(cw * 0.55)), ch))
+            # Center strip — distant shots often crop bars mid-frame
+            yield "barcode_band_center", crop.crop(
+                (int(cw * 0.15), int(ch * 0.2), int(cw * 0.85), ch)
+            )
 
 
 def _roi_variants(region) -> Iterator[tuple[str, object]]:
@@ -320,7 +342,11 @@ def _roi_variants(region) -> Iterator[tuple[str, object]]:
     from PIL import ImageEnhance, ImageOps
 
     yield "raw", region
-    for scale in _ROI_SCALES:
+    scales = list(_ROI_SCALES)
+    # Distant / tiny barcode blobs: one extra 5× upscale (latency-bounded)
+    if max(region.size) < 420:
+        scales = list(scales) + [5.0]
+    for scale in scales:
         up = _scale(region, scale)
         yield f"x{int(scale)}", up
         g = ImageOps.autocontrast(ImageOps.grayscale(up))
@@ -328,7 +354,7 @@ def _roi_variants(region) -> Iterator[tuple[str, object]]:
         yield f"x{int(scale)}_contrast", contrast.convert("RGB")
         bw = contrast.point(lambda x: 255 if x > 125 else 0)
         yield f"x{int(scale)}_binary", bw.convert("RGB")
-    base = _up_min_side(region, 700)
+    base = _up_min_side(region, 900 if max(region.size) < 420 else 700)
     for angle in _ROI_TILTS:
         yield f"tilt{angle}", base.rotate(angle, expand=True, fillcolor="white")
 
@@ -378,7 +404,10 @@ def decode_product_barcode(
             seen.add(key)
             # OpenCV on upscales of barcode/sticker ROIs (phone photos need it);
             # keep pyzbar-only on tilts to avoid explosion.
-            allow_cv = vlabel in ("raw", "x2", "x3", "x4", "x3_contrast", "x4_contrast") and (
+            allow_cv = vlabel in (
+                "raw", "x2", "x3", "x4", "x5",
+                "x3_contrast", "x4_contrast", "x5_contrast",
+            ) and (
                 rlabel.startswith("barcode") or rlabel.startswith("white_label")
             )
             hit = _pick_best(_decode_hits(variant, allow_opencv=allow_cv))

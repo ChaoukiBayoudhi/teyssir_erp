@@ -134,9 +134,18 @@ def _latin_title_shape_ok(s: str, words: list[str]) -> bool:
         re.search(r"[àâäéèêëïîôùûüçœæÀÂÄÉÈÊËÏÎÔÙÛÜÇ]", s)
     )
     title_case = sum(1 for w in words if re.match(r"[A-ZÀ-Ÿ][a-zà-ÿ]{2,}", w))
-    # Long word / French diacritics / article phrase / multi-word Title Case
-    if longest >= 8:
+    known = bool(
+        re.search(
+            r"\b(Beauty|Beast|Prince|Mathématiques|Mathematiques|Histoire|"
+            r"Premier|Golden|Tales|Cinderella)\b",
+            s,
+            re.I,
+        )
+    )
+    # Known school / trade tokens always count (with or without diacritics)
+    if known:
         return True
+    # French diacritics / article phrase
     if has_diacritic and longest >= 5:
         return True
     if has_article and longest >= 5:
@@ -145,14 +154,16 @@ def _latin_title_shape_ok(s: str, words: list[str]) -> bool:
         return True
     if longest >= 6 and title_case >= 1 and len(words) >= 3:
         return True
-    # Known school-book tokens (Mathématiques may arrive without diacritics)
-    if re.search(
-        r"\b(Beauty|Beast|Prince|Mathématiques|Mathematiques|Histoire|"
-        r"Premier|Golden|Tales|Cinderella)\b",
-        s,
-        re.I,
-    ):
-        return True
+    # Long word alone is NOT enough — ``melbease`` (8) must not pass as Beauty OCR.
+    # Require phrase cues, Title Case, or a single long real-looking token (≥10).
+    if longest >= 8:
+        if has_article or has_diacritic or known:
+            return True
+        if title_case >= 1 and (len(words) >= 2 or longest >= 10):
+            return True
+        if len(words) == 1 and longest >= 10:
+            return True
+        return False
     return False
 
 
@@ -161,6 +172,7 @@ def is_ultra_garbage_title(text: str) -> bool:
 
     Distant XTRIKE shots often yield 2–4 letter + punct/digit blobs that must never
     autofill Titre — even when Tesseract reports a misleadingly high mean_conf.
+    Also rejects pipe/comma OCR mush like ``ais, melbease |`` (Beauty phone shots).
     """
     s = (text or "").strip().replace("\u200e", "").replace("\u200f", "")
     if not s:
@@ -171,9 +183,19 @@ def is_ultra_garbage_title(text: str) -> bool:
     words = [w for w in re.split(r"\s+", s) if w]
     if len(letters) < 3:
         return True
-    # Backslash / pipe / underscore noise (``QU \ a7``)
-    if re.search(r"[\\|_]", s) and len(letters) <= 8:
-        return True
+    # Backslash / pipe / underscore noise (``QU \ a7``, ``ais, melbease |``)
+    if re.search(r"[\\|_]", s):
+        if len(letters) <= 8:
+            return True
+        # Strip bars and re-check — Beauty OCR mush keeps a long fake word + pipe
+        stripped = re.sub(r"[\\|_|,;:]+", " ", s)
+        stripped = re.sub(r"\s+", " ", stripped).strip()
+        words2 = [w for w in re.split(r"\s+", stripped) if w]
+        letters2 = "".join(c for c in stripped if c.isalpha())
+        if len(letters2) <= 16 and not _latin_title_shape_ok(stripped, words2):
+            return True
+        if re.search(r"[,;]", s) and len(words2) <= 3 and len(letters2) <= 14:
+            return True
     # Short Latin + digit without real title shape
     if len(letters) <= 5 and re.search(r"\d", s) and not _latin_title_shape_ok(s, words):
         return True
@@ -340,6 +362,9 @@ def _arabic_title_quality(text: str, *, mean_conf: float | None = None) -> float
     if ar < 4:
         return 0.0
     bonus = 0.9 if s.startswith("كتاب") or s.startswith("الأول") else 0.0
+    # History / geography CNP covers (Case D)
+    if re.search(r"التاريخ|تاريخ|جغرافيا", s):
+        bonus += 1.1
     # Subtitle / audience lines ("لتلاميذ…") must not beat the main title
     if re.match(r"^(لتلاميذ|لطلبة|للسنة|مع كتاب)", s):
         bonus -= 1.2

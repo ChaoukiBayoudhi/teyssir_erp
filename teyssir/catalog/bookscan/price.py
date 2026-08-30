@@ -222,6 +222,15 @@ def extract_price_dt(text: str) -> str:
     unlabeled = _drop_barcode_prefixed_siblings(unlabeled)
     dropped_prefixed = len(unlabeled) < unlabeled_n
 
+    # Premier phone FP: unlabeled single-digit .000 (``4.000`` from ``DT 4`` mush)
+    # must not become a shelf price when no labeled sticker survived. Real CNP
+    # stickers like 4.900 stay (not .000) or arrive via labeled ثمن/PVP lines.
+    if not labeled:
+        unlabeled = [
+            c for c in unlabeled
+            if not re.fullmatch(r"[1-9]\.000", c or "")
+        ]
+
     def _pick(pool: list[str]) -> str:
         if not pool:
             return ""

@@ -333,7 +333,9 @@ class PriceAndLangTests(unittest.TestCase):
             extract_price_dt("17,000 , 5204\nLe DT 4 mens\n17,000 JR 152743"),
             "17.000",
         )
-        self.assertEqual(extract_price_dt("Le DT 4 mens"), "4.000")
+        # Lone DT-integer mush → empty (honest); Vision / real sticker fills later
+        self.assertEqual(extract_price_dt("Le DT 4 mens"), "")
+        self.assertEqual(extract_price_dt("4.000"), "")
         # ISBN digit soup must not invent 5.000
         self.assertEqual(extract_price_dt("ISBN 9789973352743\n5.000"), "")
         # History CNP bleed: 24.900 alone with barcode context → reject
@@ -342,6 +344,8 @@ class PriceAndLangTests(unittest.TestCase):
             extract_price_dt("نس نيم تعسرم 4,900\n19330282\n24,900"),
             "4.900",
         )
+        # Labeled ثمن millime still wins (school sticker)
+        self.assertEqual(extract_price_dt("الثمن\n4,000"), "4.000")
 
     def test_detect_script_langs(self):
         from teyssir.catalog.bookscan.ocr import detect_script_langs
@@ -473,7 +477,7 @@ class PriceAndLangTests(unittest.TestCase):
         # Distant-shot mush must be garbage even at misleadingly high mean_conf
         from teyssir.catalog.bookscan.ocr import is_ultra_garbage_title
 
-        for junk in (r"QU \ a7", "QU a7", "QUa7"):
+        for junk in (r"QU \ a7", "QU a7", "QUa7", "ais, melbease |"):
             self.assertTrue(is_ultra_garbage_title(junk), msg=junk)
             self.assertTrue(
                 is_garbage_latin_ocr(junk, mean_conf=90),
@@ -1233,6 +1237,12 @@ class TitleSearchGatingTests(unittest.TestCase):
             raw={"ocr_mean_confidence": 35, "ocr_garbage_latin": True},
         )
         self.assertTrue(_should_try_vision(draft, P()))
+        # Beauty mush that previously skipped Vision (longest word ≥8 + pipe)
+        beauty_mush = BookDraft(
+            title="ais, melbease |", source="tesseract", confidence=0.26,
+            raw={"ocr_mean_confidence": 55, "isbn_not_detected": True},
+        )
+        self.assertTrue(_should_try_vision(beauty_mush, P()))
         good = BookDraft(
             title="Beauty and the Beast", source="tesseract", confidence=0.35,
             raw={"ocr_text_only": True},
@@ -1380,6 +1390,21 @@ class TitleSearchGatingTests(unittest.TestCase):
         self.assertFalse(draft.description.startswith("Book:"))
         self.assertTrue(draft.raw.get("isbn_optional"))
 
+        # Arabic History CNP — school_cnp + التاريخ even without barcode
+        hist = BookDraft(
+            title="", source="tesseract", confidence=0.15, languages=["fr", "en"],
+            raw={
+                "title_candidates": ["التاريخ", "السنة الثانية"],
+                "rejected_title": "عد ل",
+                "isbn_not_detected": True,
+            },
+        )
+        refine_school_draft(hist)
+        self.assertEqual(hist.edition_kind, "school_cnp")
+        self.assertEqual(hist.title, "التاريخ")
+        self.assertIn("ar", hist.languages)
+        self.assertNotIn("en", hist.languages)
+
         class P:
             name = "tesseract"
 
@@ -1390,6 +1415,14 @@ class TitleSearchGatingTests(unittest.TestCase):
             raw={"school_edition": True, "ocr_mean_confidence": 48},
         )
         self.assertFalse(_should_try_vision(school, P()))
+
+        # Arabic school without description → force Vision
+        ar_school = BookDraft(
+            title="التاريخ", source="tesseract", confidence=0.25,
+            edition_kind="school_cnp", languages=["ar"],
+            raw={"school_edition": True, "ocr_mean_confidence": 30},
+        )
+        self.assertTrue(_should_try_vision(ar_school, P()))
 
     def test_should_try_vision_on_phone_photo_no_barcode(self):
         """Missing barcode + unusable title (phone cover) -> Vision."""
@@ -1637,7 +1670,7 @@ class TitleSearchGatingTests(unittest.TestCase):
             self.assertLessEqual(len(remaining), 2)
 
     def test_maybe_vision_draft_dual_image_once(self):
-        """_maybe_vision_draft uses analyze_covers once (front+back), not two sequential calls."""
+        """Front-first Vision: one analyze_covers(front) when description is filled."""
         import tempfile
         from unittest.mock import patch
 
@@ -1654,15 +1687,15 @@ class TitleSearchGatingTests(unittest.TestCase):
             title="", source="tesseract", confidence=0.1,
             raw={"ocr_garbage_latin": True},
         )
-        calls = {"n": 0}
+        calls = {"n": 0, "backs": []}
 
         def fake_analyze(front_path, back_path=None, **kwargs):
             calls["n"] += 1
-            self.assertIsNotNone(back_path)
+            calls["backs"].append(back_path)
             d = BookDraft(
                 title="Book", description="A. B. C.", language_detected="en",
                 source="vision", confidence=0.8,
-                raw={"vision_dual_image": True},
+                raw={"vision_dual_image": bool(back_path)},
             )
             return '{"title":"Book"}', d
 
@@ -1670,9 +1703,12 @@ class TitleSearchGatingTests(unittest.TestCase):
             "teyssir.catalog.bookscan.vision.analyze_covers", side_effect=fake_analyze,
         ):
             out = _maybe_vision_draft([front, back], ocr_draft)
+        # Description present on front → no dual enrichment call
         self.assertEqual(calls["n"], 1)
+        self.assertIsNone(calls["backs"][0])
         self.assertEqual(out.title, "Book")
         self.assertTrue(out.description)
+        self.assertTrue(out.raw.get("vision_fallback"))
 
     def test_scan_autofills_description_from_vision(self):
         """Vision layer description becomes draft.description via merge."""

@@ -5,7 +5,7 @@ import logging
 import re
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import as_completed
 
 from django.db import transaction
@@ -174,8 +174,9 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
 
     # Phase 2A: rectify covers before barcode + OCR (temps cleaned on exit).
     _emit("preprocess", 12)
-    with prepared_cover_paths(image_paths or []) as (prep_paths, prep_results):
-        work_paths = prep_paths if prep_paths else list(image_paths or [])
+    originals = list(image_paths or [])
+    with prepared_cover_paths(originals) as (prep_paths, prep_results):
+        work_paths = prep_paths if prep_paths else originals
         return _scan_book_prepared(
             work_paths,
             prepared=prep_results,
@@ -185,6 +186,7 @@ def scan_book(image_paths, isbn="", enrich=enrich_by_isbn, enrich_title=enrich_b
             enrich=enrich,
             enrich_title=enrich_title,
             on_stage=on_stage,
+            vision_paths=originals,
         )
 
 
@@ -198,14 +200,21 @@ def _scan_book_prepared(
     enrich,
     enrich_title,
     on_stage=None,
+    vision_paths=None,
 ):
-    """Inner scan on already-preprocessed paths (+ optional ROI metadata)."""
+    """Inner scan on already-preprocessed paths (+ optional ROI metadata).
+
+    ``vision_paths``: original capture paths for Ollama (not CLAHE temps) so the
+    Vision cache hits and CPU qwen2.5vl finishes under timeout.
+    """
     def _emit(stage, progress=None):
         if on_stage:
             try:
                 on_stage(stage, progress)
             except TypeError:
                 on_stage(stage)
+
+    vision_image_paths = list(vision_paths or image_paths or [])
 
     # Product barcode first (Phase 2B): retain ISBN and non-ISBN (CNP 619…).
     # Digit OCR never fills barcode_* ; isbn13 only when bookland check OK.
@@ -331,9 +340,9 @@ def _scan_book_prepared(
 
     # Phase 15.3: Vision is a separate layer (not an in-place OCR overwrite).
     vision_draft = None
-    if image_paths and _should_try_vision(ocr_draft, provider):
+    if vision_image_paths and _should_try_vision(ocr_draft, provider):
         _emit("vision", 68)
-        vision_draft = _maybe_vision_draft(image_paths, ocr_draft)
+        vision_draft = _maybe_vision_draft(vision_image_paths, ocr_draft)
         if vision_draft:
             if not isbn and vision_draft.isbn13:
                 isbn = to_isbn13(vision_draft.isbn13) or ""
@@ -544,6 +553,15 @@ def _scan_book_prepared(
             draft.raw["rejected_description"] = draft.description
             draft.description = ""
             draft.raw["manual_assist"] = True
+    # Any cleared / unusable title: drop junk "Book: ais, melbease |." templates
+    if draft.description and re.match(r"^(Book|Livre)\s*[:/]", draft.description, re.I):
+        if not draft.title or (draft.raw or {}).get("ocr_title_unusable"):
+            draft.raw = {
+                **(draft.raw or {}),
+                "rejected_description": draft.description,
+                "manual_assist": True,
+            }
+            draft.description = ""
     # Vision language wins for children's / weak OCR covers
     if (draft.raw or {}).get("vision_fallback") and getattr(draft, "language_detected", ""):
         from .language import parse_script_probe
@@ -576,9 +594,10 @@ def _sanitize_vision_isbn(draft):
 
 
 def _maybe_vision_draft(image_paths, ocr_draft) -> BookDraft | None:
-    """Run dual-image Vision-LLM once; return a separate layer (or None).
+    """Run Vision-LLM; return a separate layer (or None).
 
-    Phase 15.4: one Ollama call with front+back (when present). Merged later via
+    Phase 15.4 / QA: front-first Ollama call (CPU qwen2.5vl ~40s), then optional
+    dual front+back enrichment when description is still empty. Merged later via
     ``merge_scan_layers`` — do not overwrite Tess/barcode/price OCR in place.
     Never accept a Vision ISBN without checksum validation; never invent barcode_*.
     """
@@ -590,8 +609,8 @@ def _maybe_vision_draft(image_paths, ocr_draft) -> BookDraft | None:
     if not image_paths:
         return None
 
-    base_timeout = float(getattr(settings, "VISION_FALLBACK_TIMEOUT", 28) or 28)
-    hard_cap = float(getattr(settings, "VISION_TIMEOUT", 45) or 45)
+    base_timeout = float(getattr(settings, "VISION_FALLBACK_TIMEOUT", 45) or 45)
+    hard_cap = float(getattr(settings, "VISION_TIMEOUT", 120) or 120)
     raw = ocr_draft.raw or {}
     arabic_hard = bool(
         raw.get("ocr_garbage_arabic")
@@ -601,34 +620,70 @@ def _maybe_vision_draft(image_paths, ocr_draft) -> BookDraft | None:
         or ("ar" in (ocr_draft.languages or []))
         or arabic_char_ratio(ocr_draft.title or "") >= 0.15
     )
-    # Budget: Arabic/calligraphy up to ~1.5× base, always ≤ VISION_TIMEOUT.
-    # Dual-image uses the same budget (one call, not two sequential).
-    # Phase 15.6 accuracy mode: slightly longer soft/hard budgets (never infinite).
-    accuracy = bool(getattr(settings, "BOOKSCAN_ACCURACY", False))
-    if accuracy:
-        mult = 1.75 if arabic_hard else 1.25
-        cap = min(hard_cap * 1.2, hard_cap + 15.0)
-    else:
-        mult = 1.5 if arabic_hard else 1.0
-        cap = hard_cap
-    timeout = min(base_timeout * mult, cap)
     front = image_paths[0]
     back = image_paths[1] if len(image_paths) > 1 else None
+    # Front-first: reliable title/description on CPU. Dual is a second call only when
+    # front left description empty (avoids stacking after a hung dual timeout).
+    accuracy = bool(getattr(settings, "BOOKSCAN_ACCURACY", False))
+    if accuracy:
+        mult = 1.75 if arabic_hard else 1.4
+        cap = min(hard_cap * 1.1, hard_cap + 20.0)
+    else:
+        mult = 1.5 if arabic_hard else 1.2
+        cap = hard_cap
+    timeout = min(max(base_timeout * mult, 100.0), cap)
 
+    def _run_vision(front_p: str, back_p: str | None, budget: float):
+        # Call synchronously — urllib timeout is the hard stop. ThreadPoolExecutor
+        # cancel() cannot kill a hung Ollama generate and orphans CPU work that
+        # starves the next call (and skips a warm vision_cache hit).
+        return analyze_covers(front_p, back_p, timeout=budget)
+
+    v_text, v_draft = "", None
     try:
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            fut = pool.submit(analyze_covers, front, back, timeout=timeout)
-            try:
-                v_text, v_draft = fut.result(timeout=timeout)
-            except FuturesTimeout:
-                fut.cancel()
-                ocr_draft.raw = {
-                    **(ocr_draft.raw or {}),
-                    "vision_fallback_error": f"timeout after {timeout}s",
-                }
-                return None
+        v_text, v_draft = _run_vision(front, None, timeout)
     except Exception as exc:
-        ocr_draft.raw = {**(ocr_draft.raw or {}), "vision_fallback_error": str(exc)[:200]}
+        err = str(exc)[:200]
+        if "timed out" in err.lower() or "timeout" in err.lower():
+            err = f"timeout after {timeout}s"
+        ocr_draft.raw = {**(ocr_draft.raw or {}), "vision_fallback_error": err}
+        return None
+
+    # Optional dual enrichment when verso present and front left description empty
+    if (
+        back
+        and v_draft is not None
+        and not (getattr(v_draft, "description", None) or "").strip()
+    ):
+        dual_budget = min(max(base_timeout * 1.4, 60.0), hard_cap)
+        try:
+            d_text, d_draft = _run_vision(front, back, dual_budget)
+            if d_draft and (
+                (d_draft.description or "").strip()
+                or (d_draft.title or "").strip()
+            ):
+                if (d_draft.description or "").strip():
+                    v_draft.description = d_draft.description
+                    v_draft.raw = {**(v_draft.raw or {}), **(d_draft.raw or {})}
+                if (d_draft.title or "").strip() and not (v_draft.title or "").strip():
+                    v_draft.title = d_draft.title
+                if (d_draft.language_detected or "").strip():
+                    v_draft.language_detected = d_draft.language_detected
+                    v_draft.languages = list(d_draft.languages or v_draft.languages or [])
+                v_text = d_text or v_text
+                v_draft.raw = {
+                    **(v_draft.raw or {}),
+                    "vision_dual_image": True,
+                    "vision_dual_enrichment": True,
+                }
+                timeout = dual_budget
+        except Exception:
+            ocr_draft.raw = {
+                **(ocr_draft.raw or {}),
+                "vision_dual_skipped": True,
+            }
+
+    if v_draft is None:
         return None
 
     v_draft = _sanitize_vision_isbn(v_draft)
@@ -760,9 +815,17 @@ def _should_try_vision(draft, provider) -> bool:
     if (has_barcode_isbn or has_product_barcode) and (title_ok or has_price):
         return False
     # School cover classified without barcode: skip Vision only for solid Latin/FR
-    # titles (Mathématiques) or a price sticker — weak Arabic calligraphy still
-    # benefits from Vision. Never skip when title is garbage / book tiny.
-    if is_school and has_price and not book_too_small and not garbage:
+    # titles (Mathématiques) **with** a price sticker — weak Arabic calligraphy,
+    # empty description + weak title, or tiny frame still benefits from Vision.
+    desc = (getattr(draft, "description", None) or "").strip()
+    if (
+        is_school
+        and has_price
+        and title_ok
+        and arabic_char_ratio(title) < 0.15
+        and not book_too_small
+        and not garbage
+    ):
         return False
     if (
         is_school
@@ -770,6 +833,7 @@ def _should_try_vision(draft, provider) -> bool:
         and arabic_char_ratio(title) < 0.15
         and not book_too_small
         and not garbage
+        and desc
     ):
         return False
 
@@ -781,6 +845,12 @@ def _should_try_vision(draft, provider) -> bool:
         return True
     # Force Vision: garbage / weak title when no barcode fast path above
     if garbage:
+        return True
+    # Force Vision: title present but unusable (Beauty ``ais, melbease |``)
+    if title and not title_ok:
+        return True
+    # Force Vision: school edition without description (Arabic History / empty blurb)
+    if is_school and not desc and (not title_ok or garbage or arabic_char_ratio(title) >= 0.15):
         return True
     if not draft.isbn13 and not title_ok and not has_product_barcode:
         return True
