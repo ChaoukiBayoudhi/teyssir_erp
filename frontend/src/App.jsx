@@ -14,6 +14,7 @@ import Customers from "./pages/Customers.jsx";
 import Financials from "./pages/Financials.jsx";
 import Consolidated from "./pages/Consolidated.jsx";
 import BookCreate from "./pages/BookCreate.jsx";
+import Diagnostics from "./pages/Diagnostics.jsx";
 import Quotation from "./pages/Quotation.jsx";
 import PurchaseOrders from "./pages/PurchaseOrders.jsx";
 import Catalog from "./pages/Catalog.jsx";
@@ -24,6 +25,7 @@ export default function App() {
   const { i18n } = useTranslation();
   const [authed, setAuthed] = useState(Boolean(getToken()));
   const [view, setView] = useState("pos");
+  const [canDiagnostics, setCanDiagnostics] = useState(true);
   const dir = i18n.language === "ar" ? "rtl" : "ltr";
 
   useEffect(() => {
@@ -61,6 +63,8 @@ export default function App() {
           <Receiving onBack={() => setView("pos")} onLogout={logout} />
         ) : view === "customers" ? (
           <Customers onBack={() => setView("pos")} onLogout={logout} />
+        ) : view === "diagnostics" ? (
+          <Diagnostics onBack={() => setView("pos")} onLogout={logout} />
         ) : view === "book" ? (
           <BookCreate onBack={() => setView("pos")} onLogout={logout} />
         ) : view === "quotation" ? (
@@ -83,6 +87,7 @@ export default function App() {
             onReceiving={() => setView("receiving")}
             onCustomers={() => setView("customers")}
             onNewBook={() => setView("book")}
+            onDiagnostics={canDiagnostics ? () => setView("diagnostics") : null}
             onQuotation={() => setView("quotation")}
             onPurchaseOrders={() => setView("po")}
             onCatalog={() => setView("catalog")}

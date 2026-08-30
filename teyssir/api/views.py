@@ -285,6 +285,7 @@ class ProductDetailView(APIView):
             data["book"] = {
                 "isbn13": book.isbn13, "isbn10": book.isbn10, "subtitle": book.subtitle,
                 "publisher": book.publisher, "series": book.series, "edition": book.edition,
+                "edition_kind": book.edition_kind,
                 "languages": book.languages, "pub_year": book.pub_year, "pages": book.pages,
                 "dimensions": book.dimensions, "cover_type": book.cover_type,
                 "subject": book.subject, "description": book.description,
@@ -684,6 +685,9 @@ def _scan_job_payload(request, job, images=None):
     body = {
         "job_id": str(job.id),
         "status": job.status.lower(),                       # pending | done | failed
+        "stage": job.stage or ("done" if job.status == ScanJob.DONE else
+                               "failed" if job.status == ScanJob.FAILED else "queued"),
+        "progress": 0 if job.progress is None else int(job.progress),
         "image_ids": [str(i) for i in job.image_ids],
         "images": [_image_payload(request, img) for img in images],
     }
@@ -711,7 +715,10 @@ class BookScanView(APIView):
         isbn = (request.data.get("isbn") or "").strip()
         images = [
             ProductImage.objects.create(
-                image=f, kind=ProductImage.COVER if i == 0 else ProductImage.OTHER, order=i)
+                image=f,
+                kind=(ProductImage.COVER if i == 0 else
+                      ProductImage.BACK if i == 1 else ProductImage.OTHER),
+                order=i)
             for i, f in enumerate(files)
         ]
         job = ScanJob.objects.create(isbn=isbn, image_ids=[str(img.id) for img in images])
@@ -812,3 +819,13 @@ def me(request):
         "store_code": settings.STORE_CODE,
         "role": settings.ROLE,
     })
+
+@api_view(["GET"])
+@permission_classes([capability("configure_system")])
+def diagnostics(request):
+    """GET /api/v1/diagnostics — admin/owner node health for the Diagnostics UI."""
+    from teyssir.core.diagnostics import collect_diagnostics
+
+    ping = request.query_params.get("ping", "1") not in ("0", "false", "no")
+    return Response(collect_diagnostics(ping_llm=ping))
+

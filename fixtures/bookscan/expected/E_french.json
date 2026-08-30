@@ -1,0 +1,33 @@
+{
+  "id": "E_french",
+  "label": "Phase 15 Case E — French (Mathématiques CNP, overlaps D)",
+  "case": "E",
+  "notes": "Same corpus photos as D_math_cnp; fixture asserts French-forward title/lang expectations.",
+  "images": {
+    "front": {"needles": ["12.41", "#2"], "exclude": []},
+    "back": {"needles": ["12.42"], "exclude": []}
+  },
+  "expect": {
+    "title_contains": ["Mathématiques", "Mathematiques", "Math"],
+    "title_allow_empty": true,
+    "languages": ["fr"],
+    "languages_mode": "includes_any",
+    "languages_allow_empty": true,
+    "isbn13": "",
+    "isbn13_allow_empty": true,
+    "isbn13_must_be_empty_if_only_cnp": true,
+    "barcode_raw": "6192202502353",
+    "barcode_raw_note": "Checksum-valid stand-in when live zbar misses; printed sticker may vary.",
+    "barcode_raw_allow_empty": true,
+    "barcode_kind": "local_product",
+    "price": "4.200",
+    "price_allow_empty": true
+  },
+  "honesty": {
+    "never_isbn13_prefix": ["619"],
+    "digit_ocr_confidence_max": 0.35,
+    "high_confidence_requires": "barcode_isbn_or_metadata",
+    "max_confidence_without_strong_id": 0.55,
+    "cnp_619_never_isbn13": true
+  }
+}

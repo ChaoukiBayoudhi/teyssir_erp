@@ -118,6 +118,16 @@ export const createPurchaseInvoice = (payload) =>
   request("/purchasing/invoices", { method: "POST", body: payload });
 
 // Book scan = multipart (images + optional ISBN). Browser sets the multipart boundary.
+
+
+
+export const listCustomers = () => request("/customers/");
+export const createCustomer = (body) =>
+  request("/customers/", { method: "POST", body });
+export const customerStatement = (id) => request(`/customers/${id}/statement/`);
+export const customerPayment = (id, amount) =>
+  request(`/customers/${id}/payment/`, { method: "POST", body: { amount } });
+
 export async function scanBook(files, isbn) {
   const fd = new FormData();
   files.forEach((f) => fd.append("images", f));
@@ -137,9 +147,13 @@ export async function scanBook(files, isbn) {
 }
 
 // Poll a scan job until it leaves the "pending" state (async OCR backend). Returns the final job.
-export async function pollScanJob(jobId, { interval = 2000, tries = 120 } = {}) {
+export async function pollScanJob(jobId, { interval = 2000, tries = 120, onProgress } = {}) {
   for (let i = 0; i < tries; i++) {
     const job = await request(`/catalog/books/scan/${jobId}`);
+    if (onProgress) onProgress(job);
+    if (job.status === "failed") {
+      throw new Error(job.error || "OCR failed");
+    }
     if (job.status !== "pending") return job;
     await new Promise((r) => setTimeout(r, interval));
   }
@@ -148,9 +162,6 @@ export async function pollScanJob(jobId, { interval = 2000, tries = 120 } = {}) 
 
 export const createBook = (data) => request("/catalog/books", { method: "POST", body: data });
 
-export const listCustomers = () => request("/customers/");
-export const createCustomer = (body) =>
-  request("/customers/", { method: "POST", body });
-export const customerStatement = (id) => request(`/customers/${id}/statement/`);
-export const customerPayment = (id, amount) =>
-  request(`/customers/${id}/payment/`, { method: "POST", body: { amount } });
+
+export const fetchDiagnostics = () => request("/diagnostics");
+

@@ -164,11 +164,21 @@ Time Machine. Le Hub contient déjà la consolidation de toutes les caisses.
 <details>
 <summary><b>Lecture des livres par photo (OCR) — gratuit</b></summary>
 
-- **Tesseract** (rapide, hors-ligne) : `brew install tesseract tesseract-lang`, puis dans `.env` :
-  `TEYSSIR_OCR_PROVIDER=tesseract`.
-- **Vision-LLM** (extraction structurée multilingue, hors-ligne) : `brew install ollama`,
-  `ollama pull qwen2.5vl:3b`, puis `.env` : `TEYSSIR_OCR_PROVIDER=vision` et
-  `TEYSSIR_SCAN_EXECUTOR=thread`.
+- **Tesseract** (rapide, hors-ligne) : `install.sh` tente `brew install tesseract tesseract-lang`
+  et écrit `TEYSSIR_TESSERACT_CMD` (ex. `/opt/homebrew/bin/tesseract`) dans `.env` quand possible.
+  Sinon : `brew install tesseract tesseract-lang`, puis `.env` :
+  `TEYSSIR_OCR_PROVIDER=tesseract` et `TEYSSIR_TESSERACT_CMD=/opt/homebrew/bin/tesseract`.
+- **Vision-LLM** (extraction structurée multilingue, hors-ligne) : `install.sh` tente
+  `brew install ollama` puis **`ollama pull qwen2.5vl:3b`** (Phase 15.7, CPU-friendly).
+  Opt-out : `--skip-vision`. Laissez `TEYSSIR_OCR_PROVIDER=tesseract` — Vision est un
+  fallback (couvertures arabes / OCR faible / webcam type XTRIKE / sans ISBN).
+  `TEYSSIR_VISION_MODEL` est écrit dans `.env`. Pour Vision en primaire :
+  `TEYSSIR_OCR_PROVIDER=vision` + `TEYSSIR_SCAN_EXECUTOR=thread`. Cold start CPU possible
+  (dizaines de secondes). Voir `docs/LOCAL-AI.md` (Phase 15.4 dual-image).
+- Si OCR est vide sous LaunchAgent : vérifiez `PATH` Homebrew dans le plist et
+  `TEYSSIR_TESSERACT_CMD` ; Menu → **Diagnostics** ;   `curl -s http://127.0.0.1:8000/health/ | jq .tesseract`.
+  Vérifiez que `langs` contient **ara** et **fra** (sinon `brew install tesseract-lang`).
+  Les couvertures arabes sans `ara` produisent du Latin absurde (`wis! Boot ay`) et `languages=en`.
 </details>
 
 <details>

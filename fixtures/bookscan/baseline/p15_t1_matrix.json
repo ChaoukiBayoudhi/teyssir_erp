@@ -1,0 +1,175 @@
+{
+  "ticket": "P15-T1",
+  "recorded_at": "2026-08-29T17:52:41.719471+00:00",
+  "vision_off": {
+    "passed": 4,
+    "failed": 3,
+    "skipped": 0,
+    "total_ms": 539159.3,
+    "results": [
+      {
+        "id": "A_beauty",
+        "ok": true,
+        "skipped": false,
+        "ms": 105477.4,
+        "fails": [],
+        "title": "ais, melbease |",
+        "price": "",
+        "languages": [
+          "en"
+        ],
+        "confidence": 0.26,
+        "vision_fallback": null
+      },
+      {
+        "id": "B_blur",
+        "ok": true,
+        "skipped": false,
+        "ms": 51422.1,
+        "fails": [],
+        "title": "",
+        "price": "",
+        "languages": [
+          "fr",
+          "en"
+        ],
+        "confidence": 0.1,
+        "vision_fallback": null
+      },
+      {
+        "id": "B_premier",
+        "ok": false,
+        "skipped": false,
+        "ms": 82565.1,
+        "fails": [
+          "price"
+        ],
+        "title": "",
+        "price": "5.000",
+        "languages": [
+          "ar",
+          "fr"
+        ],
+        "confidence": 0.45,
+        "vision_fallback": null
+      },
+      {
+        "id": "C_history_cnp",
+        "ok": false,
+        "skipped": false,
+        "ms": 59529.7,
+        "fails": [
+          "price"
+        ],
+        "title": "",
+        "price": "24.900",
+        "languages": [
+          "ar",
+          "en"
+        ],
+        "confidence": 0.3,
+        "vision_fallback": null
+      },
+      {
+        "id": "D_math_cnp",
+        "ok": true,
+        "skipped": false,
+        "ms": 65443.7,
+        "fails": [],
+        "title": "Mathématiques",
+        "price": "4.200",
+        "languages": [
+          "fr"
+        ],
+        "confidence": 0.55,
+        "vision_fallback": null
+      },
+      {
+        "id": "E_french",
+        "ok": true,
+        "skipped": false,
+        "ms": 115287.2,
+        "fails": [],
+        "title": "Mathématiques",
+        "price": "4.200",
+        "languages": [
+          "fr"
+        ],
+        "confidence": 0.55,
+        "vision_fallback": null
+      },
+      {
+        "id": "F_mixed",
+        "ok": false,
+        "skipped": false,
+        "ms": 59434.0,
+        "fails": [
+          "price"
+        ],
+        "title": "",
+        "price": "5.000",
+        "languages": [
+          "ar",
+          "fr"
+        ],
+        "confidence": 0.45,
+        "vision_fallback": null
+      }
+    ]
+  },
+  "vision_on_EF_blur": {
+    "passed": 2,
+    "failed": 1,
+    "skipped": 0,
+    "total_ms": 281127.7,
+    "results": [
+      {
+        "id": "B_blur",
+        "ok": true,
+        "skipped": false,
+        "ms": 69893.9,
+        "fails": [],
+        "title": "",
+        "price": "",
+        "languages": [
+          "fr",
+          "en"
+        ],
+        "confidence": 0.1,
+        "vision_fallback": null
+      },
+      {
+        "id": "E_french",
+        "ok": true,
+        "skipped": false,
+        "ms": 124185.6,
+        "fails": [],
+        "title": "Mathématiques",
+        "price": "4.200",
+        "languages": [
+          "fr"
+        ],
+        "confidence": 0.55,
+        "vision_fallback": null
+      },
+      {
+        "id": "F_mixed",
+        "ok": false,
+        "skipped": false,
+        "ms": 87048.2,
+        "fails": [
+          "price"
+        ],
+        "title": "",
+        "price": "5.000",
+        "languages": [
+          "ar",
+          "fr"
+        ],
+        "confidence": 0.15,
+        "vision_fallback": null
+      }
+    ],
+    "note": "Subset only: B_blur E_french F_mixed"
+  }
+}

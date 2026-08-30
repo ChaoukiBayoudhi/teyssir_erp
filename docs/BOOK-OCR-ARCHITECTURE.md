@@ -95,9 +95,92 @@ Minimal clicks: scan → (auto-fill) → review → save. Show **OCR/source conf
 preview/crop/rotate (client-side canvas), and validate before save. Bilingual AR/FR + RTL like the
 rest of the PWA.
 
+## Phase 2F — books_photos regression harness
+
+Ground-truth fixtures live in `fixtures/bookscan/expected/*.json` (Books A–F + blur:
+Beauty, Le premier, History CNP, Math CNP, French/Math Case E, Mixed FR+AR Case F,
+and `B_blur` soft-focus Premier under `fixtures/bookscan/images/`). Each fixture lists
+photo filename needles (or an explicit `file`), expected `title_contains` / `languages` /
+`isbn13` / `barcode_raw` / `price` (with `allow_empty`), and **honesty** rules (619 never
+ISBN, digit-OCR confidence cap, no high conf without barcode/metadata). Baseline JSON:
+`fixtures/bookscan/baseline/`.
+
+```text
+# Offline Tess (Vision skipped) — macOS / Linux
+TEYSSIR_OCR_VISION_FALLBACK=false python manage.py bookscan_regression
+python manage.py bookscan_regression --json
+python manage.py bookscan_regression --honesty-only   # ISBN/conf rules only
+python manage.py test teyssir.catalog.tests.BookScanRegressionFixtureTests
+TEYSSIR_BOOKSCAN_REGRESSION=1 python manage.py test \
+  teyssir.catalog.tests.BookScanRegressionFixtureTests.test_live_books_photos_regression_optional
+```
+
+### Win11 (PowerShell, Hub)
+
+```powershell
+cd C:\teyssir_erp   # or your clone path
+.\.venv\Scripts\Activate.ps1
+$env:TEYSSIR_OCR_PROVIDER = "tesseract"
+$env:TEYSSIR_OCR_VISION_FALLBACK = "false"
+# Optional: full Tesseract path if NSSM PATH is thin
+# $env:TEYSSIR_TESSERACT_CMD = "C:\Program Files\Tesseract-OCR\tesseract.exe"
+python manage.py bookscan_regression --json
+# Optional Vision (slow; needs Ollama + vision model):
+# $env:TEYSSIR_OCR_VISION_FALLBACK = "true"
+# python manage.py bookscan_regression --vision --json
+```
+
+Place phone photos under `books_photos\` (same filenames as the Mac corpus). Missing
+`libzbar` is OK — barcode fields stay empty (`allow_empty`); honesty rules still apply.
+
+## Phase 15 — low-quality camera + local Vision LLM
+
+Target hardware includes shop USB webcams such as **XTRIKE ME XPC01** (soft focus, noise,
+low contrast). Pipeline layers (bookscan only):
+
+1. **Capture** — highest practical `getUserMedia` resolution + aspect guide; tracks stop after shot.
+2. **Tess fast path (2C)** — script probe, capped variants; ISBN/barcode when visible.
+3. **Vision gated fallback (15.4)** — one dual-image Ollama call (`TEYSSIR_VISION_MODEL`,
+   default `qwen2.5vl:3b`) when Tess is weak; returns `language_detected` + short `description`.
+4. **Merge (15.3)** — metadata → Vision → Tess; barcode ISBN checksum beats LLM; never invent `barcode_*`.
+
+### Install / offline (Phase 15.7)
+
+| Platform | Command |
+|----------|---------|
+| Win11 Hub | `.\deploy\windows\install.ps1 -Role hub` — auto-pulls text + vision; `-SkipVision` to omit |
+| Win11 vision only | `.\deploy\windows\Install-LocalLlm.ps1 -Model mistral` |
+| macOS | `bash deploy/macos/install.sh --role hub` — brew Ollama if needed + `ollama pull qwen2.5vl:3b`; `--skip-vision` to omit |
+
+Env: `TEYSSIR_VISION_MODEL`, `TEYSSIR_OCR_VISION_FALLBACK=true`, keep `TEYSSIR_OCR_PROVIDER=tesseract`
+for day-to-day. **CPU** works (cold start tens of seconds); GPU/Metal speeds warm inference.
+Fully **offline** after pull. Details: `docs/LOCAL-AI.md`.
+
+### Accuracy vs speed (`TEYSSIR_BOOKSCAN_ACCURACY`)
+
+Default is **off** (fast shop path: script probe, capped Tess variants, Vision only when
+the draft is weak). Set `TEYSSIR_BOOKSCAN_ACCURACY=1` only for debugging low-quality
+covers (extra title_band Tess passes + slightly longer Vision budget).
+
+**macOS LaunchAgent shop use:** keep accuracy off. If you enabled it for testing:
+
+```bash
+# Turn off for speed (edit plist, then reload)
+plutil -replace EnvironmentVariables.TEYSSIR_BOOKSCAN_ACCURACY -string 0 \
+  ~/Library/LaunchAgents/com.teyssir.backend.plist
+# or remove the key entirely (unset = off)
+launchctl kickstart -k "gui/$(id -u)/com.teyssir.backend"
+```
+
+`deploy/macos/Install-BackendService.sh` does **not** set `TEYSSIR_BOOKSCAN_ACCURACY`
+(defaults off). Vision is also skipped when a local CNP / ISBN barcode is present
+**and** (usable title **or** price) — CNP school books should not wait on Ollama.
+
 ## Status / phasing
 - **Phase A (this milestone):** models + migration, provider abstractions (`OcrProvider`,
   `BookMetadataProvider` + OpenLibrary), `scan_book` + create services, scan/create/image API,
   ImageField storage, tests (mocked providers).
 - **Phase B:** PWA Book-Creation camera page (capture, barcode, review, crop).
 - **Phase C (later):** Tesseract/Vision-LLM provider, async via Celery, hub media replication, MinIO.
+- **Phase 2F:** `fixtures/bookscan/expected` + `manage.py bookscan_regression`.
+- **Phase 15.7:** installer auto-pull of `qwen2.5vl:3b` + LOCAL-AI / install docs (CPU, cold start, XTRIKE).

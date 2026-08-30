@@ -18,7 +18,12 @@ param(
     [string]$StoreCode = "",
     [string]$HubUrl = "http://teyssir-hub.local:8000",
     [string]$SyncKey = "",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$SkipLlm,
+    [string]$LlmModel = "mistral",
+    # Phase 15.7: vision model (qwen2.5vl:3b) is pulled by default with Ollama.
+    [switch]$SkipVision,
+    [string]$VisionModel = "qwen2.5vl:3b"
 )
 
 $ErrorActionPreference = "Stop"
@@ -114,7 +119,57 @@ Write-Host "Setting up the database ..."
 & .\.venv\Scripts\python.exe manage.py migrate --noinput
 & .\.venv\Scripts\python.exe manage.py collectstatic --noinput | Out-Null
 
-# 6) First administrator ----------------------------------------------------
+# 6) Local LLM (Ollama) — optional, never fails the ERP install -------------
+$envPath = Join-Path $Root ".env"
+$global:TeyssirLlmReady = $false
+$global:TeyssirVisionModelReady = $false
+if (-not $SkipLlm) {
+    Write-Host "Setting up local LLM (Ollama + vision for bookscan) ..."
+    $llmScript = Join-Path $PSScriptRoot "Install-LocalLlm.ps1"
+    try {
+        if ($SkipVision) {
+            & $llmScript -Model $LlmModel -VisionModel $VisionModel -SkipVision
+        }
+        else {
+            & $llmScript -Model $LlmModel -VisionModel $VisionModel
+        }
+        $global:TeyssirLlmReady = [bool]$global:TeyssirLlmReady
+        $global:TeyssirVisionModelReady = [bool]$global:TeyssirVisionModelReady
+    }
+    catch {
+        Write-Warning ("Local LLM setup skipped: " + $_.Exception.Message)
+    }
+    # Best-effort .env hints (do not clobber existing secrets)
+    function Set-DotEnvValue([string]$Path, [string]$Key, [string]$Value) {
+        if (-not (Test-Path $Path)) { return }
+        $lines = Get-Content $Path
+        $found = $false
+        $out = foreach ($line in $lines) {
+            if ($line -match ("^" + [regex]::Escape($Key) + "=")) {
+                $found = $true
+                "$Key=$Value"
+            } else { $line }
+        }
+        if (-not $found) { $out += "$Key=$Value" }
+        [System.IO.File]::WriteAllText(
+            $Path,
+            (($out -join "`n") + "`n"),
+            (New-Object System.Text.UTF8Encoding($false)))
+    }
+    Set-DotEnvValue $envPath "TEYSSIR_VISION_MODEL" $VisionModel
+    if (-not $SkipVision) {
+        Set-DotEnvValue $envPath "TEYSSIR_OCR_VISION_FALLBACK" "true"
+    }
+    Set-DotEnvValue $envPath "USE_LLM" "false"
+    Set-DotEnvValue $envPath "LLM_PROVIDER" "ollama"
+    Set-DotEnvValue $envPath "LLM_MODEL" $LlmModel
+    Set-DotEnvValue $envPath "TEYSSIR_OLLAMA_URL" "http://127.0.0.1:11434"
+}
+else {
+    Write-Host "Skipping local LLM (-SkipLlm)."
+}
+
+# 7) First administrator ----------------------------------------------------
 Write-Host ""
 Write-Host "Create the first administrator account (owner):" -ForegroundColor Green
 & .\.venv\Scripts\python.exe manage.py createsuperuser
@@ -123,3 +178,11 @@ Write-Host ""
 Write-Host "==== Installation complete ====" -ForegroundColor Green
 Write-Host "Start Teyssir with:  deploy\windows\start-teyssir.bat"
 Write-Host "Then open:           http://localhost:8000"
+if (-not $SkipLlm) {
+    if ($SkipVision) {
+        Write-Host ("Vision (bookscan):  skipped (-SkipVision). Pull later: ollama pull " + $VisionModel)
+    }
+    else {
+        Write-Host ("Vision (bookscan):  " + $VisionModel + " — gated fallback. See docs/LOCAL-AI.md")
+    }
+}

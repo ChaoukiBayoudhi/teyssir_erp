@@ -1,0 +1,29 @@
+{
+  "id": "A_beauty",
+  "label": "Beauty and the Beast (Golden Tales)",
+  "images": {
+    "front": {"needles": ["12.39"], "exclude": ["#2"]},
+    "back": {"needles": ["12.39", "#2"], "exclude": []}
+  },
+  "expect": {
+    "title_contains": ["Beauty"],
+    "title_allow_empty": true,
+    "languages": ["en"],
+    "languages_mode": "includes_any",
+    "languages_allow_empty": true,
+    "isbn13": "9789938441529",
+    "isbn13_note": "Printed ISBN 978-9938-44-152-1; checksum digit is 9 (common print typo).",
+    "isbn13_allow_empty": true,
+    "barcode_raw": "6192200319212",
+    "barcode_raw_allow_empty": true,
+    "barcode_kind": "local_product",
+    "price": "2.000",
+    "price_allow_empty": true
+  },
+  "honesty": {
+    "never_isbn13_prefix": ["619"],
+    "digit_ocr_confidence_max": 0.35,
+    "high_confidence_requires": "barcode_isbn_or_metadata",
+    "max_confidence_without_strong_id": 0.55
+  }
+}

@@ -65,11 +65,27 @@ class Book(SyncableModel):
     """Rich bibliographic profile for a book product (camera/OCR registration, spec docs/BOOK-OCR).
 
     `raw_metadata` keeps the full external-provider payload so future enrichment fields need no
-    migration; `source_provider`/`ocr_confidence` record how the data was obtained."""
+    migration; `source_provider`/`ocr_confidence` record how the data was obtained.
+
+    ISBN-13 is optional: Tunisian CNP school editions often use a local ``619…`` product
+    barcode only (``edition_kind=school_cnp``). Store that barcode on ``Barcode`` as today.
+    """
+
+    SCHOOL_CNP = "school_cnp"
+    ISBN_EDITION = "isbn_edition"
+    UNKNOWN_EDITION = "unknown"
+    EDITION_KINDS = [
+        (SCHOOL_CNP, "School / CNP (barcode-only)"),
+        (ISBN_EDITION, "ISBN edition (978/979)"),
+        (UNKNOWN_EDITION, "Unknown"),
+    ]
 
     product = models.OneToOneField(Product, on_delete=models.CASCADE, related_name="book")
     isbn13 = models.CharField(max_length=13, blank=True, default="", db_index=True)
     isbn10 = models.CharField(max_length=10, blank=True, default="")
+    edition_kind = models.CharField(
+        max_length=16, choices=EDITION_KINDS, blank=True, default="", db_index=True,
+    )
     subtitle = models.CharField(max_length=255, blank=True, default="")
     publisher = models.CharField(max_length=160, blank=True, default="")
     series = models.CharField(max_length=160, blank=True, default="")
@@ -87,7 +103,7 @@ class Book(SyncableModel):
     raw_metadata = models.JSONField(default=dict, blank=True)
 
     def __str__(self):
-        return f"Book {self.isbn13 or self.product_id}"
+        return f"Book {self.isbn13 or self.edition_kind or self.product_id}"
 
 
 class Contributor(SyncableModel):
@@ -143,12 +159,28 @@ class ProductImage(SyncableModel):
 class ScanJob(UUIDModel, TimeStampedModel):
     """A book-scan request processed by the OCR pipeline. Local-only (never synced to the hub); it
     lets the scan run *asynchronously* so a slow OCR engine (a vision LLM can take tens of seconds)
-    doesn't block the HTTP request. The client polls this job until DONE (docs/BOOK-OCR §6)."""
+    doesn't block the HTTP request. The client polls this job until DONE (docs/BOOK-OCR §6).
+
+    Phase 15.5: ``stage`` + ``progress`` (0–100) are additive poll fields so the PWA can show
+    pipeline feedback without changing status semantics (still PENDING|DONE|FAILED).
+    """
 
     PENDING = "PENDING"
     DONE = "DONE"
     FAILED = "FAILED"
     STATUSES = [(x, x) for x in (PENDING, DONE, FAILED)]
+
+    # Pipeline milestones (poll UI). Not a DB enum — free text so older clients ignore unknowns.
+    STAGE_QUEUED = "queued"
+    STAGE_PREPROCESS = "preprocess"
+    STAGE_BARCODE = "barcode"
+    STAGE_OCR = "ocr"
+    STAGE_LANGUAGE = "language"
+    STAGE_VISION = "vision"
+    STAGE_METADATA = "metadata"
+    STAGE_MERGE = "merge"
+    STAGE_DONE = "done"
+    STAGE_FAILED = "failed"
 
     status = models.CharField(max_length=8, choices=STATUSES, default=PENDING)
     isbn = models.CharField(max_length=20, blank=True, default="")
@@ -156,6 +188,9 @@ class ScanJob(UUIDModel, TimeStampedModel):
     result = models.JSONField(null=True, blank=True)        # the reviewable BookDraft, once DONE
     ocr_text = models.TextField(blank=True, default="")
     error = models.TextField(blank=True, default="")
+    # Phase 15.5 — nullable/blank so older DBs migrate additively without backfill.
+    stage = models.CharField(max_length=32, blank=True, null=True, default="queued")
+    progress = models.PositiveSmallIntegerField(null=True, blank=True, default=0)
 
     class Meta:
         ordering = ["-created_at"]
