@@ -1317,7 +1317,7 @@ class TitleSearchGatingTests(unittest.TestCase):
             },
         )
         self.assertFalse(_should_try_vision(cnp_title, P()))
-        # Local CNP + price even with weak/noisy title → skip Vision (shop speed)
+        # Local CNP / ISBN + price but missing/unusable title → force Vision (title repair)
         cnp_price = BookDraft(
             title="", barcode_raw="6192202502353", barcode_kind="local_product",
             price="4.200", source="tesseract", confidence=0.3,
@@ -1326,16 +1326,29 @@ class TitleSearchGatingTests(unittest.TestCase):
                 "barcode_non_isbn": True,
                 "ocr_mean_confidence": 30,
                 "ocr_garbage_latin": True,
+                "ocr_title_unusable": True,
             },
         )
-        self.assertFalse(_should_try_vision(cnp_price, P()))
-        # ISBN barcode + price, no title → skip
+        self.assertTrue(_should_try_vision(cnp_price, P()))
+        # ISBN barcode + price, no title → force Vision for title
         isbn_price = BookDraft(
             title="", isbn13="9782070612758", price="12.000",
             source="tesseract", confidence=0.4,
-            raw={"isbn_from_barcode": True, "barcode_detected": True},
+            raw={
+                "isbn_from_barcode": True,
+                "barcode_detected": True,
+                "ocr_title_unusable": True,
+            },
         )
-        self.assertFalse(_should_try_vision(isbn_price, P()))
+        self.assertTrue(_should_try_vision(isbn_price, P()))
+        # CNP + price + usable repaired title → still skip
+        cnp_ok = BookDraft(
+            title="Mathématiques", barcode_raw="6192202502353",
+            barcode_kind="local_product", price="4.200",
+            source="tesseract", confidence=0.45,
+            raw={"barcode_detected": True, "barcode_non_isbn": True},
+        )
+        self.assertFalse(_should_try_vision(cnp_ok, P()))
 
     def test_local_barcode_without_isbn_is_success_identity(self):
         """CNP 619 barcode without ISBN is a valid identity — never promote to isbn13."""
@@ -1872,6 +1885,41 @@ class BookScanApiTests(TestCase):
         linked = ProductImage.objects.get(id=image_id)
         self.assertEqual(str(linked.product_id), str(product.id))
         self.assertTrue(linked.is_primary)
+
+    def test_create_duplicate_barcode_returns_clean_409(self):
+        """Duplicate CNP/SKU must be JSON 409 — never Django IntegrityError HTML."""
+        first = self.client.post("/api/v1/catalog/books", {
+            "title": "Mathématiques",
+            "barcode_raw": "6192202602999",
+            "barcode_kind": "local_product",
+            "edition_kind": "school_cnp",
+            "sale_price": "4.200",
+            "languages": ["fr"],
+        }, format="json")
+        self.assertEqual(first.status_code, 201, first.content)
+        r = self.client.post("/api/v1/catalog/books", {
+            "title": "Mathématiques bis",
+            "barcode_raw": "6192202602999",
+            "barcode_kind": "local_product",
+            "edition_kind": "school_cnp",
+            "sale_price": "4.200",
+            "languages": ["fr"],
+        }, format="json")
+        self.assertEqual(r.status_code, 409, r.content)
+        body = r.json()
+        self.assertIn("existe déjà", body["detail"])
+        self.assertNotIn("<html", body["detail"].lower())
+        self.assertNotIn("IntegrityError", body["detail"])
+        self.assertEqual(body.get("code"), "duplicate_barcode")
+        self.assertEqual(body.get("existing_id"), first.json()["id"])
+
+    def test_create_requires_title(self):
+        r = self.client.post("/api/v1/catalog/books", {
+            "barcode_raw": "6192202602888",
+            "sale_price": "4.200",
+        }, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("titre", r.json()["detail"].lower())
 
     def test_scan_requires_auth(self):
         anon = APIClient()

@@ -809,10 +809,15 @@ def _should_try_vision(draft, provider) -> bool:
         or (fill_ratio is not None and fill_ratio < 0.22)
     )
 
-    # Fast path FIRST: local/ISBN barcode + (usable title OR price) → skip Vision.
-    # CNP 619… school books often have a usable price sticker even when title OCR
-    # is noisy — do not block the shop on Ollama.
-    if (has_barcode_isbn or has_product_barcode) and (title_ok or has_price):
+    # Fast path: local/ISBN barcode + usable title → skip Vision.
+    # Price alone must NOT skip when title is empty/garbage (Math CNP ``4è ta N``):
+    # force Vision or rely on school title repair that already ran upstream.
+    if (
+        (has_barcode_isbn or has_product_barcode)
+        and title_ok
+        and not garbage
+        and not book_too_small
+    ):
         return False
     # School cover classified without barcode: skip Vision only for solid Latin/FR
     # titles (Mathématiques) **with** a price sticker — weak Arabic calligraphy,
@@ -837,6 +842,9 @@ def _should_try_vision(draft, provider) -> bool:
     ):
         return False
 
+    # Force Vision: barcode/price present but title unusable / cleared
+    if (has_barcode_isbn or has_product_barcode) and (not title_ok or garbage):
+        return True
     # Force Vision: ultra-low confidence (distant shot / failed Tess) — no barcode
     if (draft.confidence or 0) <= 0.15:
         return True
@@ -922,10 +930,66 @@ def _default_book_category_id():
     return None
 
 
+class DuplicateBookIdentityError(ValueError):
+    """Raised when SKU / barcode / ISBN already belongs to a catalogue product."""
+
+    def __init__(self, message, *, product=None, field="barcode"):
+        super().__init__(message)
+        self.product = product
+        self.field = field
+
+
+def _existing_book_product(*, sku="", barcode_raw="", isbn13=""):
+    """Return (product, field) if sku/barcode/isbn already identifies a Product."""
+    from teyssir.catalog.models import Barcode, Product
+
+    for field, val in (("sku", sku), ("barcode", barcode_raw), ("isbn13", isbn13)):
+        code = (val or "").strip()
+        if not code:
+            continue
+        if field == "sku":
+            hit = Product.objects.filter(sku=code).first()
+            if hit:
+                return hit, "sku"
+        bc = (
+            Barcode.objects.filter(value=code)
+            .select_related("product")
+            .order_by("created_at")
+            .first()
+        )
+        if bc and bc.product_id:
+            return bc.product, "barcode" if field != "isbn13" else "isbn13"
+        hit = Product.objects.filter(sku=code).first()
+        if hit:
+            return hit, field if field != "isbn13" else "sku"
+    return None, None
+
+
+def _duplicate_book_message(product, *, code="", field="barcode") -> str:
+    name = (getattr(product, "name_fr", None) or product.sku or "").strip()
+    label = (code or product.sku or "").strip()
+    if field == "isbn13":
+        return (
+            f"Cet ISBN existe déjà ({label} — « {name} »). "
+            "Modifiez l'article dans le catalogue."
+        )
+    if field == "sku":
+        return (
+            f"Ce code (SKU) existe déjà ({label} — « {name} »). "
+            "Modifiez l'article dans le catalogue."
+        )
+    return (
+        f"Ce code-barres existe déjà ({label} — « {name} »). "
+        "Modifiez l'article dans le catalogue."
+    )
+
+
 @transaction.atomic
 def create_book_from_draft(*, data, image_ids=(), sale_price="0", origin_terminal=""):
     """Create Product + Book + normalized Contributors from reviewed `data`, and link the draft
     images uploaded during the scan. Returns the new Product."""
+    from django.db import IntegrityError
+
     from teyssir.catalog.models import (
         Barcode, Book, BookContributor, Contributor, Product, ProductImage,
     )
@@ -944,19 +1008,52 @@ def create_book_from_draft(*, data, image_ids=(), sale_price="0", origin_termina
             barcode_kind = barcode_kind or "local_product"
             barcode_symbology = barcode_symbology or "EAN13"
 
+    title = (data.get("title") or "").strip()
+    if not title:
+        raise ValueError("Le titre est obligatoire pour enregistrer le livre.")
+
     sku = (
         data.get("sku") or isbn13 or barcode_raw or f"BK-{uuid.uuid4().hex[:10]}"
     ).strip()
+
+    existing, clash_field = _existing_book_product(
+        sku=sku, barcode_raw=barcode_raw, isbn13=isbn13,
+    )
+    if existing:
+        code = barcode_raw or isbn13 or sku
+        raise DuplicateBookIdentityError(
+            _duplicate_book_message(existing, code=code, field=clash_field or "barcode"),
+            product=existing,
+            field=clash_field or "barcode",
+        )
+
     tax_rate_id = data.get("tax_rate") or _default_book_tax_rate_id()
     category_id = data.get("category") or _default_book_category_id()
-    product = Product.objects.create(
-        sku=sku, name_fr=data.get("title", ""), name_ar=data.get("title_ar", ""),
-        product_type=Product.BOOK, is_book=True, isbn=isbn13,
-        sale_price=require_non_negative_money(sale_price or 0, label="sale_price"),
-        tax_rate_id=tax_rate_id or None,
-        category_id=category_id or None,
-        origin_terminal=origin_terminal,
-    )
+    try:
+        product = Product.objects.create(
+            sku=sku, name_fr=title, name_ar=data.get("title_ar", ""),
+            product_type=Product.BOOK, is_book=True, isbn=isbn13,
+            sale_price=require_non_negative_money(sale_price or 0, label="sale_price"),
+            tax_rate_id=tax_rate_id or None,
+            category_id=category_id or None,
+            origin_terminal=origin_terminal,
+        )
+    except IntegrityError as exc:
+        # Race / residual unique on sku — never 500 with Django HTML
+        existing, clash_field = _existing_book_product(
+            sku=sku, barcode_raw=barcode_raw, isbn13=isbn13,
+        )
+        if existing:
+            code = barcode_raw or isbn13 or sku
+            raise DuplicateBookIdentityError(
+                _duplicate_book_message(existing, code=code, field=clash_field or "sku"),
+                product=existing,
+                field=clash_field or "sku",
+            ) from exc
+        raise DuplicateBookIdentityError(
+            f"Ce code-barres existe déjà ({sku}). Modifiez l'article dans le catalogue.",
+            field="sku",
+        ) from exc
     raw_meta = dict(data.get("raw") or {})
     if barcode_raw:
         raw_meta.setdefault("barcode_raw", barcode_raw)

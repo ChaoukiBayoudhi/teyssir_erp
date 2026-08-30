@@ -1030,13 +1030,46 @@ class BookCreateView(APIView):
     permission_classes = [capability("edit_product")]
 
     def post(self, request):
-        from teyssir.catalog.bookscan.services import create_book_from_draft
+        from django.db import IntegrityError
+
+        from teyssir.catalog.bookscan.services import (
+            DuplicateBookIdentityError,
+            create_book_from_draft,
+        )
 
         d = request.data
-        product = create_book_from_draft(
-            data=d, image_ids=d.get("image_ids", []),
-            sale_price=d.get("sale_price", "0"), origin_terminal=settings.TERMINAL,
-        )
+        try:
+            product = create_book_from_draft(
+                data=d, image_ids=d.get("image_ids", []),
+                sale_price=d.get("sale_price", "0"), origin_terminal=settings.TERMINAL,
+            )
+        except DuplicateBookIdentityError as exc:
+            body = {"detail": str(exc), "code": "duplicate_barcode", "field": exc.field}
+            if exc.product is not None:
+                body["existing_id"] = str(exc.product.id)
+                body["existing_sku"] = exc.product.sku
+                body["existing_name"] = exc.product.name_fr
+            return Response(body, status=status.HTTP_409_CONFLICT)
+        except ValueError as exc:
+            msg = str(exc)
+            code = (
+                status.HTTP_409_CONFLICT
+                if "déjà" in msg or "existe déjà" in msg
+                else status.HTTP_400_BAD_REQUEST
+            )
+            return Response({"detail": msg}, status=code)
+        except IntegrityError:
+            # Last-resort: never leak Django debug HTML to the SPA error banner
+            return Response(
+                {
+                    "detail": (
+                        "Ce code-barres existe déjà. "
+                        "Modifiez l'article dans le catalogue."
+                    ),
+                    "code": "duplicate_barcode",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         return Response({"id": str(product.id), "sku": product.sku, "name": product.name_fr},
                         status=status.HTTP_201_CREATED)
 

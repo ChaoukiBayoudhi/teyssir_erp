@@ -31,8 +31,37 @@ async function request(path, { method = "GET", body, auth = true, signal } = {})
     throw err;
   }
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`${res.status}: ${detail}`);
+    // Prefer JSON detail/message — never dump Django HTML debug pages into the UI.
+    const raw = await res.text();
+    let message = `${res.status}`;
+    const trimmed = (raw || "").trim();
+    if (trimmed) {
+      if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        try {
+          const body = JSON.parse(trimmed);
+          const d = body?.detail ?? body?.message ?? body?.error;
+          if (typeof d === "string" && d.trim()) message = d.trim();
+          else if (Array.isArray(d) && d.length) message = d.map(String).join(" ");
+          else if (d && typeof d === "object") {
+            // DRF field errors: { field: ["msg"] }
+            message = Object.entries(d)
+              .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(" ") : v}`)
+              .join("; ") || message;
+          } else if (typeof body === "string") message = body;
+        } catch { /* keep status */ }
+      } else if (!/^<!DOCTYPE|^<html/i.test(trimmed)) {
+        message = trimmed.slice(0, 400);
+      } else {
+        message = res.status === 409
+          ? "Conflit — cet enregistrement existe déjà."
+          : res.status >= 500
+            ? "Erreur serveur — réessayez ou vérifiez les logs."
+            : `Erreur ${res.status}`;
+      }
+    }
+    const err = new Error(message);
+    err.status = res.status;
+    throw err;
   }
   return res.status === 204 ? null : res.json();
 }
