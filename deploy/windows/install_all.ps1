@@ -33,6 +33,7 @@ param(
     [string]$AdminPassword = "",
     [switch]$SkipAdmin,
     [switch]$RegisterAutostart,
+    [switch]$SkipAutostart,
     [switch]$SkipFirewall,
     [switch]$SkipService,
     [switch]$SkipShortcut,
@@ -206,8 +207,8 @@ foreach ($key in @(
         "Role", "Terminal", "StoreCode", "HubUrl", "SyncKey", "Printer",
         "DiscoverPrinter", "SkipBuild", "SkipLlm", "LlmModel", "SkipVision",
         "VisionModel", "SkipPostgres", "PostgresSuperPassword", "AdminUser",
-        "AdminPassword", "SkipAdmin", "RegisterAutostart", "SkipFirewall",
-        "SkipService", "SkipShortcut"
+        "AdminPassword", "SkipAdmin", "RegisterAutostart", "SkipAutostart",
+        "SkipFirewall", "SkipService", "SkipShortcut"
     )) {
     if ($PSBoundParameters.ContainsKey($key)) {
         $forward[$key] = $PSBoundParameters[$key]

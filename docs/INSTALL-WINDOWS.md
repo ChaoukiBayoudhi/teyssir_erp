@@ -243,15 +243,28 @@ Après `install.ps1` (PowerShell **administrateur**) :
   via `open-teyssir.vbs` (pas de fenêtre console).
 * Les caisses enregistrent aussi la tâche **Teyssir Sync** (toutes les 5 min). Les ventes restent
   locales d'abord ; la sync ne fait que réconcilier avec le Hub.
+  (Pas de second serveur planifié si le service NSSM est déjà là.)
 
 Vérifier le service :
 ```powershell
 Get-Service TeyssirBackend
 sc.exe qc TeyssirBackend
+Get-ScheduledTask -TaskName "Teyssir Sync","Teyssir Server" -ErrorAction SilentlyContinue
 ```
 
 Repli si le service n'a pas pu s'installer : `deploy\windows\start-teyssir.bat` (fenêtre à laisser ouverte).
 Ne lancez **pas** le `.bat` en même temps que le service — le port **8000** ne peut servir qu'une fois.
+
+### Activer / désactiver (réversible)
+
+| Action | Commande |
+|--------|----------|
+| Installer le service (boot auto) | `.\deploy\windows\Install-WindowsService.ps1` |
+| Sync caisse (5 min) | `.\deploy\windows\register-autostart.ps1 -Role till` |
+| Désactiver sync / tâche logon | `Unregister-ScheduledTask -TaskName "Teyssir Sync","Teyssir Server" -Confirm:$false` |
+| Arrêter le service (garde l'install) | `nssm stop TeyssirBackend` puis `nssm set TeyssirBackend Start SERVICE_DEMAND_START` |
+| Remettre le démarrage auto | `nssm set TeyssirBackend Start SERVICE_DELAYED_AUTO_START` ; `nssm start TeyssirBackend` |
+| Tout retirer (service + tâches + raccourcis) | `.\deploy\windows\uninstall.ps1` |
 
 Désinstaller service + raccourcis (sans supprimer les données) :
 ```powershell
@@ -259,9 +272,12 @@ Désinstaller service + raccourcis (sans supprimer les données) :
 ```
 
 La tâche planifiée « Teyssir Server » (ancienne méthode, à l'ouverture de session) n'est **pas**
-créée si le service existe — pas de double serveur.
+créée si le service existe — pas de double serveur. `Install-WindowsService.ps1` la
+supprime aussi s'il en reste une.
 
-Options : `-SkipService`, `-SkipShortcut`. Repli manuel :
+Options à l'install : `-SkipService`, `-SkipShortcut`, `-SkipAutostart` (pas de tâches planifiées ;
+le service NSSM s'installe toujours sauf `-SkipService`), `-RegisterAutostart` (force aussi
+le repli logon si le service est absent). Repli manuel :
 ```powershell
 .\deploy\windows\Install-WindowsService.ps1
 .\deploy\windows\Install-DesktopShortcut.ps1
@@ -311,7 +327,8 @@ suffit pour l'essentiel des données de gestion.
 | `-AdminUser` / `-AdminPassword` | Admin sans invite |
 | `-SkipAdmin` | Ne pas créer d'utilisateur |
 | `-SkipBuild` | Ne pas lancer `npm` |
-| `-RegisterAutostart` | Force aussi la tâche « Teyssir Server » (inutile si le service est OK) |
+| `-RegisterAutostart` | Force aussi la tâche « Teyssir Server » si le service est absent (inutile si NSSM est OK) |
+| `-SkipAutostart` | Ne pas enregistrer les tâches planifiées (sync / repli logon) ; le service NSSM reste par défaut |
 | `-SkipFirewall` | Ne pas ouvrir le port 8000 |
 | `-SkipService` | Ne pas installer le service Windows |
 | `-SkipShortcut` | Ne pas créer le raccourci Bureau |

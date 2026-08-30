@@ -36,6 +36,7 @@ param(
     [string]$AdminPassword = "",
     [switch]$SkipAdmin,
     [switch]$RegisterAutostart,
+    [switch]$SkipAutostart,
     [switch]$SkipFirewall,
     [switch]$SkipService,
     [switch]$SkipShortcut
@@ -544,22 +545,18 @@ else {
     }
 }
 
-if ($RegisterAutostart) {
+# Scheduled tasks (till sync + logon fallback if service missing). Reversible via uninstall.ps1.
+# Hub boot uses NSSM TeyssirBackend (below) — do not also force a logon server task.
+if ($SkipAutostart) {
+    Write-Host "Skipping scheduled-task autostart (-SkipAutostart). Service still installs unless -SkipService."
+}
+elseif ($RegisterAutostart -or $Role -eq "till") {
     $reg = Join-Path $PSScriptRoot "register-autostart.ps1"
     try {
         & $reg -Role $Role
     }
     catch {
         Write-Warning ("Autostart registration skipped: " + $_.Exception.Message)
-    }
-}
-elseif ($Role -eq "till") {
-    $reg = Join-Path $PSScriptRoot "register-autostart.ps1"
-    try {
-        & $reg -Role till
-    }
-    catch {
-        Write-Warning ("Till sync schedule skipped: " + $_.Exception.Message)
     }
 }
 

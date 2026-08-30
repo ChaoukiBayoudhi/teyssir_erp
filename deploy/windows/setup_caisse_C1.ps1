@@ -22,6 +22,7 @@ param(
     [string]$AdminUser = "",
     [string]$AdminPassword = "",
     [switch]$RegisterAutostart,
+    [switch]$SkipAutostart,
     [switch]$SkipFirewall,
     [switch]$SkipService,
     [switch]$SkipShortcut,

@@ -34,6 +34,7 @@ param(
     [string]$AdminUser = "",
     [string]$AdminPassword = "",
     [switch]$RegisterAutostart,
+    [switch]$SkipAutostart,
     [switch]$SkipFirewall,
     [switch]$SkipService,
     [switch]$SkipShortcut,
@@ -185,7 +186,7 @@ if ($DiscoverPrinter) { $forward["DiscoverPrinter"] = $true }
 foreach ($key in @(
         "SkipBuild", "SkipLlm", "LlmModel", "SkipVision", "VisionModel",
         "SkipAdmin", "AdminUser", "AdminPassword", "RegisterAutostart",
-        "SkipFirewall", "SkipService", "SkipShortcut", "SkipPull",
+        "SkipAutostart", "SkipFirewall", "SkipService", "SkipShortcut", "SkipPull",
         "RepoUrl", "CloneTarget"
     )) {
     if ($PSBoundParameters.ContainsKey($key)) {

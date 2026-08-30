@@ -18,11 +18,11 @@ Scripts to install and run Teyssir on the client's Windows PCs (1 Hub + up to 3 
 | `open-teyssir.vbs` | Silent launcher (no console flash) → `open-teyssir.ps1`. |
 | `open-teyssir.ps1` | Wait for `/health/` then open the default browser. |
 | `serve.py` | Service entry: migrate + waitress (not `runserver`). |
-| `uninstall.ps1` | Remove service, shortcut, scheduled tasks (keeps data). |
+| `uninstall.ps1` | Remove service, shortcut, scheduled tasks (keeps data) — full reverse of autostart. |
 | `Install-Postgres.ps1` | Silent PostgreSQL + `teyssir` database (hub only; SQLite fallback). |
 | `Install-LocalLlm.ps1` | Silent Ollama install + text/vision pulls (never fails the ERP). |
 | `start-teyssir.bat` | Manual windowed server **if** the service is not running. |
-| `register-autostart.ps1` | Till sync schedule; logon fallback only if the service is missing. |
+| `register-autostart.ps1` | Till sync (5 min); logon « Teyssir Server » only if service missing. Opt out: `-SkipAutostart`. |
 | `sync-now.bat` | Till → hub reconcile. |
 | `sync-to-cloud.bat` | Hub → cloud hub (multi-store). |
 | `.env.hub.example` / `.env.till.example` | Config templates. |
