@@ -6,7 +6,8 @@ Scripts to install and run Teyssir on the client's Windows PCs (1 Hub + up to 3 
 
 | File | Purpose |
 |------|---------|
-| **`install_all.ps1`** | **Preferred entry:** log file, hub auto-elevate, host deps (winget), then `install.ps1`. |
+| **`install_all.ps1`** | **Preferred full entry:** log file, hub auto-elevate, host deps (winget), LLM, then `install.ps1`. |
+| **`setup_app.ps1`** | **App-layer bootstrap (Phase 3):** git pull/clone if needed → LLM if missing → `install.ps1` → validate (`django check`, migrate, `frontend\dist`, `/health/`). Run after deps or alone when Python is present. |
 | `Install-HostDependencies.ps1` | Idempotent host deps: Python ≥3.11, optional Git, Node LTS if needed, Tesseract + eng/fra/ara verify. No Redis. |
 | `install.ps1` | Full app installer (idempotent): venv, Hub PostgreSQL or SQLite, seeds, Ollama, **Windows service**, **desktop shortcut**. |
 | `Discover-Printer.ps1` | LAN scan for ESC/POS on TCP 9100 → `tcp:IP:9100` or `dummy` (never hardcodes a shop IP). |
@@ -26,17 +27,22 @@ Scripts to install and run Teyssir on the client's Windows PCs (1 Hub + up to 3 
 **Quick start**
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force
-# Preferred (logs under %LOCALAPPDATA%\Teyssir\logs, deps, then full install):
+# Preferred full path (logs under %LOCALAPPDATA%\Teyssir\logs, deps, then full install):
 .\deploy\windows\install_all.ps1 -Role hub
 .\deploy\windows\install_all.ps1 -Role till -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey <hub-key>
+# App layer only (after deps, or when host tools already installed):
+.\deploy\windows\setup_app.ps1 -Role hub
+.\deploy\windows\setup_app.ps1 -Role till -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey <hub-key>
 # Ticket printer (optional): -DiscoverPrinter  or  .\deploy\windows\Discover-Printer.ps1
 # Double-click  Teyssir ERP  on the Desktop
 ```
 
 **Notes**
 - Till installs do **not** force UAC elevate (`-NoElevate` soft path). Hub auto-elevates unless `-NoElevate`.
-- **Local AI (default):** `install_all.ps1` detects Ollama → installs via winget if missing → pulls **mistral** + **qwen2.5vl:3b** (skips if already present). Soft-fail on disk/network. Opt out: `-SkipLlm` / `-SkipVision`.
+- **Chain:** `install_all.ps1` (host) → `setup_app.ps1` (app) → `install.ps1` (shared spine). `setup_app` is a thin wrapper: git ensure + LLM-if-missing + `install.ps1` + validation.
+- **Local AI (default):** `install_all.ps1` / `setup_app.ps1` detect Ollama → install/pull **mistral** + **qwen2.5vl:3b** when missing. Soft-fail on disk/network. Opt out: `-SkipLlm` / `-SkipVision`.
 - **libzbar** (pyzbar ISBN): no winget package on Windows — bundle `libzbar-64.dll` or use client BarcodeDetector + digit-OCR fallback (see `docs/INSTALL-WINDOWS.md`).
 - **Discover-Printer** kept — never hardcodes a shop ticket-printer IP.
+- **No Redis** in this kit.
 
 Everything here uses only free/open-source tools (Python, waitress, WhiteNoise, NSSM).

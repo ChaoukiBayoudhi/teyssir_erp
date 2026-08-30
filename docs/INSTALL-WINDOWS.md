@@ -82,8 +82,13 @@ Dans la suite, **« le dossier du projet »** désigne ce dossier (ex. `C:\Teyss
    Set-ExecutionPolicy -Scope Process Bypass -Force
    .\deploy\windows\install_all.ps1 -Role hub
    ```
+   **Couche application seule** (après deps, ou Python déjà présent) — git pull/clone si besoin, LLM si manquant, puis `install.ps1` + validation :
+   ```powershell
+   .\deploy\windows\setup_app.ps1 -Role hub
+   ```
    Équivalent historique : `.\deploy\windows\install.ps1 -Role hub`.
    Les scripts sont **idempotents** : vous pouvez les relancer sans casser l'installation.
+   Voir aussi [`deploy/windows/README.md`](../deploy/windows/README.md) (`setup_app.ps1`).
 
 3. Ce que le script fait **tout seul** :
    * détecte Python 3.11+ (ou l'installe via winget) ;
@@ -125,6 +130,8 @@ Sur **chaque** PC de caisse, dans le dossier du projet :
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force
 .\deploy\windows\install_all.ps1 -Role till -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey COLLER-LA-CLE-DU-HUB
+# Ou couche app seule (même paramètres) :
+.\deploy\windows\setup_app.ps1 -Role till -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey COLLER-LA-CLE-DU-HUB
 ```
 
 - **`-Terminal`** : `C1` pour la 1ʳᵉ caisse, `C2` pour la 2ᵉ, `C3` pour la 3ᵉ — **jamais deux fois le même**.
