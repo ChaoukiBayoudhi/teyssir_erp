@@ -141,4 +141,4 @@ Tick each box on Hub and at least one till (`C1`).
 | DB migrate / seed | Suite + local SQLite | Hub Postgres path + till SQLite + sync once |
 | Desktop shortcut / NSSM / winget | Script structure only | Full install_all + reboot smoke |
 
-Phase 8 should polish operator-facing prose in [INSTALL-WINDOWS.md](INSTALL-WINDOWS.md) (hub/till command preference, `-SkipAutostart`, discover-printer, uninstall data-kept) using this checklist as the acceptance gate — **no merge to main in Phase 7**.
+Phase 8 (docs) polished operator-facing prose in [INSTALL-WINDOWS.md](INSTALL-WINDOWS.md) (chemin rapide hub/till, `install_all` / `setup_app`, caisse Cx + `-DiscoverPrinter`, LLM `-SkipLlm`/`-SkipVision`, shortcut sans console, `-SkipAutostart` + unregister, troubleshooting port 8000 / PG→SQLite / Tesseract / OCR / printer / PWA hard-refresh) and points here as the acceptance gate — **no merge to main in Phase 8**; Phase 9 (squash/merge) needs explicit confirmation.

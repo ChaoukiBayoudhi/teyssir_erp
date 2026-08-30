@@ -4,14 +4,37 @@
 
 <h1 align="center">Teyssir — Guide d'installation sur Windows</h1>
 
-<p align="center"><i>Librairie · Point de vente · Gestion — installation pas à pas</i></p>
+<p align="center"><i>Librairie · Point de vente · Gestion — installation pas à pas (PowerShell uniquement)</i></p>
 
 ---
 
 Ce guide explique, **étape par étape**, comment installer Teyssir sur les PC Windows du magasin.
-Aucune connaissance technique avancée n'est requise : il suffit de suivre les étapes dans l'ordre.
+Aucune connaissance technique avancée n'est requise : ouvrez **PowerShell**, copiez les commandes
+ci-dessous, et suivez l'ordre.
 
-> **Temps estimé :** ~20 min pour le PC serveur (Hub) + ~10 min par caisse.
+> **Temps estimé :** ~20 min pour le PC serveur (Hub) + ~10 min par caisse.  
+> **Critère d'acceptation magasin :** cochez la grille **Win11 dry-run** dans
+> [`INSTALLATION-QA.md`](INSTALLATION-QA.md#win11-dry-run-checklist-phase-7) avant la mise en production.
+
+---
+
+## Chemin rapide (à lire en premier)
+
+| PC | Commande préférée (premier lancement) |
+|----|----------------------------------------|
+| **Hub** | `.\deploy\windows\install_all.ps1 -Role hub` |
+| **Caisse C1** | `.\deploy\windows\setup_caisse_C1.ps1 -HubUrl http://…:8000 -SyncKey … -DiscoverPrinter` |
+| **Caisse C2 / C3** | `setup_caisse_C2.ps1` / `setup_caisse_C3.ps1` (mêmes paramètres) |
+
+Toujours commencer par :
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass -Force
+```
+dans le **dossier du projet** (ex. `C:\Teyssir\teyssir_erp`).
+
+**Ordre magasin :** (1) installer le Hub → (2) noter la **SYNC KEY** → (3) installer chaque caisse → (4) tester `/health/` → (5) cocher la checklist Win11.
+
+Détail des scripts : [`deploy/windows/README.md`](../deploy/windows/README.md).
 
 ---
 
@@ -67,113 +90,180 @@ cd teyssir_erp
 puis décompressez-le, par exemple dans `C:\Teyssir`.
 
 Dans la suite, **« le dossier du projet »** désigne ce dossier (ex. `C:\Teyssir\teyssir_erp`).
+Vous devez y voir `manage.py` et le dossier `deploy\windows`.
 
 ---
 
 ## 4. Installer le **PC HUB** (serveur central)
 
+### 4.1 Commande préférée — `install_all.ps1`
+
 1. Ouvrez **PowerShell en administrateur** dans le dossier du projet :
    *Clic droit sur le dossier ▸ « Ouvrir dans le Terminal »*, ou lancez `PowerShell` puis
    `cd C:\Teyssir\teyssir_erp`. Pour PostgreSQL et le pare-feu, **Exécuter en tant qu'administrateur**.
 
-2. Autorisez le script pour cette session, puis lancez l'installation
-   (**commande préférée** — journal sous `%LOCALAPPDATA%\Teyssir\logs`, deps winget, puis install complète) :
+2. Autorisez les scripts pour cette session, puis lancez l'installation complète
+   (**premier lancement recommandé**) :
    ```powershell
    Set-ExecutionPolicy -Scope Process Bypass -Force
    .\deploy\windows\install_all.ps1 -Role hub
    ```
-   **Couche application seule** (après deps, ou Python déjà présent) — git pull/clone si besoin, LLM si manquant, puis `install.ps1` + validation :
-   ```powershell
-   .\deploy\windows\setup_app.ps1 -Role hub
-   ```
-   Équivalent historique : `.\deploy\windows\install.ps1 -Role hub`.
-   Les scripts sont **idempotents** : vous pouvez les relancer sans casser l'installation.
-   Voir aussi [`deploy/windows/README.md`](../deploy/windows/README.md) (`setup_app.ps1`).
 
-3. Ce que le script fait **tout seul** :
-   * détecte Python 3.11+ (ou l'installe via winget) ;
-   * crée `.venv` et installe `requirements.txt` ;
-   * construit l'appli web si `frontend\dist` manque et que Node est là ;
-   * écrit un `.env` **sans mot de passe en dur** (secrets aléatoires) ;
-   * installe **PostgreSQL** si besoin, crée l'utilisateur/base `teyssir` (UTF-8) ;
-     en cas d'échec → **SQLite** (`teyssir_hub.sqlite3`) et Teyssir démarre quand même ;
-   * `migrate` + `seed_rbac` + `seed_fiscal` ;
-   * installe **Ollama** et télécharge le modèle texte `mistral` (optionnel ; l'ERP continue sans) ;
-   * ouvre le port **8000** au pare-feu Windows si possible.
+   **Ce que fait `install_all.ps1` :**
+   * journal sous `%LOCALAPPDATA%\Teyssir\logs` ;
+   * dépendances hôte via winget (Python, éventuellement Node / Tesseract) ;
+   * Ollama + modèles locaux s'ils manquent (voir §8) ;
+   * puis l'installateur applicatif (`install.ps1`).
 
-4. Le script affiche une **CLÉ DE SYNCHRONISATION** (SYNC KEY), par ex. :
-   ```
-   SHARED SYNC KEY = 8fK3d9...aZ2
-   ^ Use this SAME key on the hub and on every till.
-   ```
-   ✏️ **Notez cette clé** : vous en aurez besoin pour chaque caisse.
+   **Sortie attendue (extrait) :** fin du script avec un message du type
+   `==== install_all finished (exit 0) ====` et le chemin du journal.
+   Sur le Hub, une ligne **SHARED SYNC KEY = …** apparaît — **notez-la**.
 
-5. Créez le **compte administrateur** quand c'est demandé (identifiant + mot de passe du gérant).
-   Si un admin existe déjà, cette étape est **sautée**. Pour une install sans invite :
-   ```powershell
-   .\deploy\windows\install.ps1 -Role hub -AdminUser owner -AdminPassword "UnMotDePasseFort"
-   ```
+### 4.2 Couche application seule — `setup_app.ps1`
 
-6. Le backend est enregistré comme **service Windows** `TeyssirBackend` (démarrage automatique, sans fenêtre).
-   Un raccourci **Teyssir ERP** est posé sur le Bureau.
-   Ouvrez-le : le navigateur par défaut charge **<http://localhost:8000>**.
-   Contrôle : **<http://localhost:8000/health/>** doit répondre `ok`.
+Utilisez cette commande **après** les deps, ou si Python / Node sont déjà installés
+(réinstall, mise à jour app, validation) :
+```powershell
+.\deploy\windows\setup_app.ps1 -Role hub
+```
 
-> Le Hub est prêt. Notez le **nom du PC Hub** (voir §6) — les caisses en auront besoin.
+`setup_app.ps1` : git pull/clone si besoin → LLM si manquant → `install.ps1` → contrôles
+(`django check`, migrate, `frontend\dist`, `/health/` si le serveur tourne).
+
+Équivalent historique (même spine) : `.\deploy\windows\install.ps1 -Role hub`.  
+Les scripts sont **idempotents** : vous pouvez les relancer sans casser l'installation.
+
+### 4.3 Ce que l'installateur Hub fait tout seul
+
+* détecte Python 3.11+ (ou l'installe via winget) ;
+* crée `.venv` et installe `requirements.txt` ;
+* construit l'appli web si `frontend\dist` manque et que Node est là ;
+* écrit un `.env` **sans mot de passe en dur** (secrets aléatoires, UTF-8 sans BOM) ;
+* installe **PostgreSQL** si besoin, crée l'utilisateur/base `teyssir` (UTF-8) ;
+  en cas d'échec → **SQLite** (`teyssir_hub.sqlite3`) avec un avertissement `[PG]` — Teyssir démarre quand même ;
+* `migrate` + `seed_rbac` + `seed_fiscal` ;
+* installe **Ollama** et les modèles `mistral` + `qwen2.5vl:3b` (optionnel ; l'ERP continue sans) ;
+* ouvre le port **8000** au pare-feu Windows si possible ;
+* enregistre le service Windows **`TeyssirBackend`** et le raccourci Bureau **« Teyssir ERP »**.
+
+### 4.4 Clé de synchronisation et compte admin
+
+Le script affiche une **CLÉ DE SYNCHRONISATION** (SYNC KEY), par ex. :
+```
+SHARED SYNC KEY = 8fK3d9...aZ2
+^ Use this SAME key on the hub and on every till.
+```
+✏️ **Notez cette clé** : vous en aurez besoin pour chaque caisse.
+
+Créez le **compte administrateur** quand c'est demandé (identifiant + mot de passe du gérant).
+Si un admin existe déjà, cette étape est **sautée**. Pour une install sans invite :
+```powershell
+.\deploy\windows\install_all.ps1 -Role hub -AdminUser owner -AdminPassword "UnMotDePasseFort"
+```
+
+### 4.5 Vérification Hub
+
+* Double-cliquez **Teyssir ERP** sur le Bureau (pas de fenêtre console noire persistante).
+* Le navigateur ouvre **<http://localhost:8000>**.
+* Contrôle : **<http://localhost:8000/health/>** doit répondre `ok`.
+
+> Le Hub est prêt. Notez le **nom ou l'IP du PC Hub** (voir §7) — les caisses en auront besoin.
 
 ---
 
 ## 5. Installer chaque **CAISSE** (till)
 
 Sur **chaque** PC de caisse, dans le dossier du projet.
+**PostgreSQL n'est jamais installé sur une caisse** — uniquement SQLite (mode hors-ligne).
 
 ### 5.1 Scripts dédiés par caisse (recommandé)
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force
-# 1ʳᵉ caisse — wrapper fixe Terminal=C1 (idempotent) :
+
+# 1ʳᵉ caisse — Terminal=C1 (idempotent) :
 .\deploy\windows\setup_caisse_C1.ps1 `
-  -HubUrl http://teyssir-hub.local:8000 -SyncKey COLLER-LA-CLE-DU-HUB -DiscoverPrinter
-# 2ᵉ / 3ᵉ :
-.\deploy\windows\setup_caisse_C2.ps1 -HubUrl http://teyssir-hub.local:8000 -SyncKey COLLER-LA-CLE-DU-HUB
-.\deploy\windows\setup_caisse_C3.ps1 -HubUrl http://teyssir-hub.local:8000 -SyncKey COLLER-LA-CLE-DU-HUB -StoreCode S1
-# Ou paramétré :
-.\deploy\windows\setup_caisse.ps1 -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey COLLER-LA-CLE-DU-HUB
+  -HubUrl http://teyssir-hub.local:8000 `
+  -SyncKey COLLER-LA-CLE-DU-HUB `
+  -DiscoverPrinter
+
+# 2ᵉ caisse :
+.\deploy\windows\setup_caisse_C2.ps1 `
+  -HubUrl http://teyssir-hub.local:8000 `
+  -SyncKey COLLER-LA-CLE-DU-HUB
+
+# 3ᵉ caisse (exemple avec code magasin) :
+.\deploy\windows\setup_caisse_C3.ps1 `
+  -HubUrl http://teyssir-hub.local:8000 `
+  -SyncKey COLLER-LA-CLE-DU-HUB `
+  -StoreCode S1
 ```
 
-Chaîne : `setup_caisse_Cx.ps1` → `setup_caisse.ps1` → `setup_app.ps1` → `install.ps1` (pas d'installeur parallèle).
+**Chaîne d'appels :**  
+`setup_caisse_Cx.ps1` → `setup_caisse.ps1` → `setup_app.ps1` → `install.ps1`  
+(pas d'installeur parallèle : une seule spine).
 
-Contrôles sans réinstaller :
+| Paramètre | Rôle |
+|-----------|------|
+| **`-HubUrl`** | Adresse du Hub (nom ou IP), ex. `http://192.168.1.10:8000` — voir §7 |
+| **`-SyncKey`** | **Exactement** la clé affichée sur le Hub (§4.4) |
+| **`-DiscoverPrinter`** | Scan du réseau local (/24, port 9100) pour l'imprimante ticket ; si rien → `dummy` + avertissement |
+| **`-StoreCode`** | Optionnel — code magasin (`TEYSSIR_STORE_CODE`), ex. `S1` |
+| **`-Printer tcp:IP:9100`** | Optionnel — IP connue de l'imprimante (sans scan) |
+
+Contrôles **sans** réinstaller :
 ```powershell
 .\deploy\windows\setup_caisse_C1.ps1 -ValidateOnly -HubUrl http://teyssir-hub.local:8000
-# Imprimante : .\deploy\windows\Discover-Printer.ps1
-# POS : raccourci Bureau « Teyssir ERP » ou .\deploy\windows\open-teyssir.ps1
+# Imprimante seule :
+.\deploy\windows\Discover-Printer.ps1
 ```
 
 ### 5.2 Entrées génériques (équivalent)
 
+Si vous préférez `install_all` / `setup_app` avec `-Role till` :
 ```powershell
-.\deploy\windows\install_all.ps1 -Role till -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey COLLER-LA-CLE-DU-HUB
-.\deploy\windows\setup_app.ps1 -Role till -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey COLLER-LA-CLE-DU-HUB
+.\deploy\windows\install_all.ps1 -Role till -Terminal C1 `
+  -HubUrl http://teyssir-hub.local:8000 -SyncKey COLLER-LA-CLE-DU-HUB -DiscoverPrinter
+
+.\deploy\windows\setup_app.ps1 -Role till -Terminal C1 `
+  -HubUrl http://teyssir-hub.local:8000 -SyncKey COLLER-LA-CLE-DU-HUB
 ```
 
+Ou paramétré :  
+`.\deploy\windows\setup_caisse.ps1 -Terminal C1 -HubUrl … -SyncKey …`
+
 - **`-Terminal` / wrapper Cx** : `C1`, `C2`, `C3` — **jamais deux fois le même** sur le réseau magasin.
-- **`-HubUrl`** : l'adresse du Hub (voir §6). Utilisez le **nom** (`teyssir-hub.local`) ou l'**IP** (ex. `http://192.168.1.10:8000`).
-- **`-SyncKey`** : **exactement** la clé affichée par le Hub à l'étape 4.3.
-- **`-StoreCode`** (optionnel) : code magasin (`TEYSSIR_STORE_CODE`), ex. `S1`.
-- **`-Printer tcp:IP:9100`** (optionnel) : imprimante ticket sur le LAN de **cette** caisse — voir §7.
-- **`-DiscoverPrinter`** (optionnel) : scan du /24 sur le port 9100 (ou `.\deploy\windows\Discover-Printer.ps1`). Pas d'IP magasin / Aclas en dur — sinon `dummy` ou valeur déjà dans `.env`.
-- Variables d'environnement (si param vide) : `TEYSSIR_TERMINAL`, `TEYSSIR_STORE_CODE`, `TEYSSIR_HUB_URL`, `TEYSSIR_SYNC_KEY`, `TEYSSIR_PRINTER`.
+- Variables d'environnement (si paramètre vide) : `TEYSSIR_TERMINAL`, `TEYSSIR_STORE_CODE`,
+  `TEYSSIR_HUB_URL`, `TEYSSIR_SYNC_KEY`, `TEYSSIR_PRINTER`.
 
 Créez un compte utilisateur (caissier) quand c'est demandé (sauté si un admin existe déjà).
 Le raccourci **Teyssir ERP** est créé sur le Bureau ; le service `TeyssirBackend` démarre tout seul.
 
-> Répétez pour C2 et C3. **PostgreSQL n'est jamais installé sur une caisse** — uniquement SQLite (mode hors-ligne).
 > Si vous avez oublié `-SyncKey`, relancez la **même** commande avec la clé du Hub : le script met à jour `.env`.
 
 ---
 
-## 6. Réseau : rendre le Hub visible depuis les caisses
+## 6. Raccourci Bureau « Teyssir ERP » (sans console)
+
+Après une install réussie (PowerShell administrateur recommandé) :
+
+* Un raccourci **« Teyssir ERP »** est posé sur le **Bureau** et dans le menu Démarrer
+  (icône `assets/branding/teyssir.ico`).
+* Il lance `open-teyssir.vbs` → attend `/health/` → ouvre le **navigateur par défaut**
+  sur `http://localhost:8000`.
+* **Aucune fenêtre console noire** ne reste ouverte (contrairement à `start-teyssir.bat`).
+
+Recréer le raccourci seul :
+```powershell
+.\deploy\windows\Install-DesktopShortcut.ps1
+```
+
+Repli manuel (fenêtre à laisser ouverte — **ne pas** combiner avec le service) :
+`deploy\windows\start-teyssir.bat`.
+
+---
+
+## 7. Réseau : rendre le Hub visible depuis les caisses
 
 Les caisses doivent joindre le Hub. Deux méthodes :
 
@@ -188,7 +278,7 @@ Sinon, ajoutez le nom sur **chaque caisse** dans le fichier
 **b) Par IP** — trouvez l'IP du Hub : sur le Hub, ouvrez `cmd` et tapez `ipconfig` → notez
 l'« Adresse IPv4 » (ex. `192.168.1.10`). Utilisez alors `-HubUrl http://192.168.1.10:8000`.
 
-**Pare-feu Windows (sur le Hub)** — `install.ps1 -Role hub` essaie d'ouvrir le port **8000** tout seul.
+**Pare-feu Windows (sur le Hub)** — l'install Hub essaie d'ouvrir le port **8000** tout seul.
 Si la règle manque (PowerShell non administrateur), lancez :
 ```powershell
 New-NetFirewallRule -DisplayName "Teyssir 8000" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow
@@ -199,103 +289,128 @@ navigateur — vous devez voir une réponse « ok ».
 
 ---
 
-## 7. Imprimante ticket thermique (réseau local du magasin)
+## 8. IA locale (Ollama) — mistral + vision
 
-L'imprimante ESC/POS se configure avec **`TEYSSIR_PRINTER=tcp:IP:9100`**.
-L'IP dépend du **réseau du magasin** (pas celle du PC développeur). Ne laissez pas une
-ancienne IP après un déménagement ou un changement de routeur.
+Par défaut, `install_all.ps1` / `setup_app.ps1` / `install.ps1` **installent Ollama** s'il manque,
+démarrent le service (`http://localhost:11434`), et téléchargent :
 
-**À l'installation** (recommandé) :
-```powershell
-.\deploy\windows\install.ps1 -Role till -Terminal C1 `
-  -HubUrl http://teyssir-hub.local:8000 -SyncKey <clé> `
-  -Printer tcp:192.168.1.100:9100
-```
-Ou scan automatique du /24 (port 9100) — si rien n'est trouvé → `dummy` + avertissement :
-```powershell
-.\deploy\windows\install.ps1 -Role till -Terminal C1 `
-  -HubUrl http://teyssir-hub.local:8000 -SyncKey <clé> -DiscoverPrinter
-.\deploy\windows\Discover-Printer.ps1
-```
+| Modèle | Usage | Taille indicative |
+|--------|--------|-------------------|
+| **`mistral`** | Texte / assistance locale | ~4 Go |
+| **`qwen2.5vl:3b`** | Vision bookscan (photo de livre) | ~2 Go |
 
-**Après coup** : éditez `.env` (`TEYSSIR_PRINTER=tcp:NOUVELLE-IP:9100`), puis
-relancez le service pour recharger l'environnement NSSM :
+* Tout reste **hors-ligne** après le téléchargement (pas de cloud obligatoire).
+* Si le disque / le réseau / Ollama échoue → **soft-fail** : Teyssir (caisse, stock, livres) s'installe quand même.
+* Première analyse Vision (CPU froid) : souvent **20–90 s** — normal.
+
+**Opt-out :**
 ```powershell
-.\deploy\windows\Install-WindowsService.ps1
-# ou : Restart-Service TeyssirBackend  (si AppEnvironmentExtra est déjà à jour)
+# Pas d'Ollama du tout :
+.\deploy\windows\install_all.ps1 -Role hub -SkipLlm
+
+# Ollama + mistral, sans le modèle vision (~2 Go) :
+.\deploy\windows\install_all.ps1 -Role hub -SkipVision
+.\deploy\windows\setup_caisse_C1.ps1 -HubUrl … -SyncKey … -SkipVision
 ```
 
-**Vérifier :** Menu → **Diagnostics** affiche la cible configurée et un test TCP
-(joignable / injoignable). Placeholder dans les exemples : `192.168.1.100` (pas une IP réelle du magasin).
+**Vérification attendue :**
+```powershell
+ollama --version
+ollama list
+# doit lister mistral (et qwen2.5vl:3b sauf -SkipVision)
+.\.venv\Scripts\python.exe manage.py check_llm --ping
+```
+
+Relancer plus tard : `.\deploy\windows\Install-LocalLlm.ps1`  
+Guide détaillé : [LOCAL-AI.md](LOCAL-AI.md).
 
 ---
 
-## 8. Auto-start & Desktop Shortcut
+## 9. Auto-démarrage & désenregistrement
 
-Après `install.ps1` (PowerShell **administrateur**) :
+Après `install.ps1` / `install_all.ps1` (PowerShell **administrateur**) :
 
 * Le backend tourne comme service Windows **`TeyssirBackend`** (NSSM + waitress) :
   * démarrage **automatique différé** au boot (sans terminal) ;
   * **redémarrage automatique** en cas de plantage ;
   * journaux dans `logs\teyssir-backend-stdout.log` et `logs\teyssir-backend-stderr.log`.
-* Un raccourci Bureau **« Teyssir ERP »** (icône `assets/branding/teyssir.ico`, aussi menu Démarrer)
-  ouvre le navigateur par défaut sur `http://localhost:8000` dès que `/health/` répond —
-  via `open-teyssir.vbs` (pas de fenêtre console).
 * Les caisses enregistrent aussi la tâche **Teyssir Sync** (toutes les 5 min). Les ventes restent
   locales d'abord ; la sync ne fait que réconcilier avec le Hub.
-  (Pas de second serveur planifié si le service NSSM est déjà là.)
+* **Une seule** écoute sur le port **8000** : pas de double serveur (service + ancienne tâche « Teyssir Server »).
 
-Vérifier le service :
+### Options à l'installation
+
+| Flag | Effet |
+|------|--------|
+| **`-SkipAutostart`** | N'enregistre **pas** les tâches planifiées (sync / repli logon). Le service NSSM s'installe **toujours** sauf `-SkipService`. |
+| `-SkipService` | Pas de service Windows |
+| `-SkipShortcut` | Pas de raccourci Bureau |
+| `-RegisterAutostart` | Force aussi le repli « Teyssir Server » au logon si le service est absent |
+
+Exemple caisse sans tâches planifiées :
+```powershell
+.\deploy\windows\setup_caisse_C1.ps1 -HubUrl … -SyncKey … -SkipAutostart
+```
+
+### Vérifier / désenregistrer
+
 ```powershell
 Get-Service TeyssirBackend
 sc.exe qc TeyssirBackend
 Get-ScheduledTask -TaskName "Teyssir Sync","Teyssir Server" -ErrorAction SilentlyContinue
 ```
 
-Repli si le service n'a pas pu s'installer : `deploy\windows\start-teyssir.bat` (fenêtre à laisser ouverte).
-Ne lancez **pas** le `.bat` en même temps que le service — le port **8000** ne peut servir qu'une fois.
-
-### Activer / désactiver (réversible)
-
 | Action | Commande |
 |--------|----------|
 | Installer le service (boot auto) | `.\deploy\windows\Install-WindowsService.ps1` |
 | Sync caisse (5 min) | `.\deploy\windows\register-autostart.ps1 -Role till` |
-| Désactiver sync / tâche logon | `Unregister-ScheduledTask -TaskName "Teyssir Sync","Teyssir Server" -Confirm:$false` |
+| **Désenregistrer** sync / tâche logon | `Unregister-ScheduledTask -TaskName "Teyssir Sync","Teyssir Server" -Confirm:$false` |
 | Arrêter le service (garde l'install) | `nssm stop TeyssirBackend` puis `nssm set TeyssirBackend Start SERVICE_DEMAND_START` |
 | Remettre le démarrage auto | `nssm set TeyssirBackend Start SERVICE_DELAYED_AUTO_START` ; `nssm start TeyssirBackend` |
-| Tout retirer (service + tâches + raccourcis) | `.\deploy\windows\uninstall.ps1` |
-
-Désinstaller service + raccourcis (sans supprimer les données) :
-```powershell
-.\deploy\windows\uninstall.ps1
-```
-
-La tâche planifiée « Teyssir Server » (ancienne méthode, à l'ouverture de session) n'est **pas**
-créée si le service existe — pas de double serveur. `Install-WindowsService.ps1` la
-supprime aussi s'il en reste une.
-
-Options à l'install : `-SkipService`, `-SkipShortcut`, `-SkipAutostart` (pas de tâches planifiées ;
-le service NSSM s'installe toujours sauf `-SkipService`), `-RegisterAutostart` (force aussi
-le repli logon si le service est absent). Repli manuel :
-```powershell
-.\deploy\windows\Install-WindowsService.ps1
-.\deploy\windows\Install-DesktopShortcut.ps1
-.\deploy\windows\register-autostart.ps1 -Role till -SyncMinutes 5
-```
+| Tout retirer (service + tâches + raccourcis, **données conservées**) | `.\deploy\windows\uninstall.ps1` |
 
 ---
 
-## 9. Utilisation quotidienne
+## 10. Imprimante ticket thermique (réseau local)
+
+L'imprimante ESC/POS se configure avec **`TEYSSIR_PRINTER=tcp:IP:9100`**.
+L'IP dépend du **réseau du magasin**. Aucune IP magasin / marque n'est figée dans les scripts.
+
+**À l'installation (recommandé sur C1) :**
+```powershell
+.\deploy\windows\setup_caisse_C1.ps1 `
+  -HubUrl http://teyssir-hub.local:8000 -SyncKey <clé> -DiscoverPrinter
+```
+
+Scan manuel :
+```powershell
+.\deploy\windows\Discover-Printer.ps1
+```
+**Sortie attendue :** une ligne `tcp:x.x.x.x:9100` si un appareil répond sur 9100, sinon `dummy` + avertissement.
+
+**Après coup :** éditez `.env` (`TEYSSIR_PRINTER=tcp:NOUVELLE-IP:9100`), puis :
+```powershell
+.\deploy\windows\Install-WindowsService.ps1
+# ou : Restart-Service TeyssirBackend
+```
+
+**Vérifier :** Menu → **Diagnostics** (cible + test TCP). Placeholder doc : `192.168.1.100` (pas une IP réelle du magasin).
+
+---
+
+## 11. Utilisation quotidienne
 
 1. Allumez le **Hub** en premier, puis les caisses (le service démarre tout seul).
 2. Double-cliquez **Teyssir ERP** sur le Bureau (ou le menu Démarrer).
 3. Connectez-vous dans le navigateur. L'appli peut être **installée** comme PWA
    (Chrome/Edge : icône « Installer » dans la barre d'adresse).
 
+Après une mise à jour de l'appli, si l'écran semble « ancien » : **rafraîchissement forcé PWA**
+(voir dépannage §14 — Ctrl+Shift+R / vider le cache du site).
+
 ---
 
-## 10. Sauvegardes (important)
+## 12. Sauvegardes (important)
 
 - **Hub PostgreSQL** (cas normal) : sauvegardez la base `teyssir` **et** le dossier `media\` :
   ```
@@ -310,10 +425,10 @@ suffit pour l'essentiel des données de gestion.
 
 ---
 
-## 11. Options avancées (facultatif)
+## 13. Options avancées (facultatif)
 
 <details>
-<summary><b>Flags de install.ps1</b></summary>
+<summary><b>Flags de install.ps1 / install_all.ps1 / setup_app.ps1</b></summary>
 
 | Flag | Effet |
 |------|--------|
@@ -321,14 +436,16 @@ suffit pour l'essentiel des données de gestion.
 | `-Terminal C1` | Code caisse (till) |
 | `-HubUrl http://…:8000` | Adresse du Hub (till) |
 | `-SyncKey …` | Clé partagée (till ; met à jour `.env` si relancé) |
+| `-DiscoverPrinter` | Scan imprimante ticket LAN |
 | `-SkipPostgres` | Hub en SQLite, pas d'install PostgreSQL |
 | `-PostgresSuperPassword` / `POSTGRES_ADMIN_PASSWORD` | Mot de passe du superuser Postgres déjà installé |
-| `-SkipLlm` / `-LlmModel llama3` | Ollama |
+| `-SkipLlm` / `-LlmModel llama3` | Ollama (opt-out / autre modèle texte) |
+| `-SkipVision` / `-VisionModel qwen2.5vl:3b` | Modèle vision bookscan |
 | `-AdminUser` / `-AdminPassword` | Admin sans invite |
 | `-SkipAdmin` | Ne pas créer d'utilisateur |
 | `-SkipBuild` | Ne pas lancer `npm` |
-| `-RegisterAutostart` | Force aussi la tâche « Teyssir Server » si le service est absent (inutile si NSSM est OK) |
-| `-SkipAutostart` | Ne pas enregistrer les tâches planifiées (sync / repli logon) ; le service NSSM reste par défaut |
+| `-RegisterAutostart` | Force aussi la tâche « Teyssir Server » si le service est absent |
+| `-SkipAutostart` | Ne pas enregistrer les tâches planifiées ; service NSSM reste par défaut |
 | `-SkipFirewall` | Ne pas ouvrir le port 8000 |
 | `-SkipService` | Ne pas installer le service Windows |
 | `-SkipShortcut` | Ne pas créer le raccourci Bureau |
@@ -336,179 +453,108 @@ suffit pour l'essentiel des données de gestion.
 </details>
 
 <details>
-<summary><b>AI Setup (Automatic) — Ollama local</b></summary>
-
-L'installateur Windows (`install.ps1`) **essaie** d'installer **Ollama** en silence, de démarrer
-le service (`http://localhost:11434`) et de télécharger le modèle texte (**mistral**) **et**
-le modèle vision bookscan (**`qwen2.5vl:3b`**, Phase 15.7).
-
-- Aucun cloud : tout tourne sur le PC Hub / caisse (hors-ligne après le pull).
-- Si Ollama ou un modèle échoue, **Teyssir s'installe quand même** (caisse, stock, livres).
-- Options : `-LlmModel llama3`, `-VisionModel qwen2.5vl:3b`, `-SkipVision` (pas de ~2 Go vision),
-  `-SkipLlm` (pas d'Ollama).
-- Première analyse Vision (cold start CPU) : souvent **20–90 s** — gardez
-  `TEYSSIR_SCAN_EXECUTOR=thread`. GPU / Metal accélère ensuite.
-- Vérification : `ollama --version`, `ollama list`,
-  `.\.venv\Scripts\python.exe manage.py check_llm --ping`.
-- Guide : [LOCAL-AI.md](LOCAL-AI.md).
-
-</details>
-
-<details>
-<summary><b>Impression des tickets / factures A4</b></summary>
-
-Teyssir génère les factures A4 (PDF) et les tickets. Pour une imprimante thermique ESC/POS,
-installez le pilote Windows fourni par le fabricant ; l'impression se fait depuis le navigateur
-(Ctrl+P) sur l'imprimante par défaut.
-</details>
-
-<details>
-<summary><b>Lecture automatique des livres par photo (OCR)</b></summary>
+<summary><b>OCR / lecture des livres par photo</b></summary>
 
 Deux moteurs **gratuits** sont disponibles :
 
-- **Tesseract** (rapide, hors-ligne) : `install.ps1` tente d'installer Tesseract (winget UB-Mannheim)
-  avec **ara + fra + eng** et écrit `TEYSSIR_TESSERACT_CMD` dans `.env`. Sinon installez
-  manuellement (<https://github.com/UB-Mannheim/tesseract/wiki>), puis dans `.env` :
-  `TEYSSIR_OCR_PROVIDER=tesseract` et
-  `TEYSSIR_TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe`.
-- **Vision-LLM** (extraction structurée multilingue, hors-ligne) : Ollama est installé
-  automatiquement **si possible**, avec le modèle **texte** `mistral` **et** le modèle
-  **vision** `qwen2.5vl:3b` (CPU-friendly, Phase 15.7). Pour omettre le téléchargement vision
-  (~2 Go) : `install.ps1 -SkipVision` ou
-  `.\deploy\windows\Install-LocalLlm.ps1 -Model mistral -SkipVision`.
-  Gardez `TEYSSIR_OCR_PROVIDER=tesseract` (Vision = couche 2 / fallback). Option primaire :
-  `TEYSSIR_OCR_PROVIDER=vision` + `TEYSSIR_SCAN_EXECUTOR=thread`. Variable :
-  `TEYSSIR_VISION_MODEL`. Voir `docs/LOCAL-AI.md`.
-- **Caméra bas de gamme (ex. XTRIKE ME XPC01)** : flou / bruit attendus — le fallback Vision
-  (front+verso) complète Tess ; toujours relire le brouillon (ISBN / prix).
-- **ISBN / code-barres** : `pyzbar` (dans `requirements.txt`) a besoin de **libzbar**.
-  Sur Windows, placez `libzbar-64.dll` sur le `PATH` du service (ou à côté de Python),
-  ou comptez sur la détection client `BarcodeDetector` + OCR chiffres. Sans DLL, le
-  décodage barcode serveur échoue silencieusement (fallback OCR digits).
+- **Tesseract** (rapide, hors-ligne) : l'installateur tente winget UB-Mannheim avec
+  **ara + fra + eng** et écrit `TEYSSIR_TESSERACT_CMD` dans `.env`. Sinon :
+  <https://github.com/UB-Mannheim/tesseract/wiki>, puis
+  `TEYSSIR_OCR_PROVIDER=tesseract` et le chemin vers `tesseract.exe`.
+- **Vision-LLM** : Ollama + `qwen2.5vl:3b` (voir §8). Gardez
+  `TEYSSIR_OCR_PROVIDER=tesseract` (Vision = couche 2 / fallback) sauf besoin primaire.
+- **Caméra bas de gamme** : flou / bruit attendus — toujours relire le brouillon (ISBN / prix).
+- **ISBN / code-barres** : `pyzbar` a besoin de **libzbar** sur Windows (DLL sur le PATH du service).
+  Sans DLL, fallback OCR chiffres / BarcodeDetector navigateur.
 
-- **Vision fallback (2E / 15.4)** : avec `TEYSSIR_OCR_PROVIDER=tesseract`, Ollama Vision
-  (dual-image front+back, `qwen2.5vl:3b`) ne tourne que si le titre/barcode Tess est faible
-  (calligraphie arabe, photo téléphone / webcam XTRIKE sans code-barres, titre « garbage »).
-  Description 2–4 phrases auto-remplie. ISBN Vision refusé sans checksum ; jamais de
-  `barcode_*` inventé. Cold start CPU lent → `TEYSSIR_SCAN_EXECUTOR=thread`.
-  Voir `docs/LOCAL-AI.md`.
-- **Régression books_photos (2F)** : placez les photos dans `books_photos\`, puis :
+Sans configuration, la saisie du livre reste **manuelle**.
 
-```powershell
-$env:TEYSSIR_OCR_PROVIDER = "tesseract"
-$env:TEYSSIR_OCR_VISION_FALLBACK = "false"
-python manage.py bookscan_regression --json
-```
-
-  Fixtures : `fixtures\bookscan\expected\*.json`. Détails : `docs/BOOK-OCR-ARCHITECTURE.md` (Phase 2F).
-
-Sans configuration, la saisie du livre reste **manuelle** (aucune erreur, juste pas d'auto-remplissage).
-
-### OCR Troubleshooting
-
-| Symptôme | Cause probable | Action |
-|----------|----------------|--------|
-| OCR vide sous le service Windows | PATH minimal (NSSM) sans Tesseract | Vérifiez `TEYSSIR_TESSERACT_CMD` dans `.env` + `AppEnvironmentExtra` du service ; Menu → **Diagnostics** |
-| Langues manquantes (arabe/français) | Packs non installés | Réinstallez UB Mannheim en cochant **ara**, **fra**, **eng** ; `/health/` → `tesseract.langs` |
-| ISBN vide alors que le verso a un code-barres | libzbar absent / photo trop large | Cadrez le barcode en gros plan ; vérifiez `libzbar` / client BarcodeDetector ; Menu → Diagnostics |
-| « Image floue, veuillez reprendre » | Flou / faible contraste avant OCR | Reprenez la photo avec plus de lumière, cadrez le titre ; ou « Analyser quand même » |
-| Caméra ne s'ouvre pas | HTTP hors localhost | Utilisez `http://localhost:8000` ou HTTPS ; autorisez la caméra dans le navigateur |
-| Service ne voit pas Tesseract après install | Redémarrage requis | `nssm restart TeyssirBackend` puis rouvrez Diagnostics |
-
-Contrôle rapide : `http://localhost:8000/health/` doit montrer `"tesseract": {"installed": true, ...}`.
-Les admins/owners ont **Menu → Diagnostics** (caméra, OCR, imprimante, DB, LLM).
+Contrôle : `http://localhost:8000/health/` → `"tesseract": {"installed": true, ...}` ;
+Menu → **Diagnostics**. Voir aussi [LOCAL-AI.md](LOCAL-AI.md) et [BOOK-OCR-ARCHITECTURE.md](BOOK-OCR-ARCHITECTURE.md).
 </details>
 
 <details>
 <summary><b>PDF → Word (rapide, non-bloquant)</b></summary>
 
 Sur le Hub Windows la conversion tourne **en arrière-plan** par défaut
-(`TEYSSIR_CONVERT_EXECUTOR=thread`) pour ne pas geler la caisse. Les petits PDF texte
-passent en mode **Rapide** (PyMuPDF → Word) ; les PDF mixtes utilisent pdf2docx optimisé.
-Optionnel dans `.env` : `TEYSSIR_CONVERT_EXECUTOR=inline` (tests) ou `thread`.
-
-### Notes de performance (IMPORTANT)
-
-* L’UI n’est **plus bloquée** : file d’attente → traitement → téléchargement.
-* Les **gros PDF** tournent en worker thread ; la caisse / API restent disponibles.
-* Stockez `media\` sur un **SSD** local (pas un partage réseau lent).
-* **Antivirus** : excluez du scan temps réel Windows Defender :
-  * `media\tmp`
-  * `media\convert`
-  sinon chaque écriture temporaire peut ajouter des secondes.
-* Guide complet : [PDF-CONVERSION.md](PDF-CONVERSION.md).
+(`TEYSSIR_CONVERT_EXECUTOR=thread`). Guide : [PDF-CONVERSION.md](PDF-CONVERSION.md).
+Excluez du scan Defender : `media\tmp` et `media\convert`.
 </details>
 
 <details>
 <summary><b>PostgreSQL Setup (Automatic) — Hub</b></summary>
 
-Sur le **PC Hub**, `install.ps1 -Role hub` installe PostgreSQL si besoin, crée l'utilisateur et
-la base **teyssir** (UTF-8), et écrit le mot de passe dans `.env` (`POSTGRES_*`).
-
-- Les **caisses** restent en **SQLite** (hors-ligne) — PostgreSQL n'y est pas installé.
-- Si l'install PostgreSQL échoue, le Hub **bascule sur SQLite** et Teyssir démarre quand même.
-- Superutilisateur déjà installé :  
-  `$env:POSTGRES_ADMIN_PASSWORD = "…" ; .\deploy\windows\install.ps1 -Role hub`
-- Option : `-SkipPostgres` pour forcer SQLite sur le Hub.
-- Guide : [POSTGRESQL-SETUP.md](POSTGRESQL-SETUP.md).
-
-</details>
-
-<details>
-<summary><b>Hub sur PostgreSQL (magasin à fort volume)</b></summary>
-
-Installez PostgreSQL, créez une base, puis dans le `.env` du Hub : `TEYSSIR_DB=postgres` et
-renseignez `POSTGRES_DB / POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_HOST / POSTGRES_PORT`.
-Relancez `deploy\windows\start-teyssir.bat` (il applique les migrations).
-Détail manuel : [POSTGRESQL-SETUP.md](POSTGRESQL-SETUP.md).
+Sur le **PC Hub**, l'installateur installe PostgreSQL si besoin et crée la base **teyssir**.
+Les **caisses** restent en **SQLite**. Si Postgres échoue → **bascule SQLite** + message `[PG]`.
+Option `-SkipPostgres` pour forcer SQLite. Guide : [POSTGRESQL-SETUP.md](POSTGRESQL-SETUP.md).
 </details>
 
 <details>
 <summary><b>Plusieurs magasins (hub cloud)</b></summary>
 
-Donnez à chaque magasin un `TEYSSIR_STORE_CODE` (S1, S2…). Sur chaque Hub, renseignez
-`TEYSSIR_CLOUD_HUB_URL` + `TEYSSIR_CLOUD_SYNC_KEY`, planifiez `deploy\windows\sync-to-cloud.bat`,
-et consultez le tableau **« Multi-magasins »** pour la consolidation.
+Donnez à chaque magasin un `TEYSSIR_STORE_CODE` (S1, S2…). Sur chaque Hub :
+`TEYSSIR_CLOUD_HUB_URL` + `TEYSSIR_CLOUD_SYNC_KEY`, planifiez `deploy\windows\sync-to-cloud.bat`.
 </details>
 
 ---
 
-## 12. Dépannage
+## 14. Dépannage
 
 | Problème | Solution |
 |----------|----------|
-| `python` introuvable | Réinstallez Python 3.12 en cochant **« Add to PATH »**, **fermez** PowerShell, relancez. Désactivez l'alias Microsoft Store (Paramètres → Applications → Alias d'exécution). |
-| Script PowerShell bloqué | Lancez d'abord `Set-ExecutionPolicy -Scope Process Bypass -Force`. |
-| PostgreSQL / mot de passe superuser | Si Postgres était déjà installé : `$env:POSTGRES_ADMIN_PASSWORD="…" ; .\deploy\windows\install.ps1 -Role hub`. Relancer le script est sûr (la base `teyssir` existante est réutilisée). |
-| Hub en SQLite alors que vous vouliez Postgres | Lisez l'avertissement `[PG]` dans la console. Guide : [POSTGRESQL-SETUP.md](POSTGRESQL-SETUP.md). Option `-SkipPostgres` pour rester en SQLite volontairement. |
-| La caisse n'atteint pas le Hub | Vérifiez `http://teyssir-hub.local:8000/health/`, le pare-feu (§6), l'IP/nom, et que le Hub tourne. Relancez l'install Hub **en administrateur**. |
-| « Bad Request (400) » | Ajoutez le nom/IP du PC dans `TEYSSIR_ALLOWED_HOSTS` du `.env`, relancez. |
-| `frontend\dist` manquant | Buildez l'appli sur un PC avec Node (`cd frontend & npm ci & npm run build`) et copiez `frontend\dist`. |
-| Port 8000 déjà utilisé | Arrêtez l'autre Teyssir (`nssm stop TeyssirBackend` ou fermez `start-teyssir.bat`). Ou changez `PORT` dans le service / le `.bat`. |
-| La clé de sync ne correspond pas | La caisse et le Hub doivent avoir **exactement** la même `TEYSSIR_SYNC_KEY`. Relancez la caisse avec `-SyncKey`. |
-| Relancer `install.ps1` | Normal et **sûr** : venv réutilisé, `.env` conservé, `migrate` idempotent, admin non recréé. |
+| **Port 8000 déjà utilisé** / page ne charge pas | Un seul processus doit écouter : `nssm stop TeyssirBackend` **ou** fermez `start-teyssir.bat` — **pas les deux**. Vérifiez : `Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue`. Puis `nssm start TeyssirBackend`. |
+| **PostgreSQL → SQLite (soft-fail)** | Message `[PG]` dans la console : le Hub tourne en `teyssir_hub.sqlite3`. Relancez en admin, ou `$env:POSTGRES_ADMIN_PASSWORD="…"` puis `install_all.ps1 -Role hub`. Guide : [POSTGRESQL-SETUP.md](POSTGRESQL-SETUP.md). |
+| **Tesseract : langues manquantes** (arabe / français) | Réinstallez UB Mannheim en cochant **ara**, **fra**, **eng**. Contrôle : `/health/` → `tesseract.langs`. |
+| **OCR vide** sous le service Windows | PATH minimal NSSM : vérifiez `TEYSSIR_TESSERACT_CMD` dans `.env`, puis `nssm restart TeyssirBackend`. Menu → **Diagnostics**. |
+| **Imprimante / Discover** | Relancez `.\deploy\windows\Discover-Printer.ps1` ; l'imprimante doit être sur le **même LAN**, port **9100**. Si rien → `dummy` (normal). Pas d'IP inventée. |
+| **PWA / écran « ancien » après maj** | **Hard-refresh** : Chrome/Edge → `Ctrl+Shift+R`. Ou Paramètres site → Effacer les données ; ou désinstaller la PWA puis rouvrir `http://localhost:8000`. |
+| `python` introuvable | Réinstallez Python 3.12 avec **« Add to PATH »**, fermez PowerShell, relancez. Désactivez l'alias Microsoft Store. |
+| Script PowerShell bloqué | `Set-ExecutionPolicy -Scope Process Bypass -Force`. |
+| La caisse n'atteint pas le Hub | Testez `http://…:8000/health/` depuis la caisse, pare-feu §7, IP/nom, Hub allumé / service démarré. |
+| « Bad Request (400) » | Ajoutez le nom/IP dans `TEYSSIR_ALLOWED_HOSTS` du `.env`, relancez le service. |
+| `frontend\dist` manquant | Sur un PC avec Node : `cd frontend ; npm ci ; npm run build`, puis copiez `frontend\dist`. |
+| Clé de sync incorrecte | Même `TEYSSIR_SYNC_KEY` sur Hub et caisse. Relancez la caisse avec `-SyncKey`. |
+| Relancer `install_all` / `setup_app` | **Sûr** : venv réutilisé, `.env` conservé, migrate idempotent, admin non recréé. |
+| Raccourci ouvre une console | Utilisez le raccourci créé par l'install (via `.vbs`). Recréez : `Install-DesktopShortcut.ps1`. |
+
+### OCR (détail)
+
+| Symptôme | Action |
+|----------|--------|
+| ISBN vide alors que le verso a un code-barres | Cadrez le barcode ; vérifiez libzbar / BarcodeDetector ; Diagnostics |
+| « Image floue, veuillez reprendre » | Plus de lumière, cadrez le titre ; ou « Analyser quand même » |
+| Caméra ne s'ouvre pas | Utilisez `http://localhost:8000` (pas une IP externe en HTTP) ; autorisez la caméra |
 
 ---
 
-## 13. Désinstaller
+## 15. Désinstaller (données conservées)
 
 ```powershell
 .\deploy\windows\uninstall.ps1
 ```
 Cela arrête et **supprime** le service `TeyssirBackend`, le raccourci Bureau, et les tâches
-planifiées. **Sauvegardez d'abord** la base Hub (`pg_dump` ou `teyssir_hub.sqlite3`) et `media\`.
-Ensuite vous pouvez supprimer le dossier du projet.
+planifiées. Le dossier projet, les bases (SQLite/Postgres), `media\` et `.env` **restent**.
+**Sauvegardez** avant une suppression manuelle du dossier.
 
-Rapport de validation : [INSTALLATION-QA.md](INSTALLATION-QA.md).
+---
 
-### Checklist dry-run Windows 11
+## 16. Critère d'acceptation — checklist Win11
 
-Avant la mise en production magasin, cocher la grille **Win11 dry-run checklist (Phase 7)** dans
-[INSTALLATION-QA.md](INSTALLATION-QA.md#win11-dry-run-checklist-phase-7) :
-`install_all.ps1` → `setup_caisse_C1` + `-DiscoverPrinter` → modèles Ollama → `/health/` + UI POS →
-raccourci sans console → service sans double écoute sur 8000 → ticket/imprimante →
-`uninstall.ps1` (données conservées).
+Avant la mise en production magasin, **cochez** la grille complète :
+
+👉 **[Win11 dry-run checklist (Phase 7) — INSTALLATION-QA.md](INSTALLATION-QA.md#win11-dry-run-checklist-phase-7)**
+
+Résumé des points à valider sur un vrai PC Windows 11 :
+
+1. Hub : `install_all.ps1 -Role hub` (ou soft-fail Postgres → SQLite documenté)
+2. SYNC KEY notée ; Ollama `mistral` + `qwen2.5vl:3b` (sauf `-SkipLlm` / `-SkipVision`)
+3. Service `TeyssirBackend` + **un seul** listener sur le port **8000**
+4. Raccourci **Teyssir ERP** sans console persistante ; `/health/` + UI POS
+5. Caisse : `setup_caisse_C1.ps1 … -DiscoverPrinter`
+6. Ticket / Diagnostics imprimante ; reboot → autostart OK (sauf `-SkipAutostart`)
+7. `uninstall.ps1` retire service/raccourcis/tâches **sans** effacer les données
+
+Rapport QA plus large : [INSTALLATION-QA.md](INSTALLATION-QA.md).
 
 ---
 
