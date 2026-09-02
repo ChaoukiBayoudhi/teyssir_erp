@@ -9,6 +9,9 @@
         .\deploy\windows\install.ps1 -Role till -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey <hub-key>
 
     Safe to run twice (idempotent): existing .venv, .env, database, and admin are reused.
+    Opt-in wipe then reinstall:
+
+        .\deploy\windows\install.ps1 -Role hub -FreshInstall
 
     Hub: PostgreSQL when possible (SQLite fallback — never abort).
     Till: SQLite only (PostgreSQL is never installed).
@@ -39,7 +42,11 @@ param(
     [switch]$SkipAutostart,
     [switch]$SkipFirewall,
     [switch]$SkipService,
-    [switch]$SkipShortcut
+    [switch]$SkipShortcut,
+    # Wipe DB / .env / service via Clean-PreviousInstall.ps1, then continue install
+    [switch]$FreshInstall,
+    # With -FreshInstall: keep .venv (default on -FreshInstall is to remove it)
+    [switch]$KeepVenv
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,6 +54,39 @@ $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $Root
 Write-Host "==== Teyssir installer  (role: $Role) ====" -ForegroundColor Green
 Write-Host "Project: $Root"
+
+# --- fresh install wipe (opt-in; shared spine for install_all / setup_app / caisse) -
+if ($FreshInstall) {
+    $cleanScript = Join-Path $PSScriptRoot "Clean-PreviousInstall.ps1"
+    if (-not (Test-Path $cleanScript)) {
+        Write-Host "ERREUR — Clean-PreviousInstall.ps1 manquant ; impossible d'exécuter -FreshInstall." -ForegroundColor Red
+        exit 3
+    }
+    $removeVenv = -not $KeepVenv
+    Write-Host "==== FreshInstall : effacement de l'installation Teyssir précédente (DB, .env, service) ====" -ForegroundColor Yellow
+    $cleanArgs = @{
+        FreshInstall = $true
+        Role         = $Role
+        Terminal     = $Terminal
+        RemoveVenv   = $removeVenv
+    }
+    if ($PostgresSuperPassword) {
+        $cleanArgs["PostgresSuperPassword"] = $PostgresSuperPassword
+    }
+    try {
+        & $cleanScript @cleanArgs
+        $cleanExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+        if ($cleanExit -ne 0) {
+            Write-Host ("Clean-PreviousInstall a échoué (exit {0}). Installation annulée." -f $cleanExit) -ForegroundColor Red
+            exit $cleanExit
+        }
+    }
+    catch {
+        Write-Host ("Clean-PreviousInstall a échoué : {0}" -f $_.Exception.Message) -ForegroundColor Red
+        exit 3
+    }
+    Write-Host "FreshInstall : effacement terminé — poursuite de l'installation normale." -ForegroundColor Green
+}
 
 function Test-IsAdmin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()

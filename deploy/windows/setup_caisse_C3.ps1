@@ -31,7 +31,9 @@ param(
     [string]$CloneTarget = "",
     [switch]$ValidateOnly,
     [switch]$SkipChecks,
-    [switch]$OpenPos
+    [switch]$OpenPos,
+    [switch]$FreshInstall,
+    [switch]$KeepVenv
 )
 
 $ErrorActionPreference = "Stop"

@@ -4,6 +4,7 @@
 
         .\deploy\windows\setup_caisse_C1.ps1 -HubUrl http://teyssir-hub.local:8000 -SyncKey <key>
         .\deploy\windows\setup_caisse_C1.ps1 -StoreCode S1 -DiscoverPrinter
+        .\deploy\windows\setup_caisse_C1.ps1 -FreshInstall -HubUrl http://… -SyncKey <key>
         .\deploy\windows\setup_caisse_C1.ps1 -ValidateOnly
 #>
 [CmdletBinding()]
@@ -31,7 +32,9 @@ param(
     [string]$CloneTarget = "",
     [switch]$ValidateOnly,
     [switch]$SkipChecks,
-    [switch]$OpenPos
+    [switch]$OpenPos,
+    [switch]$FreshInstall,
+    [switch]$KeepVenv
 )
 
 $ErrorActionPreference = "Stop"

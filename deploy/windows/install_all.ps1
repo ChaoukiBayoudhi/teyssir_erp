@@ -8,7 +8,7 @@
         .\deploy\windows\install_all.ps1 -Role till -Terminal C1 `
             -HubUrl http://teyssir-hub.local:8000 -SyncKey <hub-key>
         .\deploy\windows\install_all.ps1 -Role hub -FreshInstall
-            # Wipes old DB/service/.env then reinstalls (see Clean-PreviousInstall.ps1)
+            # Forwards -FreshInstall to install.ps1 → Clean-PreviousInstall.ps1
         .\deploy\windows\install_all.ps1 -Role till -DiscoverPrinter
 
     Till without admin: continues (soft path). Hub without admin: UAC re-launch
@@ -152,41 +152,7 @@ else {
     Write-InstallLog "Running as Administrator." "Green"
 }
 
-# --- fresh install wipe (opt-in) ---------------------------------------------
-if ($FreshInstall) {
-    $cleanScript = Join-Path $PSScriptRoot "Clean-PreviousInstall.ps1"
-    if (-not (Test-Path $cleanScript)) {
-        Write-InstallLog "Clean-PreviousInstall.ps1 missing — cannot run -FreshInstall." "Red"
-        if ($transcriptStarted) { Stop-Transcript | Out-Null }
-        exit 3
-    }
-    $removeVenv = -not $KeepVenv
-    Write-InstallLog "==== FreshInstall: wiping previous Teyssir (DB, .env, service) ====" "Yellow"
-    $cleanArgs = @{
-        FreshInstall       = $true
-        Role               = $Role
-        Terminal           = $Terminal
-        RemoveVenv         = $removeVenv
-    }
-    if ($PostgresSuperPassword) {
-        $cleanArgs["PostgresSuperPassword"] = $PostgresSuperPassword
-    }
-    try {
-        & $cleanScript @cleanArgs
-        $cleanExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
-        if ($cleanExit -ne 0) {
-            Write-InstallLog ("Clean-PreviousInstall failed (exit {0}). Aborting install." -f $cleanExit) "Red"
-            if ($transcriptStarted) { Stop-Transcript | Out-Null }
-            exit $cleanExit
-        }
-    }
-    catch {
-        Write-InstallLog ("Clean-PreviousInstall failed: {0}" -f $_.Exception.Message) "Red"
-        if ($transcriptStarted) { Stop-Transcript | Out-Null }
-        exit 3
-    }
-    Write-InstallLog "FreshInstall wipe complete — continuing with normal install chain." "Green"
-}
+# FreshInstall / KeepVenv are forwarded to install.ps1 (shared wipe spine).
 
 # --- host dependencies (idempotent) ----------------------------------------
 $depScript = Join-Path $PSScriptRoot "Install-HostDependencies.ps1"
@@ -250,7 +216,7 @@ foreach ($key in @(
         "DiscoverPrinter", "SkipBuild", "SkipLlm", "LlmModel", "SkipVision",
         "VisionModel", "SkipPostgres", "PostgresSuperPassword", "AdminUser",
         "AdminPassword", "SkipAdmin", "RegisterAutostart", "SkipAutostart",
-        "SkipFirewall", "SkipService", "SkipShortcut"
+        "SkipFirewall", "SkipService", "SkipShortcut", "FreshInstall", "KeepVenv"
     )) {
     if ($PSBoundParameters.ContainsKey($key)) {
         $forward[$key] = $PSBoundParameters[$key]

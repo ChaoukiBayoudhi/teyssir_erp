@@ -6,6 +6,7 @@
 
         .\deploy\windows\setup_caisse_C1.ps1 -HubUrl http://teyssir-hub.local:8000 -SyncKey <key>
         .\deploy\windows\setup_caisse.ps1 -Terminal C2 -HubUrl http://… -SyncKey <key> -DiscoverPrinter
+        .\deploy\windows\setup_caisse_C1.ps1 -HubUrl http://… -SyncKey <key> -FreshInstall
 
     Optional env fallbacks (when param empty): TEYSSIR_TERMINAL, TEYSSIR_STORE_CODE,
     TEYSSIR_HUB_URL, TEYSSIR_SYNC_KEY, TEYSSIR_PRINTER.
@@ -45,7 +46,10 @@ param(
     # Post-setup helpers (safe on non-Windows for documentation; real checks when online)
     [switch]$ValidateOnly,
     [switch]$SkipChecks,
-    [switch]$OpenPos
+    [switch]$OpenPos,
+    # Wipe local till DB / .env / service then reinstall (forwarded → setup_app → install)
+    [switch]$FreshInstall,
+    [switch]$KeepVenv
 )
 
 $ErrorActionPreference = "Stop"
@@ -187,7 +191,7 @@ foreach ($key in @(
         "SkipBuild", "SkipLlm", "LlmModel", "SkipVision", "VisionModel",
         "SkipAdmin", "AdminUser", "AdminPassword", "RegisterAutostart",
         "SkipAutostart", "SkipFirewall", "SkipService", "SkipShortcut", "SkipPull",
-        "RepoUrl", "CloneTarget"
+        "RepoUrl", "CloneTarget", "FreshInstall", "KeepVenv"
     )) {
     if ($PSBoundParameters.ContainsKey($key)) {
         $forward[$key] = $PSBoundParameters[$key]

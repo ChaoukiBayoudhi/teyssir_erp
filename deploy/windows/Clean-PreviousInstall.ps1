@@ -9,9 +9,11 @@
         .\deploy\windows\Clean-PreviousInstall.ps1 -FreshInstall -Role hub
         .\deploy\windows\Clean-PreviousInstall.ps1 -ConfirmWipeData -Role till -Terminal C1
 
-    Prefer the integrated path:
+    Prefer the integrated path (any common entrypoint forwards -FreshInstall):
 
         .\deploy\windows\install_all.ps1 -Role hub -FreshInstall
+        .\deploy\windows\setup_app.ps1 -Role hub -FreshInstall
+        .\deploy\windows\setup_caisse_C1.ps1 -FreshInstall -HubUrl … -SyncKey …
 
     Logs: %LOCALAPPDATA%\Teyssir\logs\clean_previous_<timestamp>.log
 #>

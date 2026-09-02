@@ -158,13 +158,27 @@ schémas sans effacer les ventes.
 
 **Destructif.** Sauvegardez d'abord (§12 : `pg_dump` Hub Postgres, ou copie SQLite + `media\`).
 
+`-FreshInstall` est accepté par **tous** les points d'entrée courants (`install_all.ps1`,
+`install.ps1`, `setup_app.ps1`, `setup_caisse*.ps1`) et par `Clean-PreviousInstall.ps1`.
+Le wipe est exécuté une fois dans `install.ps1` (spine partagée), puis l'install continue.
+
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force
 # Hub PostgreSQL : mot de passe superuser requis pour DROP/recreate la base teyssir
 $env:POSTGRES_ADMIN_PASSWORD = "mot-de-passe-postgres-superuser"
+
+# Recommandé (deps hôte + LLM + wipe + install) :
 .\deploy\windows\install_all.ps1 -Role hub -FreshInstall
+
+# Équivalents acceptés (même wipe via install.ps1) :
+.\deploy\windows\setup_app.ps1 -Role hub -FreshInstall
+.\deploy\windows\install.ps1 -Role hub -FreshInstall
+
 # Caisse C1 (SQLite local effacé, pas de Postgres) :
 .\deploy\windows\install_all.ps1 -Role till -Terminal C1 -FreshInstall `
+  -HubUrl http://teyssir-hub.local:8000 -SyncKey <NOUVELLE-CLE-AFFICHEE-SUR-HUB>
+# ou :
+.\deploy\windows\setup_caisse_C1.ps1 -FreshInstall `
   -HubUrl http://teyssir-hub.local:8000 -SyncKey <NOUVELLE-CLE-AFFICHEE-SUR-HUB>
 ```
 
@@ -178,8 +192,8 @@ $env:POSTGRES_ADMIN_PASSWORD = "mot-de-passe-postgres-superuser"
 
 **Ce que `-FreshInstall` fait :** `Clean-PreviousInstall.ps1` → `uninstall.ps1` (service,
 tâches, raccourcis) → DROP/recreate base Postgres **ou** suppression fichiers SQLite → backup
-`.env.bak.<horodatage>` puis suppression `.env` → suppression `.venv` (sauf `-KeepVenv` sur
-`install_all.ps1`). **Ne supprime pas** `media\` ni le code source.
+`.env.bak.<horodatage>` puis suppression `.env` → suppression `.venv` (sauf `-KeepVenv`).
+**Ne supprime pas** `media\` ni le code source.
 
 **Ordre magasin :** Hub en `-FreshInstall` **d'abord** (nouvelle SYNC KEY) → chaque caisse
 ensuite avec la **nouvelle** clé. Les caisses qui gardent l'ancienne clé ne synchroniseront pas.
@@ -196,7 +210,17 @@ Si le PC avait déjà Teyssir et affiche encore l'**ancienne UI** ou la **même 
 checkout du nouveau kit, voir **§3bis** :
 
 - **Données à conserver :** §3bis **A** (`setup_app.ps1` + rebuild `frontend\dist` + cache PWA)
-- **Repartir de zéro :** §3bis **B** (`install_all.ps1 -FreshInstall` ou `Clean-PreviousInstall.ps1`)
+- **Repartir de zéro :** §3bis **B** (`-FreshInstall` sur `install_all` / `setup_app` / `install`,
+  ou `Clean-PreviousInstall.ps1`)
+
+> **« Impossible de trouver un paramètre correspondant au nom « FreshInstall » »**  
+> Vous n'avez pas le bon script **ou** un checkout trop ancien.  
+> 1) Vérifiez : `Select-String FreshInstall deploy\windows\*.ps1` — doit lister
+> `install_all`, `install`, `setup_app`, `setup_caisse*`, `Clean-PreviousInstall`.  
+> 2) Checkout : `git checkout v1.0.0-windows-rc2` **ou** tip
+> `feature/pdf-conversion-async-optimization` (pas `master` / ZIP pre-rc2).  
+> 3) Sur **rc2** seul `install_all.ps1` + `Clean-PreviousInstall.ps1` acceptaient
+> `-FreshInstall` ; après le fix tip, **tous** les entrypoints ci-dessus l'acceptent.
 
 ### 4.1 Commande préférée — `install_all.ps1`
 
@@ -551,7 +575,7 @@ suffit pour l'essentiel des données de gestion.
 | `-SkipFirewall` | Ne pas ouvrir le port 8000 |
 | `-SkipService` | Ne pas installer le service Windows |
 | `-SkipShortcut` | Ne pas créer le raccourci Bureau |
-| **`-FreshInstall`** | Installation propre : efface DB + `.env` + service puis réinstalle (§4.0) |
+| **`-FreshInstall`** | Installation propre : efface DB + `.env` + service puis réinstalle (§3bis B / §4.0). Accepté par `install_all`, `install`, `setup_app`, `setup_caisse*` |
 | `-KeepVenv` | Avec `-FreshInstall` : conserver `.venv` |
 
 </details>
@@ -612,6 +636,7 @@ Donnez à chaque magasin un `TEYSSIR_STORE_CODE` (S1, S2…). Sur chaque Hub :
 | **OCR vide** sous le service Windows | PATH minimal NSSM : vérifiez `TEYSSIR_TESSERACT_CMD` dans `.env`, puis `nssm restart TeyssirBackend`. Menu → **Diagnostics**. |
 | **Imprimante / Discover** | Relancez `.\deploy\windows\Discover-Printer.ps1` ; l'imprimante doit être sur le **même LAN**, port **9100**. Si rien → `dummy` (normal). Pas d'IP inventée. |
 | **PWA / écran « ancien » après maj** | Rebuild `frontend\dist` (§3bis A) puis **hard-refresh** : Chrome/Edge → `Ctrl+Shift+R`. Ou Paramètres site → Effacer les données ; ou désinstaller la PWA puis rouvrir `http://localhost:8000`. |
+| **« Impossible de trouver un paramètre … FreshInstall »** | Mauvais script **ou** checkout trop vieux (`master` / ZIP pre-rc2). Sur **rc2** : utilisez `install_all.ps1 -FreshInstall` (pas `setup_app` / `setup_caisse*` seuls). Sur tip feature (post-fix) : tous les entrypoints l'acceptent. Vérif : `Select-String FreshInstall deploy\windows\*.ps1`. |
 | **Ancienne DB / UI après checkout du nouveau kit** | Scripts idempotents **conservent** `.env` et la base. Mise à jour sur place : §3bis **A**. Repartir de zéro : §3bis **B** (`-FreshInstall` / `Clean-PreviousInstall.ps1`). |
 | `python` introuvable | Réinstallez Python 3.12 avec **« Add to PATH »**, fermez PowerShell, relancez. Désactivez l'alias Microsoft Store. |
 | Script PowerShell bloqué | `Set-ExecutionPolicy -Scope Process Bypass -Force`. |
@@ -619,7 +644,7 @@ Donnez à chaque magasin un `TEYSSIR_STORE_CODE` (S1, S2…). Sur chaque Hub :
 | « Bad Request (400) » | Ajoutez le nom/IP dans `TEYSSIR_ALLOWED_HOSTS` du `.env`, relancez le service. |
 | `frontend\dist` manquant | Sur un PC avec Node : `cd frontend ; npm ci ; npm run build`, puis copiez `frontend\dist`. |
 | Clé de sync incorrecte | Même `TEYSSIR_SYNC_KEY` sur Hub et caisse. Relancez la caisse avec `-SyncKey`. |
-| Relancer `install_all` / `setup_app` | **Sûr** : venv réutilisé, `.env` conservé, migrate idempotent, admin non recréé. Pour **effacer l'ancienne base/UI** : `-FreshInstall` (§4.0). |
+| Relancer `install_all` / `setup_app` | **Sûr** : venv réutilisé, `.env` conservé, migrate idempotent, admin non recréé. Pour **effacer l'ancienne base/UI** : `-FreshInstall` sur n'importe quel entrypoint (§3bis B / §4.0). |
 | Raccourci ouvre une console | Utilisez le raccourci créé par l'install (via `.vbs`). Recréez : `Install-DesktopShortcut.ps1`. |
 
 ### OCR (détail)

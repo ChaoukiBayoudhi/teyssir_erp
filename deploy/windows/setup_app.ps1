@@ -6,6 +6,7 @@
 
         Set-ExecutionPolicy -Scope Process Bypass -Force
         .\deploy\windows\setup_app.ps1 -Role hub
+        .\deploy\windows\setup_app.ps1 -Role hub -FreshInstall
         .\deploy\windows\setup_app.ps1 -Role till -Terminal C1 `
             -HubUrl http://teyssir-hub.local:8000 -SyncKey <hub-key>
         .\deploy\windows\setup_app.ps1 -Role till -DiscoverPrinter
@@ -49,7 +50,10 @@ param(
     [string]$CloneTarget = "",
     [switch]$SkipPull,
     # Validation only after install (skip install.ps1 hand-off)
-    [switch]$ValidateOnly
+    [switch]$ValidateOnly,
+    # Wipe DB / .env / service then reinstall (forwarded to install.ps1)
+    [switch]$FreshInstall,
+    [switch]$KeepVenv
 )
 
 $ErrorActionPreference = "Stop"
@@ -323,7 +327,7 @@ foreach ($key in @(
         "DiscoverPrinter", "SkipBuild", "SkipLlm", "LlmModel", "SkipVision",
         "VisionModel", "SkipPostgres", "PostgresSuperPassword", "AdminUser",
         "AdminPassword", "SkipAdmin", "RegisterAutostart", "SkipAutostart",
-        "SkipFirewall", "SkipService", "SkipShortcut"
+        "SkipFirewall", "SkipService", "SkipShortcut", "FreshInstall", "KeepVenv"
     )) {
     if ($PSBoundParameters.ContainsKey($key)) {
         $forward[$key] = $PSBoundParameters[$key]

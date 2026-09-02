@@ -3,7 +3,7 @@
 Scripts to install and run Teyssir on the client's Windows PCs (1 Hub + up to 3 tills).
 
 > **Source of truth:** this full kit lives on
-> `feature/pdf-conversion-async-optimization` and tag `v1.0.0-windows-rc1`.  
+> `feature/pdf-conversion-async-optimization` and tag `v1.0.0-windows-rc2`.  
 > Default GitHub `master` / **Code ▸ Download ZIP** is **incomplete** (no
 > `install_all.ps1` / `setup_caisse_C*.ps1`). See [`docs/INSTALL-WINDOWS.md`](../../docs/INSTALL-WINDOWS.md) §3.
 
@@ -62,7 +62,7 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 - **libzbar** (pyzbar ISBN): no winget package on Windows — bundle `libzbar-64.dll` or use client BarcodeDetector + digit-OCR fallback (see `docs/INSTALL-WINDOWS.md`).
 - **Discover-Printer** kept — never hardcodes a shop ticket-printer IP (no fake Aclas IP).
 - **Unregister autostart:** `Unregister-ScheduledTask -TaskName "Teyssir Sync","Teyssir Server" -Confirm:$false` or full reverse via `uninstall.ps1`.
-- **Upgrade from old install:** idempotent re-run keeps DB/`.env` — see [`docs/INSTALL-WINDOWS.md` §3bis](../../docs/INSTALL-WINDOWS.md#3bis-mise-à-jour-depuis-une-ancienne-installation-hub-déjà-en-place). For a **clean wipe** (old UI/DB pain point): `install_all.ps1 -FreshInstall` or `Clean-PreviousInstall.ps1 -FreshInstall`.
+- **Upgrade from old install:** idempotent re-run keeps DB/`.env` — see [`docs/INSTALL-WINDOWS.md` §3bis](../../docs/INSTALL-WINDOWS.md#3bis-mise-à-jour-depuis-une-ancienne-installation-hub-déjà-en-place). For a **clean wipe**: `-FreshInstall` on `install_all` / `setup_app` / `install` / `setup_caisse*` (or `Clean-PreviousInstall.ps1 -FreshInstall`). Verify: `Select-String FreshInstall deploy\windows\*.ps1`.
 - **`frontend\dist` is not in Git** — build once (`npm ci && npm run build` in `frontend\`) or copy from a PC that built it.
 - **No Redis** in this kit.
 
