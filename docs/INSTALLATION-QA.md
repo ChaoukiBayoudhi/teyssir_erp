@@ -73,6 +73,7 @@ On a machine with PostgreSQL 17: `TEYSSIR_ROLE=hub` `TEYSSIR_DB=postgres` → `m
 
 ## Operator checklist (fresh Windows PC)
 
+0. **Already have Teyssir?** See [INSTALL-WINDOWS.md §4.0](INSTALL-WINDOWS.md#40-mise-à-jour-depuis-une-ancienne-version--installation-propre): in-place upgrade (`setup_app.ps1`) vs clean wipe (`install_all.ps1 -FreshInstall` / `Clean-PreviousInstall.ps1`).
 1. Unzip or `git clone` into e.g. `C:\Teyssir\teyssir_erp`.
 2. **Administrator** PowerShell in that folder.
 3. `Set-ExecutionPolicy -Scope Process Bypass -Force`
@@ -100,6 +101,7 @@ default (opt out `-SkipVision`). Tesseract language packs and cloud-hub URLs rem
 | Install script brace balance (`install_all` → `setup_app` → `setup_caisse` / C1–C3 → `install.ps1`) | Balanced |
 | Flag consistency: `-DiscoverPrinter`, `-SkipAutostart`, `-SkipShortcut`, LLM (`Install-LocalLlm.ps1`) | Present and forwarded through chain |
 | `Discover-Printer.ps1` still in kit | Present; referenced by `setup_caisse` / `install_all` |
+| `Clean-PreviousInstall.ps1` + `install_all.ps1 -FreshInstall` | Present (feature tip); docs §4.0 |
 | `uninstall.ps1` leaves project DB / `.env` / media | Documented + script comments confirm |
 
 ### B — Win11 shop dry-run (do on a real Windows 11 PC)
@@ -123,6 +125,12 @@ Tick each box on Hub and at least one till (`C1`).
 - [ ] Printer: `TEYSSIR_PRINTER` is `tcp:IP:9100` after discover, or intentional `dummy` (never a hardcoded fake shop IP)
 - [ ] Receipt: finalize a cash sale → ESC/POS attempt or Diagnostics printer TCP check
 - [ ] Autostart: reboot till → service up, `/health/` ok, **one** listener on 8000; sync task present unless `-SkipAutostart`
+
+**Upgrade from existing install (Win11 required)**
+
+- [ ] In-place: `git checkout` RC/feature → `setup_app.ps1 -Role hub` → rebuild `frontend\dist` if UI stale → PWA hard-refresh
+- [ ] Clean wipe: backup §12 → `install_all.ps1 -Role hub -FreshInstall` (Hub Postgres: `POSTGRES_ADMIN_PASSWORD`) → note **new** SYNC KEY → each till `-FreshInstall` with new key
+- [ ] Verify old `.env.bak.*` exists after wipe; `media\` still present unless manually deleted
 
 **Uninstall reverse (data kept)**
 

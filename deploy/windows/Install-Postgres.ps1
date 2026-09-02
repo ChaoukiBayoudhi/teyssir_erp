@@ -13,7 +13,9 @@ param(
     [string]$Port = "5432",
     [string]$SuperUser = "postgres",
     [string]$SuperPassword = "",
-    [string]$HostName = "127.0.0.1"
+    [string]$HostName = "127.0.0.1",
+    # Drop and recreate the app database (used by Clean-PreviousInstall.ps1 -FreshInstall).
+    [switch]$ResetDatabase
 )
 
 $ErrorActionPreference = "Continue"
@@ -105,6 +107,19 @@ function Test-AppLogin {
     return $ok
 }
 
+function Remove-TeyssirDatabase {
+    $safeDb = $Db.Replace("'", "''")
+    Write-Pg ("Terminating connections to database $Db ...") "Yellow"
+    Invoke-PsqlAdmin @"
+SELECT pg_terminate_backend(pid)
+FROM pg_stat_activity
+WHERE datname = '$safeDb' AND pid <> pg_backend_pid();
+"@
+    Write-Pg ("Dropping database $Db ...") "Yellow"
+    Invoke-PsqlAdmin "DROP DATABASE IF EXISTS $safeDb;"
+    Write-Pg "Database $Db dropped." "Green"
+}
+
 function New-TeyssirDatabase {
     if (-not $Password) { throw "POSTGRES_PASSWORD is empty" }
     $safePass = $Password.Replace("'", "''")
@@ -131,7 +146,27 @@ END
 }
 
 try {
-    if (Test-AppLogin) {
+    if ($ResetDatabase) {
+        if (-not (Install-PostgresSilent)) { return }
+        Start-PostgresService | Out-Null
+        if ($script:GeneratedSuper -and -not $SuperPassword) { $SuperPassword = $script:GeneratedSuper }
+        if (-not $SuperPassword) {
+            $SuperPassword = $env:POSTGRES_ADMIN_PASSWORD
+        }
+        if (-not $SuperPassword) {
+            Write-Pg "ResetDatabase: superuser password required (-SuperPassword or POSTGRES_ADMIN_PASSWORD)." "Yellow"
+            return
+        }
+        Remove-TeyssirDatabase
+        New-TeyssirDatabase
+        if (Test-AppLogin) {
+            $script:Ready = $true
+        }
+        else {
+            Write-Pg "Database recreated but login as $User failed." "Yellow"
+        }
+    }
+    elseif (Test-AppLogin) {
         Write-Pg "Existing database is reachable as $User — skipping create (re-run safe)." "Green"
         $script:Ready = $true
     }

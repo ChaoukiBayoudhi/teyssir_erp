@@ -2,6 +2,10 @@
     Remove the Teyssir Windows service, desktop shortcut, and scheduled tasks.
     Does NOT delete the project folder, database, or .env.
 
+    For a full wipe (database + .env) before reinstalling, use:
+        .\deploy\windows\Clean-PreviousInstall.ps1 -ConfirmWipeData -Role hub
+        .\deploy\windows\install_all.ps1 -Role hub -FreshInstall
+
         .\deploy\windows\uninstall.ps1
 #>
 [CmdletBinding()]

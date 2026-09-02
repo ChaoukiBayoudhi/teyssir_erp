@@ -109,9 +109,135 @@ Vous devez y voir `manage.py`, `deploy\windows\install_all.ps1` et
 `deploy\windows\setup_caisse_C1.ps1`. Si ces fichiers manquent, vous êtes sur la mauvaise
 branche / le mauvais ZIP.
 
+> **`frontend\dist` n'est pas versionné dans Git.**  
+> Le dépôt ne contient pas le build React (PWA). Au premier install, le script tente
+> `npm ci && npm run build` si Node est présent ; sinon préparez `frontend\dist` une fois
+> (§2) et copiez-le sur les autres PC. Sans `frontend\dist\index.html`, l'API démarre mais
+> l'interface web est absente.
+
+---
+
+## 3bis. Mise à jour depuis une **ancienne installation** (Hub déjà en place)
+
+> **Symptôme magasin :** un PC avait déjà Teyssir (branche `master`, tag
+> `v0.9.0-pre-windows-kit`, ou une RC plus ancienne). Après checkout du nouveau kit,
+> l'opérateur voit encore **l'ancienne interface** (PWA en cache) ou **d'anciennes données**
+> (base SQLite / PostgreSQL et `.env` conservés par les scripts idempotents).
+
+Deux chemins — choisissez selon l'objectif :
+
+| Objectif | Chemin | Données |
+|----------|--------|---------|
+| **Garder** ventes / stock / comptes | Mise à jour **sur place** (A) | Conservées |
+| **Repartir de zéro** (nouveau kit, DB vierge) | **Installation propre** (B) | Effacées (`.env.bak.*` sauvegardé) |
+
+### A — Mise à jour sur place (données conservées)
+
+1. Arrêtez le service : `nssm stop TeyssirBackend` (ou `Stop-Service TeyssirBackend`).
+2. Dans le dossier projet (Admin PowerShell) :
+   ```powershell
+   git fetch --tags origin
+   git checkout feature/pdf-conversion-async-optimization
+   # ou : git checkout v1.0.0-windows-rc1   (figé ; le tip feature peut être plus récent)
+   Set-ExecutionPolicy -Scope Process Bypass -Force
+   .\deploy\windows\setup_app.ps1 -Role hub
+   # Caisse : .\deploy\windows\setup_caisse_C1.ps1 -HubUrl … -SyncKey …
+   ```
+3. **Rebuild UI** si l'écran semble ancien :
+   ```powershell
+   cd frontend ; npm ci ; npm run build ; cd ..
+   .\deploy\windows\Install-WindowsService.ps1
+   ```
+4. **PWA / cache navigateur :** Chrome/Edge → `Ctrl+Shift+R` sur `http://localhost:8000`, ou
+   Paramètres du site → effacer les données ; désinstallez l'icône PWA si nécessaire (§14).
+
+`setup_app.ps1` réutilise `.venv`, `.env` et la base existante ; `migrate` applique les
+schémas sans effacer les ventes.
+
+### B — Installation propre (efface DB + `.env` + service)
+
+**Destructif.** Sauvegardez d'abord (§12 : `pg_dump` Hub Postgres, ou copie SQLite + `media\`).
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass -Force
+# Hub PostgreSQL : mot de passe superuser requis pour DROP/recreate la base teyssir
+$env:POSTGRES_ADMIN_PASSWORD = "mot-de-passe-postgres-superuser"
+.\deploy\windows\install_all.ps1 -Role hub -FreshInstall
+# Caisse C1 (SQLite local effacé, pas de Postgres) :
+.\deploy\windows\install_all.ps1 -Role till -Terminal C1 -FreshInstall `
+  -HubUrl http://teyssir-hub.local:8000 -SyncKey <NOUVELLE-CLE-AFFICHEE-SUR-HUB>
+```
+
+Équivalent manuel (wipe seul, puis install séparée) :
+```powershell
+.\deploy\windows\Clean-PreviousInstall.ps1 -FreshInstall -Role hub
+# Hub Postgres sans install_all :
+#   -PostgresSuperPassword "…"  ou  $env:POSTGRES_ADMIN_PASSWORD="…"
+.\deploy\windows\install_all.ps1 -Role hub
+```
+
+**Ce que `-FreshInstall` fait :** `Clean-PreviousInstall.ps1` → `uninstall.ps1` (service,
+tâches, raccourcis) → DROP/recreate base Postgres **ou** suppression fichiers SQLite → backup
+`.env.bak.<horodatage>` puis suppression `.env` → suppression `.venv` (sauf `-KeepVenv` sur
+`install_all.ps1`). **Ne supprime pas** `media\` ni le code source.
+
+**Ordre magasin :** Hub en `-FreshInstall` **d'abord** (nouvelle SYNC KEY) → chaque caisse
+ensuite avec la **nouvelle** clé. Les caisses qui gardent l'ancienne clé ne synchroniseront pas.
+
+Pour ne retirer que service/raccourcis **sans** toucher aux données : `uninstall.ps1` (§15).
+
 ---
 
 ## 4. Installer le **PC HUB** (serveur central)
+
+### 4.0 Mise à jour depuis une ancienne version / installation propre
+
+Si le PC Hub (ou une caisse) a **déjà** une ancienne installation Teyssir et que vous voyez
+l'**ancienne base** ou l'**ancienne interface** après déploiement du nouveau kit, lancez une
+**installation propre** avant de reconfigurer :
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass -Force
+cd C:\Teyssir\teyssir_erp   # dossier du projet
+
+# Hub — efface service, tâches, raccourcis, base Postgres/SQLite, .env ; réinstalle tout :
+$env:POSTGRES_ADMIN_PASSWORD = "mot-de-passe-superuser-postgres"   # si Postgres déjà installé
+.\deploy\windows\install_all.ps1 -Role hub -FreshInstall `
+  -AdminUser owner -AdminPassword "UnMotDePasseFort"
+
+# Caisse — même principe (SQLite local uniquement) :
+.\deploy\windows\install_all.ps1 -Role till -Terminal C1 -FreshInstall `
+  -HubUrl http://teyssir-hub.local:8000 -SyncKey NOUVELLE-CLE-DU-HUB -DiscoverPrinter
+```
+
+**Ce que `-FreshInstall` supprime :**
+
+| Élément | Action |
+|---------|--------|
+| Service `TeyssirBackend` | Arrêt + suppression |
+| Tâches « Teyssir Sync » / « Teyssir Server » | Suppression |
+| Raccourcis Bureau / Menu Démarrer | Suppression |
+| Base **PostgreSQL** `teyssir` (Hub) | DROP + recréation vide (nécessite `POSTGRES_ADMIN_PASSWORD`) |
+| Fichiers **SQLite** (`teyssir_hub.sqlite3`, `teyssir_C1.sqlite3`, …) | Suppression |
+| Fichier `.env` | Sauvegarde → `.env.bak.<horodatage>` puis suppression |
+| Dossier `.venv` | Supprimé par défaut (pip réinstallé) ; `-KeepVenv` pour le conserver |
+
+**Conservé (non supprimé) :** code source, `frontend\dist`, dossier `media\` (images livres),
+sauvegardes manuelles (`.sql`, copies SQLite ailleurs). Un **autre dossier** Teyssir sur le même PC
+n'est pas touché.
+
+**Sans réinstallation complète** (retire seulement service + raccourcis, **données intactes**) :
+```powershell
+.\deploy\windows\uninstall.ps1
+```
+
+Appel manuel du nettoyage seul :
+```powershell
+.\deploy\windows\Clean-PreviousInstall.ps1 -ConfirmWipeData -Role hub
+```
+
+> ⚠️ `-FreshInstall` est **opt-in** : un simple `install_all.ps1` sans ce flag ne touche jamais
+> à la base ni au `.env` (comportement idempotent habituel).
 
 ### 4.1 Commande préférée — `install_all.ps1`
 
@@ -466,6 +592,8 @@ suffit pour l'essentiel des données de gestion.
 | `-SkipFirewall` | Ne pas ouvrir le port 8000 |
 | `-SkipService` | Ne pas installer le service Windows |
 | `-SkipShortcut` | Ne pas créer le raccourci Bureau |
+| **`-FreshInstall`** | Installation propre : efface DB + `.env` + service puis réinstalle (§4.0) |
+| `-KeepVenv` | Avec `-FreshInstall` : conserver `.venv` |
 
 </details>
 
@@ -524,14 +652,15 @@ Donnez à chaque magasin un `TEYSSIR_STORE_CODE` (S1, S2…). Sur chaque Hub :
 | **Tesseract : langues manquantes** (arabe / français) | Réinstallez UB Mannheim en cochant **ara**, **fra**, **eng**. Contrôle : `/health/` → `tesseract.langs`. |
 | **OCR vide** sous le service Windows | PATH minimal NSSM : vérifiez `TEYSSIR_TESSERACT_CMD` dans `.env`, puis `nssm restart TeyssirBackend`. Menu → **Diagnostics**. |
 | **Imprimante / Discover** | Relancez `.\deploy\windows\Discover-Printer.ps1` ; l'imprimante doit être sur le **même LAN**, port **9100**. Si rien → `dummy` (normal). Pas d'IP inventée. |
-| **PWA / écran « ancien » après maj** | **Hard-refresh** : Chrome/Edge → `Ctrl+Shift+R`. Ou Paramètres site → Effacer les données ; ou désinstaller la PWA puis rouvrir `http://localhost:8000`. |
+| **PWA / écran « ancien » après maj** | Rebuild `frontend\dist` (§3bis A) puis **hard-refresh** : Chrome/Edge → `Ctrl+Shift+R`. Ou Paramètres site → Effacer les données ; ou désinstaller la PWA puis rouvrir `http://localhost:8000`. |
+| **Ancienne DB / UI après checkout du nouveau kit** | Scripts idempotents **conservent** `.env` et la base. Mise à jour sur place : §3bis **A**. Repartir de zéro : §3bis **B** (`-FreshInstall` / `Clean-PreviousInstall.ps1`). |
 | `python` introuvable | Réinstallez Python 3.12 avec **« Add to PATH »**, fermez PowerShell, relancez. Désactivez l'alias Microsoft Store. |
 | Script PowerShell bloqué | `Set-ExecutionPolicy -Scope Process Bypass -Force`. |
 | La caisse n'atteint pas le Hub | Testez `http://…:8000/health/` depuis la caisse, pare-feu §7, IP/nom, Hub allumé / service démarré. |
 | « Bad Request (400) » | Ajoutez le nom/IP dans `TEYSSIR_ALLOWED_HOSTS` du `.env`, relancez le service. |
 | `frontend\dist` manquant | Sur un PC avec Node : `cd frontend ; npm ci ; npm run build`, puis copiez `frontend\dist`. |
 | Clé de sync incorrecte | Même `TEYSSIR_SYNC_KEY` sur Hub et caisse. Relancez la caisse avec `-SyncKey`. |
-| Relancer `install_all` / `setup_app` | **Sûr** : venv réutilisé, `.env` conservé, migrate idempotent, admin non recréé. |
+| Relancer `install_all` / `setup_app` | **Sûr** : venv réutilisé, `.env` conservé, migrate idempotent, admin non recréé. Pour **effacer l'ancienne base/UI** : `-FreshInstall` (§4.0). |
 | Raccourci ouvre une console | Utilisez le raccourci créé par l'install (via `.vbs`). Recréez : `Install-DesktopShortcut.ps1`. |
 
 ### OCR (détail)

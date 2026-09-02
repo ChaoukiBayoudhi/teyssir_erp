@@ -25,7 +25,8 @@ Scripts to install and run Teyssir on the client's Windows PCs (1 Hub + up to 3 
 | `open-teyssir.ps1` | Wait for `/health/` then open the default browser. |
 | `serve.py` | Service entry: migrate + waitress (not `runserver`). |
 | `uninstall.ps1` | Remove service, shortcut, scheduled tasks (**keeps** project data / `.env` / media). |
-| `Install-Postgres.ps1` | Silent PostgreSQL + `teyssir` database (hub only; SQLite fallback). |
+| **`Clean-PreviousInstall.ps1`** | **Opt-in wipe** before reinstall: service, tasks, shortcuts, DB, `.env` backup+remove, optional `.venv`. Used by `-FreshInstall`. |
+| `Install-Postgres.ps1` | Silent PostgreSQL + `teyssir` database (hub only; SQLite fallback). `-ResetDatabase` for Hub fresh wipe. |
 | `Install-LocalLlm.ps1` | Silent Ollama install + text/vision pulls (never fails the ERP). Opt out: `-SkipLlm` / `-SkipVision` on callers. |
 | `start-teyssir.bat` | Manual windowed server **if** the service is not running. Do not run alongside the service (port 8000). |
 | `register-autostart.ps1` | Till sync (5 min); logon « Teyssir Server » only if service missing. Opt out at install: `-SkipAutostart`. |
@@ -61,6 +62,8 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 - **libzbar** (pyzbar ISBN): no winget package on Windows — bundle `libzbar-64.dll` or use client BarcodeDetector + digit-OCR fallback (see `docs/INSTALL-WINDOWS.md`).
 - **Discover-Printer** kept — never hardcodes a shop ticket-printer IP (no fake Aclas IP).
 - **Unregister autostart:** `Unregister-ScheduledTask -TaskName "Teyssir Sync","Teyssir Server" -Confirm:$false` or full reverse via `uninstall.ps1`.
+- **Upgrade from old install:** idempotent re-run keeps DB/`.env` — see [`docs/INSTALL-WINDOWS.md` §3bis](../../docs/INSTALL-WINDOWS.md#3bis-mise-à-jour-depuis-une-ancienne-installation-hub-déjà-en-place). For a **clean wipe** (old UI/DB pain point): `install_all.ps1 -FreshInstall` or `Clean-PreviousInstall.ps1 -FreshInstall`.
+- **`frontend\dist` is not in Git** — build once (`npm ci && npm run build` in `frontend\`) or copy from a PC that built it.
 - **No Redis** in this kit.
 
 Everything here uses only free/open-source tools (Python, waitress, WhiteNoise, NSSM).
