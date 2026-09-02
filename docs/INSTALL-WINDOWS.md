@@ -190,54 +190,13 @@ Pour ne retirer que service/raccourcis **sans** toucher aux données : `uninstal
 
 ## 4. Installer le **PC HUB** (serveur central)
 
-### 4.0 Mise à jour depuis une ancienne version / installation propre
+### 4.0 Mise à jour / installation propre (Hub déjà installé)
 
-Si le PC Hub (ou une caisse) a **déjà** une ancienne installation Teyssir et que vous voyez
-l'**ancienne base** ou l'**ancienne interface** après déploiement du nouveau kit, lancez une
-**installation propre** avant de reconfigurer :
+Si le PC avait déjà Teyssir et affiche encore l'**ancienne UI** ou la **même base** après
+checkout du nouveau kit, voir **§3bis** :
 
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass -Force
-cd C:\Teyssir\teyssir_erp   # dossier du projet
-
-# Hub — efface service, tâches, raccourcis, base Postgres/SQLite, .env ; réinstalle tout :
-$env:POSTGRES_ADMIN_PASSWORD = "mot-de-passe-superuser-postgres"   # si Postgres déjà installé
-.\deploy\windows\install_all.ps1 -Role hub -FreshInstall `
-  -AdminUser owner -AdminPassword "UnMotDePasseFort"
-
-# Caisse — même principe (SQLite local uniquement) :
-.\deploy\windows\install_all.ps1 -Role till -Terminal C1 -FreshInstall `
-  -HubUrl http://teyssir-hub.local:8000 -SyncKey NOUVELLE-CLE-DU-HUB -DiscoverPrinter
-```
-
-**Ce que `-FreshInstall` supprime :**
-
-| Élément | Action |
-|---------|--------|
-| Service `TeyssirBackend` | Arrêt + suppression |
-| Tâches « Teyssir Sync » / « Teyssir Server » | Suppression |
-| Raccourcis Bureau / Menu Démarrer | Suppression |
-| Base **PostgreSQL** `teyssir` (Hub) | DROP + recréation vide (nécessite `POSTGRES_ADMIN_PASSWORD`) |
-| Fichiers **SQLite** (`teyssir_hub.sqlite3`, `teyssir_C1.sqlite3`, …) | Suppression |
-| Fichier `.env` | Sauvegarde → `.env.bak.<horodatage>` puis suppression |
-| Dossier `.venv` | Supprimé par défaut (pip réinstallé) ; `-KeepVenv` pour le conserver |
-
-**Conservé (non supprimé) :** code source, `frontend\dist`, dossier `media\` (images livres),
-sauvegardes manuelles (`.sql`, copies SQLite ailleurs). Un **autre dossier** Teyssir sur le même PC
-n'est pas touché.
-
-**Sans réinstallation complète** (retire seulement service + raccourcis, **données intactes**) :
-```powershell
-.\deploy\windows\uninstall.ps1
-```
-
-Appel manuel du nettoyage seul :
-```powershell
-.\deploy\windows\Clean-PreviousInstall.ps1 -ConfirmWipeData -Role hub
-```
-
-> ⚠️ `-FreshInstall` est **opt-in** : un simple `install_all.ps1` sans ce flag ne touche jamais
-> à la base ni au `.env` (comportement idempotent habituel).
+- **Données à conserver :** §3bis **A** (`setup_app.ps1` + rebuild `frontend\dist` + cache PWA)
+- **Repartir de zéro :** §3bis **B** (`install_all.ps1 -FreshInstall` ou `Clean-PreviousInstall.ps1`)
 
 ### 4.1 Commande préférée — `install_all.ps1`
 
