@@ -92,17 +92,17 @@ git clone https://github.com/ChaoukiBayoudhi/teyssir_erp.git
 cd teyssir_erp
 git fetch --tags origin
 # Release candidate (kit Windows) — préféré pour installation magasin :
-git checkout v1.0.0-windows-rc1
+git checkout v1.0.0-windows-rc2
 # Ou tip le plus récent (corrections post-RC) :
 # git checkout feature/pdf-conversion-async-optimization
 ```
 
 **Option B — sans Git (ZIP du bon tag) :**  
-Sur GitHub → page **Releases / Tags** → tag **`v1.0.0-windows-rc1`** →
+Sur GitHub → page **Releases / Tags** → tag **`v1.0.0-windows-rc2`** →
 **Download ZIP** (ou URL directe) :
-`https://github.com/ChaoukiBayoudhi/teyssir_erp/archive/refs/tags/v1.0.0-windows-rc1.zip`  
+`https://github.com/ChaoukiBayoudhi/teyssir_erp/archive/refs/tags/v1.0.0-windows-rc2.zip`  
 Décompressez dans `C:\Teyssir` (le dossier s’appellera souvent
-`teyssir_erp-1.0.0-windows-rc1`).
+`teyssir_erp-1.0.0-windows-rc2`).
 
 Dans la suite, **« le dossier du projet »** désigne ce dossier (ex. `C:\Teyssir\teyssir_erp`).
 Vous devez y voir `manage.py`, `deploy\windows\install_all.ps1` et
@@ -138,7 +138,7 @@ Deux chemins — choisissez selon l'objectif :
    ```powershell
    git fetch --tags origin
    git checkout feature/pdf-conversion-async-optimization
-   # ou : git checkout v1.0.0-windows-rc1   (figé ; le tip feature peut être plus récent)
+   # ou : git checkout v1.0.0-windows-rc2   (figé ; le tip feature peut être plus récent)
    Set-ExecutionPolicy -Scope Process Bypass -Force
    .\deploy\windows\setup_app.ps1 -Role hub
    # Caisse : .\deploy\windows\setup_caisse_C1.ps1 -HubUrl … -SyncKey …
@@ -673,7 +673,8 @@ Rapport QA plus large : [INSTALLATION-QA.md](INSTALLATION-QA.md).
 | Tag | Points to | Meaning |
 |-----|-----------|---------|
 | `v0.9.0-pre-windows-kit` | `master` @ `8c8ce0a` | Last known stable / production-ish baseline **before** Windows kit merge |
-| `v1.0.0-windows-rc1` | `feature/pdf-conversion-async-optimization` tip (Phase 8+) | Release **candidate** — kit present; **not** shop-validated |
+| `v1.0.0-windows-rc1` | earlier feature tip (Phase 8+) | Superseded by **`v1.0.0-windows-rc2`** for frozen installs |
+| `v1.0.0-windows-rc2` | `feature/pdf-conversion-async-optimization` @ `dab47b9` | Current **RC** — FreshInstall wipe, `install_all`, `setup_caisse`; **not** shop-validated |
 | `v1.0.0-windows-ready` | *(not created yet)* | Reserved for **after** Win11 dry-run PASS + squash merge |
 
 ### Branch preservation
@@ -682,7 +683,7 @@ Rapport QA plus large : [INSTALLATION-QA.md](INSTALLATION-QA.md).
   and squash merge is explicitly approved. Do **not** delete it after merge either
   (useful for bisect / cherry-picks).
 - Fixes during dry-run land on that feature branch; re-tag RC only if you need a new
-  freeze point (e.g. `v1.0.0-windows-rc2`).
+  freeze point (e.g. `v1.0.0-windows-rc3`).
 
 ### Revert clients to tagged stable
 
@@ -700,7 +701,7 @@ git checkout v0.9.0-pre-windows-kit
 ```
 
 To leave an RC/feature install but keep the **new** kit scripts, stay on
-`v1.0.0-windows-rc1` / `feature/pdf-conversion-async-optimization` and fix forward —
+`v1.0.0-windows-rc2` / `feature/pdf-conversion-async-optimization` and fix forward —
 do not expect `install_all.ps1` on `v0.9.0-pre-windows-kit`.
 
 If the feature branch was never merged to `master`, production clients on `master`

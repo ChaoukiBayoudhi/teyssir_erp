@@ -158,7 +158,7 @@ Phase 8 (docs) polished operator-facing prose in [INSTALL-WINDOWS.md](INSTALL-WI
 | Artifact | Value |
 |----------|--------|
 | Stable tag | `v0.9.0-pre-windows-kit` → `master` @ `8c8ce0a` |
-| RC tag (not ready) | `v1.0.0-windows-rc1` → feature tip (Phase 8 docs) |
+| RC tag (not ready) | **`v1.0.0-windows-rc2`** → `dab47b9` (FreshInstall kit); rc1 superseded |
 | Ready tag | `v1.0.0-windows-ready` — **do not create** until Win11 dry-run PASS |
 | Feature branch | Keep `feature/pdf-conversion-async-optimization` (do not delete) |
 | Squash to `master` | **Blocked** until § B checklist is green on a real Win11 host |
@@ -178,9 +178,9 @@ Client revert and policy: [INSTALL-WINDOWS.md §17](INSTALL-WINDOWS.md#17-contro
 # Prefer the RC tag or the feature branch (same tip at freeze)
 # Do NOT use bare clone of master / GitHub "Code ▸ Download ZIP" (incomplete kit).
 git fetch --tags origin
-git checkout v1.0.0-windows-rc1
+git checkout v1.0.0-windows-rc2
 # or: git checkout feature/pdf-conversion-async-optimization
-# ZIP alternative: https://github.com/ChaoukiBayoudhi/teyssir_erp/archive/refs/tags/v1.0.0-windows-rc1.zip
+# ZIP alternative: https://github.com/ChaoukiBayoudhi/teyssir_erp/archive/refs/tags/v1.0.0-windows-rc2.zip
 cd <project-root>   # folder that contains manage.py AND deploy\windows\install_all.ps1
 Set-ExecutionPolicy -Scope Process Bypass -Force
 ```
