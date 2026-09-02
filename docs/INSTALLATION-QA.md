@@ -73,7 +73,7 @@ On a machine with PostgreSQL 17: `TEYSSIR_ROLE=hub` `TEYSSIR_DB=postgres` → `m
 
 ## Operator checklist (fresh Windows PC)
 
-0. **Already have Teyssir?** See [INSTALL-WINDOWS.md §4.0](INSTALL-WINDOWS.md#40-mise-à-jour-depuis-une-ancienne-version--installation-propre): in-place upgrade (`setup_app.ps1`) vs clean wipe (`install_all.ps1 -FreshInstall` / `Clean-PreviousInstall.ps1`).
+0. **Already have Teyssir?** See [INSTALL-WINDOWS.md §4.0](INSTALL-WINDOWS.md#40-mise-à-jour--installation-propre-hub-déjà-installé): in-place upgrade (`setup_app.ps1`) vs clean wipe (`install_all.ps1 -FreshInstall` / `Clean-PreviousInstall.ps1`).
 1. Unzip or `git clone` into e.g. `C:\Teyssir\teyssir_erp`.
 2. **Administrator** PowerShell in that folder.
 3. `Set-ExecutionPolicy -Scope Process Bypass -Force`
