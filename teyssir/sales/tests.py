@@ -2,7 +2,7 @@ import datetime
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from teyssir.billing.models import FiscalStampConfig
@@ -16,6 +16,7 @@ from teyssir.sales.services import finalize_sale, process_return
 User = get_user_model()
 
 
+@override_settings(APPLY_VAT_AND_TIMBRE=True)
 class FinalizeSaleTests(TestCase):
     def setUp(self):
         FiscalStampConfig.objects.create(doc_type="FACTURE", amount=Decimal("1.000"))
@@ -86,6 +87,7 @@ class FinalizeSaleTests(TestCase):
             finalize_sale(sale)
 
 
+@override_settings(APPLY_VAT_AND_TIMBRE=True)
 class ReturnTests(TestCase):
     def setUp(self):
         FiscalStampConfig.objects.create(doc_type="FACTURE", amount=Decimal("1.000"))
@@ -134,6 +136,7 @@ class ReturnTests(TestCase):
             }])
 
 
+@override_settings(APPLY_VAT_AND_TIMBRE=True)
 class CashSessionTests(TestCase):
     def setUp(self):
         FiscalStampConfig.objects.create(doc_type="FACTURE", amount=Decimal("1.000"))
@@ -179,3 +182,28 @@ class CashSessionTests(TestCase):
         self.assertEqual(CashSession.objects.filter(pk=sid).count(), 1)
         # user FK resolves because users are UUID-stable + hub-replicated
         self.assertEqual(CashSession.objects.get(pk=sid).user_id, self.user.id)
+
+
+class ShopPricingNoVatTimbreTests(TestCase):
+    """Default shop config: totals = prices after remises, no TVA/timbre inflation."""
+
+    def setUp(self):
+        FiscalStampConfig.objects.create(doc_type="FACTURE", amount=Decimal("1.000"))
+        self.product = Product.objects.create(
+            sku="PEN", name_fr="Stylo", sale_price=Decimal("0.850"), qty_on_hand=100,
+        )
+
+    def test_finalize_ignores_vat_and_timbre(self):
+        sale = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
+        SaleLine.objects.create(
+            sale=sale, product=self.product,
+            qty=Decimal("3"), unit_price=Decimal("0.850"), tax_rate=Decimal("7.00"),
+        )
+        invoice = finalize_sale(sale, payment_method="CASH")
+        sale.refresh_from_db()
+        self.assertEqual(sale.subtotal, Decimal("2.550"))
+        self.assertEqual(sale.tax_total, Decimal("0.000"))
+        self.assertEqual(sale.timbre_amount_snapshot, Decimal("0.000"))
+        self.assertEqual(sale.total, Decimal("2.550"))
+        self.assertEqual(invoice.timbre_amount_snapshot, Decimal("0.000"))
+

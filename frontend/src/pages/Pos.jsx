@@ -10,12 +10,14 @@ import { enqueue, flush, pending } from "../offlineQueue";
 import CameraScanner from "../components/CameraScanner.jsx";
 import LangToggle from "../LangToggle.jsx";
 
-const TIMBRE = 1.0; // facture stamp (server snapshots the authoritative value)
+const TIMBRE = 0; // shop: timbre ignored in totals (server APPLY_VAT_AND_TIMBRE=0)
 // Millime-exact helpers mirroring backend money.py (1 DT = 1000 millimes).
 const toMillimes = (x) => Math.round(Number(x) * 1000);
 const fromMillimes = (m) => m / 1000;
 const r3 = (x) => fromMillimes(toMillimes(x));
 const fmt = (x) => Number(x).toFixed(2); // 2-dp display (server stores 3-dp)
+/** Shop pricing: do not add TVA or timbre into the payable total. */
+const APPLY_VAT_AND_TIMBRE = false;
 
 /** Digits-heavy or alphanumeric refs (PEN-001, 1001, EAN) — not free-text names. */
 const looksLikeCode = (q) => {
@@ -182,7 +184,7 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
     }
   };
 
-  // Preview mirrors backend: line discount → header discount → TVA (all before/on HT).
+  // Preview mirrors backend: line discount → header discount; TVA/timbre ignored in shop totals.
   const totals = useMemo(() => {
     let grossM = 0;
     const lineBases = []; // millimes after line discount
@@ -209,9 +211,9 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
       }
       const adj = lb.base - share;
       subtotalM += adj;
-      taxM += Math.round(adj * lb.rate / 100);
+      if (APPLY_VAT_AND_TIMBRE) taxM += Math.round(adj * lb.rate / 100);
     });
-    const timbre = cart.length ? TIMBRE : 0;
+    const timbre = APPLY_VAT_AND_TIMBRE && cart.length ? TIMBRE : 0;
     const subtotal = fromMillimes(subtotalM);
     const tax = fromMillimes(taxM);
     const discount = fromMillimes(headerDiscM);

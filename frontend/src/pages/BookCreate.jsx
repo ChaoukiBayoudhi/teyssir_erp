@@ -4,8 +4,9 @@ import {
   Chip, LinearProgress, Select, MenuItem, FormControl, InputLabel, Stepper, Step, StepLabel,
 } from "@mui/material";
 import { useTranslation } from "react-i18next";
-import { scanBook, pollScanJob, createBook, listCategories, listTaxRates } from "../api";
+import { scanBook, pollScanJob, cancelScanJob, createBook, listCategories, listTaxRates } from "../api";
 import LangToggle from "../LangToggle.jsx";
+import CameraScanner from "../components/CameraScanner.jsx";
 
 /** ISBN-13 check digit (bookland 978/979 only). Reject OCR digit soup before hinting. */
 function isbn13CheckOk(raw) {
@@ -313,6 +314,9 @@ export default function BookCreate({ onBack, onLogout }) {
   const videoRef = useRef(null);
   const fileRef = useRef(null);
   const streamRef = useRef(null);
+  const aliveRef = useRef(true);
+  const abortRef = useRef(null);
+  const jobIdRef = useRef(null);
   const [stream, setStream] = useState(null);
   const [images, setImages] = useState([]);       // [front?, back?]
   const [previews, setPreviews] = useState([]);
@@ -330,6 +334,7 @@ export default function BookCreate({ onBack, onLogout }) {
   const [cameraId, setCameraId] = useState(localStorage.getItem("teyssir_camera") || "");
   const [cats, setCats] = useState([]);
   const [taxes, setTaxes] = useState([]);
+  const [barcodeCamera, setBarcodeCamera] = useState(false);
 
   const stopCamera = () => {
     const s = streamRef.current;
@@ -360,6 +365,19 @@ export default function BookCreate({ onBack, onLogout }) {
     setStream(null);
   };
 
+  /** Abort in-flight OCR poll/fetch and best-effort cancel backend ScanJob. */
+  const abortScanWork = () => {
+    const ctrl = abortRef.current;
+    abortRef.current = null;
+    try { ctrl?.abort(); } catch { /* */ }
+    const jid = jobIdRef.current;
+    jobIdRef.current = null;
+    if (jid) {
+      // Fire-and-forget — do not await on unmount/pagehide (would hang the refresh).
+      cancelScanJob(jid).catch(() => {});
+    }
+  };
+
   // Attach stream after <video> mounts (getUserMedia often resolves before React paints it).
   useEffect(() => {
     if (videoRef.current && stream) {
@@ -369,16 +387,52 @@ export default function BookCreate({ onBack, onLogout }) {
   }, [stream]);
 
   useEffect(() => {
+    aliveRef.current = true;
     listCategories().then(setCats).catch(() => {});
     listTaxRates().then((r) => {
+      if (!aliveRef.current) return;
       setTaxes(r);
       const tva7 = r.find((x) => Number(x.rate_percent) === 7);
       const d = tva7 || r.find((x) => x.is_default);
       if (d) setForm((f) => ({ ...f, tax_rate: f.tax_rate || d.id }));
     }).catch(() => {});
-    return () => { stopCamera(); };
+
+    const onPageHide = () => {
+      abortScanWork();
+      stopCamera();
+      setBarcodeCamera(false);
+    };
+    window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("beforeunload", onPageHide);
+
+    return () => {
+      aliveRef.current = false;
+      window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("beforeunload", onPageHide);
+      abortScanWork();
+      stopCamera();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const onBarcodeScan = (code) => {
+    const raw = String(code || "").replace(/[-\s]/g, "").trim();
+    if (!raw) return;
+    setBarcodeCamera(false);
+    setError("");
+    setInfo(`${t("codeDetected")}: ${raw}`);
+    setForm((f) => {
+      const next = { ...f, barcode_raw: raw };
+      if (isbn13CheckOk(raw)) {
+        next.isbn13 = raw;
+        next.barcode_kind = "isbn13";
+      } else if (raw.startsWith("619")) {
+        next.barcode_kind = "local_product";
+        next.edition_kind = f.edition_kind || "school_cnp";
+      }
+      return next;
+    });
+  };
 
   const addCapture = (file, slot) => {
     setImages((prev) => {
@@ -483,7 +537,7 @@ export default function BookCreate({ onBack, onLogout }) {
   };
 
   const applyScanProgress = (job) => {
-    if (!job) return;
+    if (!job || !aliveRef.current) return;
     if (job.stage) {
       setScanStage(job.stage);
       setBusyLabel(stageLabel(job.stage));
@@ -496,6 +550,11 @@ export default function BookCreate({ onBack, onLogout }) {
     if (!files.length) return;
     // Always release the webcam before / during OCR (dock Camera stays open otherwise).
     stopCamera();
+    setBarcodeCamera(false);
+    abortScanWork();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    jobIdRef.current = null;
     setCaptureStep("ready");
     setBusy(true);
     setBusyLabel(t("analyzingBook"));
@@ -507,6 +566,7 @@ export default function BookCreate({ onBack, onLogout }) {
       if (!force) {
         setBusyLabel(t("checkingImageQuality"));
         const q = await assessCapturesQuality(files);
+        if (ctrl.signal.aborted || !aliveRef.current) return;
         if (q.blurry || q.lowContrast) {
           setError(t("imageBlurryRetry"));
           setBusy(false);
@@ -523,16 +583,21 @@ export default function BookCreate({ onBack, onLogout }) {
       }
       setBusyLabel(t("detectingIsbn"));
       const detected = await detectIsbnFromImages(files);
+      if (ctrl.signal.aborted || !aliveRef.current) return;
       const isbnHint = detected && isbn13CheckOk(detected) ? detected : "";
       setBusyLabel(t("runningOcr"));
-      let d = await scanBook(files, isbnHint);
+      let d = await scanBook(files, isbnHint, { signal: ctrl.signal });
+      if (ctrl.signal.aborted || !aliveRef.current) return;
+      if (d.job_id) jobIdRef.current = d.job_id;
       if (d.status === "pending") {
         applyScanProgress(d);
         setBusyLabel(stageLabel(d.stage) || t("waitingOcr"));
-        d = await pollScanJob(d.job_id, { onProgress: applyScanProgress });
+        d = await pollScanJob(d.job_id, { onProgress: applyScanProgress, signal: ctrl.signal });
       } else {
         applyScanProgress(d);
       }
+      if (ctrl.signal.aborted || !aliveRef.current) return;
+      jobIdRef.current = null;
       if (d.status === "failed") {
         throw new Error(d.error || t("ocrFailed"));
       }
@@ -711,9 +776,16 @@ export default function BookCreate({ onBack, onLogout }) {
         tax_rate: prev.tax_rate || tva7?.id || "",
       }));
     } catch (err) {
+      if (err?.name === "AbortError" || String(err?.message || err) === "cancelled") {
+        // User left / refreshed — do not surface an error or leave busy=true.
+        return;
+      }
+      if (!aliveRef.current) return;
       const msg = String(err.message || err);
       setError(/ocr|tesseract|empty|fail|échec/i.test(msg) ? `${t("imageBlurryRetry")}\n${msg}` : msg);
     } finally {
+      if (abortRef.current === ctrl) abortRef.current = null;
+      if (!aliveRef.current) return;
       stopCamera();
       setBusy(false);
       setBusyLabel("");
@@ -947,6 +1019,34 @@ export default function BookCreate({ onBack, onLogout }) {
                 </Stack>
               </Stack>
               <Grid container spacing={1.5}>
+                <Grid item xs={12}>
+                  <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ mb: 0.5 }}>
+                    <Typography color="text.secondary" sx={{ flexGrow: 1, pt: 0.5 }}>
+                      {t("scanBookBarcodeHint")}
+                    </Typography>
+                    <Button
+                      variant={barcodeCamera ? "contained" : "outlined"}
+                      size="small"
+                      sx={{ minWidth: 52 }}
+                      disabled={busy}
+                      onClick={() => {
+                        if (!barcodeCamera) stopCamera();
+                        setBarcodeCamera((c) => !c);
+                      }}
+                      aria-label={t("scanWithCamera")}
+                    >
+                      📷
+                    </Button>
+                  </Stack>
+                  {barcodeCamera && (
+                    <CameraScanner
+                      mode="pos"
+                      stopOnDetect
+                      onDetect={onBarcodeScan}
+                      onClose={() => setBarcodeCamera(false)}
+                    />
+                  )}
+                </Grid>
                 {schoolMode ? (
                   <>
                     <Grid item xs={12} sm={6}>

@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.conf import settings
 from django.db import transaction
 
 from teyssir.billing.models import Invoice
@@ -11,6 +12,11 @@ from teyssir.inventory.services import apply_movement
 from teyssir.sync.services import enqueue_return, enqueue_sale
 
 from .models import Payment, Return, ReturnLine, Sale
+
+
+def _apply_vat_and_timbre() -> bool:
+    """Shop flag: when false, sale/return totals exclude TVA and timbre."""
+    return bool(getattr(settings, "APPLY_VAT_AND_TIMBRE", False))
 
 
 class DiscountError(ValueError):
@@ -71,7 +77,7 @@ def finalize_sale(sale: Sale, *, doc_type=Invoice.FACTURE, when=None, payment_me
         else:
             share = Decimal("0.000")
         adj = to_money(base - share)
-        tax = money.line_tax(adj, line.tax_rate)
+        tax = money.line_tax(adj, line.tax_rate) if _apply_vat_and_timbre() else Decimal("0.000")
         line.line_total = adj
         line.save(update_fields=["line_total"])
         subtotal += adj
@@ -167,7 +173,7 @@ def process_return(*, original_sale, items, reason="", refund_method=Payment.CAS
             tax_rate=rate, line_total=base, origin_terminal=terminal,
         )
         subtotal += base
-        tax_total += money.line_tax(base, rate)
+        tax_total += money.line_tax(base, rate) if _apply_vat_and_timbre() else Decimal("0.000")
         apply_movement(                                   # stock goes back up
             product_id=product_id, qty=qty, reason=StockMovement.RETURN,
             unit_cost=(orig.product.cost_avg if orig else Decimal("0")),

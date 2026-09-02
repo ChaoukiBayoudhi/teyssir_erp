@@ -21,14 +21,18 @@ def _rate(rate):
 
 def _receipt_model(sale, store_name="Teyssir Library"):
     """Build the receipt view-model. TVA uses ``line_tax`` (millime HALF_UP) so printed
-    breakdown matches booked ``sale.tax_total`` — never a raw float multiply."""
+    breakdown matches booked ``sale.tax_total`` — never a raw float multiply.
+
+    When ``APPLY_VAT_AND_TIMBRE`` is false, printed TVA/timbre are 0 (match booked totals).
+    """
+    apply_vat = bool(getattr(settings, "APPLY_VAT_AND_TIMBRE", False))
     invoice = getattr(sale, "invoice", None)
     by_rate = defaultdict(lambda: [to_money(0), to_money(0)])  # rate -> [base, tax]
     lines = list(sale.lines.select_related("product").all())
     for line in lines:
         base = line.line_total
         rate = line.tax_rate
-        tax = line_tax(base, rate)
+        tax = line_tax(base, rate) if apply_vat else to_money(0)
         by_rate[rate][0] = to_money(by_rate[rate][0] + base)
         by_rate[rate][1] = to_money(by_rate[rate][1] + tax)
     payments = list(sale.payments.all())

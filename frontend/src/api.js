@@ -197,7 +197,7 @@ export const createPurchaseInvoice = (payload) =>
   request("/purchasing/invoices", { method: "POST", body: payload });
 
 // Book scan = multipart (images + optional ISBN). Browser sets the multipart boundary.
-export async function scanBook(files, isbn) {
+export async function scanBook(files, isbn, { signal } = {}) {
   const fd = new FormData();
   files.forEach((f) => fd.append("images", f));
   if (isbn) fd.append("isbn", isbn);
@@ -205,8 +205,9 @@ export async function scanBook(files, isbn) {
   if (getToken()) headers["Authorization"] = `Token ${getToken()}`;
   let res;
   try {
-    res = await fetch(`${BASE}/catalog/books/scan`, { method: "POST", headers, body: fd });
-  } catch {
+    res = await fetch(`${BASE}/catalog/books/scan`, { method: "POST", headers, body: fd, signal });
+  } catch (e) {
+    if (e?.name === "AbortError") throw e;
     const err = new Error("offline");
     err.offline = true;
     throw err;
@@ -216,17 +217,47 @@ export async function scanBook(files, isbn) {
 }
 
 // Poll a scan job until it leaves the "pending" state (async OCR backend). Returns the final job.
-export async function pollScanJob(jobId, { interval = 2000, tries = 120, onProgress } = {}) {
+export async function pollScanJob(jobId, { interval = 2000, tries = 120, onProgress, signal } = {}) {
   for (let i = 0; i < tries; i++) {
-    const job = await request(`/catalog/books/scan/${jobId}`);
+    if (signal?.aborted) {
+      const err = new Error("Aborted");
+      err.name = "AbortError";
+      throw err;
+    }
+    const job = await request(`/catalog/books/scan/${jobId}`, { signal });
     if (onProgress) onProgress(job);
-    if (job.status === "failed") {
+    if (job.status === "failed" || job.status === "cancelled") {
       throw new Error(job.error || "OCR failed");
     }
     if (job.status !== "pending") return job;
-    await new Promise((r) => setTimeout(r, interval));
+    await new Promise((r, reject) => {
+      const t = setTimeout(r, interval);
+      if (!signal) return;
+      const onAbort = () => {
+        clearTimeout(t);
+        const err = new Error("Aborted");
+        err.name = "AbortError";
+        reject(err);
+      };
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
   }
   throw new Error("scan timed out");
+}
+
+/** Best-effort cancel of an in-flight ScanJob (page leave / refresh). */
+export async function cancelScanJob(jobId, { signal } = {}) {
+  if (!jobId) return null;
+  try {
+    return await request(`/catalog/books/scan/${jobId}`, { method: "DELETE", signal });
+  } catch (e) {
+    if (e?.name === "AbortError") throw e;
+    return null;
+  }
 }
 
 export const createBook = (data) => request("/catalog/books", { method: "POST", body: data });

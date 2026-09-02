@@ -69,36 +69,59 @@ def local_image_paths(image_fields):
 
 def run_scan_job(job_id):
     """Execute one scan job to completion, persisting the draft (or the failure). Never raises —
-    a failed OCR records FAILED + the error rather than losing the job."""
+    a failed OCR records FAILED + the error rather than losing the job.
+
+    If the client cancelled the job (DELETE while PENDING), exit without overwriting
+    the cancelled marker with DONE.
+    """
     from teyssir.catalog.models import ProductImage, ScanJob
 
     from .services import scan_book
 
+    def _is_cancelled():
+        return ScanJob.objects.filter(pk=job_id, error="cancelled").exists()
+
     job = ScanJob.objects.get(pk=job_id)
+    if _is_cancelled():
+        return job
     update_scan_stage(job_id, "queued", 0)
     try:
+        if _is_cancelled():
+            return ScanJob.objects.get(pk=job_id)
         images = ProductImage.objects.filter(id__in=job.image_ids).order_by("order")
         with local_image_paths([img.image for img in images]) as paths:
-            draft, ocr_text = scan_book(
-                paths,
-                isbn=job.isbn,
-                on_stage=lambda stage, progress=None: update_scan_stage(job_id, stage, progress),
-            )
-        job = ScanJob.objects.get(pk=job_id)  # refresh — stage updates used queryset UPDATE
-        job.result = draft.as_dict()
-        job.ocr_text = ocr_text or ""
-        job.status = ScanJob.DONE
-        job.stage = "done"
-        job.progress = 100
+            def _on_stage(stage, progress=None):
+                if _is_cancelled():
+                    raise RuntimeError("cancelled")
+                update_scan_stage(job_id, stage, progress)
+
+            draft, ocr_text = scan_book(paths, isbn=job.isbn, on_stage=_on_stage)
+        if _is_cancelled():
+            return ScanJob.objects.get(pk=job_id)
+        # Atomic PENDING→DONE so a concurrent cancel wins over our DONE write.
+        updated = ScanJob.objects.filter(pk=job_id, status=ScanJob.PENDING).update(
+            result=draft.as_dict(),
+            ocr_text=ocr_text or "",
+            status=ScanJob.DONE,
+            stage="done",
+            progress=100,
+            error="",
+        )
+        if not updated:
+            return ScanJob.objects.get(pk=job_id)
+        job = ScanJob.objects.get(pk=job_id)
         if job.image_ids and ocr_text:
             ProductImage.objects.filter(pk=job.image_ids[0]).update(ocr_text=ocr_text)
     except Exception as exc:                       # noqa: BLE001 — record, never lose the job
+        if str(exc) == "cancelled" or _is_cancelled():
+            return ScanJob.objects.get(pk=job_id)
+        ScanJob.objects.filter(pk=job_id).exclude(error="cancelled").update(
+            status=ScanJob.FAILED,
+            stage="failed",
+            progress=100,
+            error=str(exc),
+        )
         job = ScanJob.objects.get(pk=job_id)
-        job.status = ScanJob.FAILED
-        job.stage = "failed"
-        job.progress = 100
-        job.error = str(exc)
-    job.save()
     return job
 
 

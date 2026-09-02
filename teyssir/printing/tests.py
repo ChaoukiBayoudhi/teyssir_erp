@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from teyssir.billing.models import FiscalStampConfig
 from teyssir.catalog.models import Product, TaxRate
@@ -12,6 +12,7 @@ from teyssir.sales.models import Sale, SaleLine
 from teyssir.sales.services import finalize_sale
 
 
+@override_settings(APPLY_VAT_AND_TIMBRE=True)
 class ReceiptTests(TestCase):
     def setUp(self):
         FiscalStampConfig.objects.create(doc_type="FACTURE", amount=Decimal("1.000"))

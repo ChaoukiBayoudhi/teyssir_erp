@@ -27,7 +27,8 @@ class QuotationTests(TestCase):
                     "unit_price": "0.850", "tax_rate": "7.00"}],
         )
         self.assertEqual(q.subtotal, Decimal("2.550"))
-        self.assertEqual(q.total, Decimal("2.729"))            # ex-timbre (2.550 + 0.179)
+        self.assertEqual(q.total, Decimal("2.550"))            # shop: no TVA on quotes
+        self.assertEqual(q.tax_total, Decimal("0.000"))
         self.product.refresh_from_db()
         self.assertEqual(self.product.qty_on_hand, 100)  # quote moves no stock
 

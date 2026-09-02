@@ -1011,7 +1011,8 @@ class BookScanView(APIView):
 
 
 class ScanJobView(APIView):
-    """GET /catalog/books/scan/<job_id> — poll a scan job until status is done/failed."""
+    """GET /catalog/books/scan/<job_id> — poll a scan job until status is done/failed.
+    DELETE — cancel a still-PENDING job (client navigated away / refresh mid-OCR)."""
 
     permission_classes = [capability("edit_product")]
 
@@ -1021,6 +1022,23 @@ class ScanJobView(APIView):
         job = ScanJob.objects.filter(pk=pk).first()
         if not job:
             return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(_scan_job_payload(request, job))
+
+    def delete(self, request, pk):
+        from teyssir.catalog.models import ScanJob
+
+        job = ScanJob.objects.filter(pk=pk).first()
+        if not job:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        # Only PENDING jobs are cancellable; DONE/FAILED are left alone (idempotent OK).
+        if job.status == ScanJob.PENDING:
+            ScanJob.objects.filter(pk=pk, status=ScanJob.PENDING).update(
+                status=ScanJob.FAILED,
+                stage="failed",
+                progress=100,
+                error="cancelled",
+            )
+            job.refresh_from_db()
         return Response(_scan_job_payload(request, job))
 
 

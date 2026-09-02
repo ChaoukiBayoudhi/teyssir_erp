@@ -38,13 +38,13 @@ export default function Quotation({ onBack, onLogout }) {
   const remove = (id) => setCart((c) => c.filter((l) => l.product.id !== id));
 
   const totals = useMemo(() => {
-    let sub = 0, tax = 0;
+    let sub = 0;
     for (const l of cart) {
       const base = r3(l.qty * Number(l.product.sale_price));
       sub = r3(sub + base);
-      tax = r3(tax + r3((base * Number(l.product.tax_rate_percent || 0)) / 100));
     }
-    return { sub, tax, total: r3(sub + tax) };
+    // Shop: ignore TVA in quotation preview (matches APPLY_VAT_AND_TIMBRE=0).
+    return { sub, tax: 0, total: sub };
   }, [cart]);
 
   const saveQuote = async () => {

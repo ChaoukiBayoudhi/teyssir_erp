@@ -38,7 +38,13 @@ def allocate_document_number(terminal, doc_type, when=None):
 
 
 def resolve_fiscal_stamp(doc_type):
-    """Resolve the configured timbre fiscal for a doc type; 0 if none/inactive (spec §2 M2b)."""
+    """Resolve the configured timbre fiscal for a doc type; 0 if none/inactive (spec §2 M2b).
+
+    When ``settings.APPLY_VAT_AND_TIMBRE`` is false (shop default), always returns 0 so
+    checkout totals are not inflated by the stamp.
+    """
+    if not getattr(settings, "APPLY_VAT_AND_TIMBRE", False):
+        return Decimal("0.000")
     cfg = FiscalStampConfig.objects.filter(doc_type=doc_type, active=True).first()
     return cfg.amount if cfg else Decimal("0.000")
 

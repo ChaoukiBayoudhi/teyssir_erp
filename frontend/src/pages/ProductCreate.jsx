@@ -30,6 +30,8 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
   const [error, setError] = useState("");
 
   const isBook = productType === "book";
+  const hasBarcode = Boolean(barcode.trim());
+  const hasReference = Boolean(form.reference.trim());
 
   useEffect(() => {
     listCategories().then(setCats).catch(() => {});
@@ -44,8 +46,26 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
+  const onBarcodeChange = (value) => {
+    setBarcode(value);
+    // XOR: barcode filled → clear reference (furniture only).
+    if (!isBook && value.trim()) {
+      setForm((f) => (f.reference ? { ...f, reference: "" } : f));
+    }
+  };
+
+  const onReferenceChange = (value) => {
+    set("reference", value);
+    // XOR: reference filled → clear barcode.
+    if (value.trim() && barcode) {
+      setBarcode("");
+      setExisting(null);
+      setCamera(false);
+    }
+  };
+
   const onCameraCode = (code) => {
-    setBarcode(code);
+    onBarcodeChange(code);
     lookup(code);
     setCamera(false);
   };
@@ -66,16 +86,26 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
   const save = async () => {
     setError("");
     if (!form.name_fr.trim()) { setError(t("nameRequired")); return; }
-    if (!isBook && !form.reference.trim()) { setError(t("referenceRequired")); return; }
+    if (!isBook) {
+      const bc = barcode.trim();
+      const ref = form.reference.trim();
+      if (bc && ref) { setError(t("barcodeOrReferenceXor")); return; }
+      if (!bc && !ref) { setError(t("barcodeOrReferenceRequired")); return; }
+    }
     setBusy(true);
     try {
+      const bc = barcode.trim();
+      const ref = form.reference.trim();
       await createProduct({
         name_fr: form.name_fr, name_ar: form.name_ar, category: form.category,
         tax_rate: form.tax_rate, sale_price: form.sale_price || "0",
         product_type: productType, is_book: isBook,
-        reference: form.reference.trim(), color: form.color, brand: form.brand,
+        // Furniture: send only one identity field.
+        reference: isBook ? "" : (bc ? "" : ref),
+        color: form.color, brand: form.brand,
         isbn: form.isbn.trim(),
-        barcode: barcode.trim(), initial_qty: form.initial_qty || "0",
+        barcode: isBook ? bc : (ref ? "" : bc),
+        initial_qty: form.initial_qty || "0",
         reorder_point: form.reorder_point || "0",
       });
       setToast(t("registered"));
@@ -87,7 +117,9 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
     } finally { setBusy(false); }
   };
 
-  const furnitureReady = Boolean(form.name_fr.trim() && form.reference.trim());
+  const furnitureReady = Boolean(
+    form.name_fr.trim() && (hasBarcode || hasReference) && !(hasBarcode && hasReference),
+  );
   const bookReady = Boolean(form.name_fr.trim());
 
   return (
@@ -106,7 +138,15 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
 
         <Paper sx={{ p: 2, mb: 2 }}>
           <ToggleButtonGroup exclusive size="small" value={productType} sx={{ mb: 2 }}
-                             onChange={(_, v) => { if (v) { setProductType(v); setExisting(null); setCamera(false); } }}>
+                             onChange={(_, v) => {
+                               if (v) {
+                                 setProductType(v);
+                                 setExisting(null);
+                                 setCamera(false);
+                                 setBarcode("");
+                                 setForm((f) => ({ ...f, reference: "", isbn: "", authors: "" }));
+                               }
+                             }}>
             <ToggleButton value="furniture">{t("furniture")}</ToggleButton>
             <ToggleButton value="book">{t("books")}</ToggleButton>
           </ToggleButtonGroup>
@@ -115,14 +155,23 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
             {isBook ? t("scanIsbnPrompt") : t("scanFurniturePrompt")}
           </Typography>
           <Stack direction="row" spacing={1}>
-            <TextField inputRef={barcodeRef} fullWidth size="small"
-                       label={isBook ? t("isbnOrBarcode") : t("barcodeOptional")}
-                       value={barcode}
-                       onChange={(e) => setBarcode(e.target.value)} onKeyDown={onBarcodeKey}
-                       onBlur={() => barcode && lookup(barcode.trim())} autoFocus />
+            <TextField
+              inputRef={barcodeRef}
+              fullWidth
+              size="small"
+              label={isBook ? t("isbnOrBarcode") : t("barcodeOptional")}
+              value={barcode}
+              disabled={!isBook && hasReference}
+              onChange={(e) => onBarcodeChange(e.target.value)}
+              onKeyDown={onBarcodeKey}
+              onBlur={() => barcode && lookup(barcode.trim())}
+              autoFocus
+              helperText={!isBook ? t("barcodeOrReferenceHint") : undefined}
+            />
             <Button
               variant={camera ? "contained" : "outlined"}
               sx={{ minWidth: 52 }}
+              disabled={!isBook && hasReference}
               onClick={() => setCamera((c) => !c)}
               aria-label={t("scanWithCamera")}
             >
@@ -158,9 +207,15 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
                 </>
               ) : (
                 <>
-                  <TextField label={t("reference")} value={form.reference} required fullWidth
-                             onChange={(e) => set("reference", e.target.value)}
-                             helperText={t("referenceHint")} />
+                  <TextField
+                    label={t("reference")}
+                    value={form.reference}
+                    required={!hasBarcode}
+                    fullWidth
+                    disabled={hasBarcode}
+                    onChange={(e) => onReferenceChange(e.target.value)}
+                    helperText={hasBarcode ? t("referenceDisabledWhenBarcode") : t("referenceHint")}
+                  />
                   <TextField label={t("articleName")} value={form.name_fr} onChange={(e) => set("name_fr", e.target.value)} required fullWidth />
                   <Grid container spacing={2}>
                     <Grid item xs={6}>

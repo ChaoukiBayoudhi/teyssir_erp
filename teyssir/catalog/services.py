@@ -61,10 +61,15 @@ def create_product(*, name_fr, name_ar="", category_id=None, tax_rate_id=None, s
             raise ValueError(f"Le code-barres {barcode} est déjà attribué à « {clash.product.name_fr} ».")
 
     if not is_book:
+        # Article form: either barcode OR reference — never both (cashier UX).
+        if barcode and reference:
+            raise ValueError(
+                "Choisissez soit un code-barres, soit une référence — pas les deux."
+            )
         if not reference:
             reference = barcode
         if not reference:
-            raise ValueError("La référence est obligatoire pour un article (fourniture).")
+            raise ValueError("Indiquez un code-barres ou une référence pour l'article.")
         if not _REFERENCE_RE.match(reference):
             raise ValueError("Référence invalide — utilisez des lettres, chiffres, ., _ ou - (ex. 1001, SAC-001).")
         taken = Product.objects.filter(Q(reference__iexact=reference) | Q(sku__iexact=reference)).exists()

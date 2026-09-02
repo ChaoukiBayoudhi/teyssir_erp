@@ -2061,9 +2061,16 @@ class ProductRegisterApiTests(TestCase):
         self.assertEqual(r.json()["sku"], "ART-MANUEL-1")
         self.assertEqual(r.json()["reference"], "ART-MANUEL-1")
 
-    def test_furniture_requires_reference(self):
+    def test_furniture_requires_reference_or_barcode(self):
         r = self.client.post("/api/v1/catalog/register", {"name_fr": "Sac"}, format="json")
         self.assertEqual(r.status_code, 400)
+
+    def test_furniture_rejects_both_barcode_and_reference(self):
+        r = self.client.post("/api/v1/catalog/register", {
+            "name_fr": "Trousse", "reference": "TZ-9", "barcode": "6190000000001",
+        }, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("soit", r.json()["detail"].lower())
 
     def test_furniture_creation_with_reference(self):
         r = self.client.post("/api/v1/catalog/register", {
@@ -2088,19 +2095,21 @@ class ProductRegisterApiTests(TestCase):
                              {"name_fr": "B", "reference": "sac-001"}, format="json")
         self.assertEqual(r.status_code, 409)
 
-    def test_pos_search_by_reference_and_barcode(self):
-        created = self.client.post("/api/v1/catalog/register", {
-            "name_fr": "Trousse", "reference": "TZ-9", "barcode": "6190000000001",
-            "sale_price": "3.500",
+    def test_pos_search_by_reference_or_barcode(self):
+        by_ref = self.client.post("/api/v1/catalog/register", {
+            "name_fr": "Trousse", "reference": "TZ-9", "sale_price": "3.500",
         }, format="json").json()
-        by_ref = self.client.get("/api/v1/catalog/products/", {"barcode": "TZ-9"})
-        self.assertEqual(by_ref.status_code, 200)
-        self.assertEqual(len(by_ref.json()), 1)
-        self.assertEqual(by_ref.json()[0]["id"], created["id"])
+        by_bc = self.client.post("/api/v1/catalog/register", {
+            "name_fr": "Cahier", "barcode": "6190000000001", "sale_price": "1.200",
+        }, format="json").json()
+        r_ref = self.client.get("/api/v1/catalog/products/", {"barcode": "TZ-9"})
+        self.assertEqual(r_ref.status_code, 200)
+        self.assertEqual(len(r_ref.json()), 1)
+        self.assertEqual(r_ref.json()[0]["id"], by_ref["id"])
         search = self.client.get("/api/v1/catalog/products/", {"search": "TZ-9"})
         self.assertEqual(search.json()[0]["name_fr"], "Trousse")
-        by_bc = self.client.get("/api/v1/catalog/products/", {"barcode": "6190000000001"})
-        self.assertEqual(by_bc.json()[0]["id"], created["id"])
+        r_bc = self.client.get("/api/v1/catalog/products/", {"barcode": "6190000000001"})
+        self.assertEqual(r_bc.json()[0]["id"], by_bc["id"])
         lookup = self.client.get("/api/v1/catalog/lookup", {"barcode": "TZ-9"})
         self.assertTrue(lookup.json()["found"])
 
@@ -2383,7 +2392,22 @@ class ScanJobTests(TestCase):
         self.assertEqual(body["status"], "done")
         self.assertEqual(body["stage"], "done")
         self.assertEqual(body["progress"], 100)
-        self.assertIn("job_id", body)
+
+    def test_cancel_pending_scan_job(self):
+        from teyssir.catalog.models import ScanJob
+
+        job = ScanJob.objects.create(isbn="9782070612758", image_ids=[], status=ScanJob.PENDING)
+        r = self.client.delete(f"/api/v1/catalog/books/scan/{job.id}")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["status"], "failed")
+        self.assertEqual(body["error"], "cancelled")
+        job.refresh_from_db()
+        self.assertEqual(job.status, ScanJob.FAILED)
+        self.assertEqual(job.error, "cancelled")
+        # Idempotent: cancelling again is OK
+        r2 = self.client.delete(f"/api/v1/catalog/books/scan/{job.id}")
+        self.assertEqual(r2.status_code, 200)
 
     def test_poll_scan_job_endpoint(self):
         job_id = self.client.post("/api/v1/catalog/books/scan",

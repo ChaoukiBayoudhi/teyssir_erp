@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from django.db.models import Sum
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from teyssir.billing.models import FiscalStampConfig
 from teyssir.catalog.models import Product, TaxRate
@@ -14,6 +14,7 @@ from teyssir.sales.models import Sale, SaleLine
 from teyssir.sales.services import finalize_sale
 
 
+@override_settings(APPLY_VAT_AND_TIMBRE=True)
 class GeneralLedgerTests(TestCase):
     def setUp(self):
         seed_chart()

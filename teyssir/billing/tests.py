@@ -73,9 +73,14 @@ class StoreScopedNumberingTests(TestCase):
 
 
 class StampTests(TestCase):
+    @override_settings(APPLY_VAT_AND_TIMBRE=True)
     def test_resolve_configured_stamp(self):
         FiscalStampConfig.objects.create(doc_type="FACTURE", amount=Decimal("1.000"))
         self.assertEqual(resolve_fiscal_stamp("FACTURE"), Decimal("1.000"))
 
     def test_unknown_doc_type_is_zero(self):
         self.assertEqual(resolve_fiscal_stamp("TICKET"), Decimal("0.000"))
+
+    def test_shop_default_ignores_configured_stamp(self):
+        FiscalStampConfig.objects.create(doc_type="FACTURE", amount=Decimal("1.000"))
+        self.assertEqual(resolve_fiscal_stamp("FACTURE"), Decimal("0.000"))

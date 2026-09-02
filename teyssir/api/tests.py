@@ -101,8 +101,8 @@ class ApiTests(TestCase):
         self.assertEqual(r.status_code, 201)
         data = r.json()
         self.assertTrue(data["invoice_number"].startswith("C1-"))
-        self.assertEqual(data["total"], "3.729")        # 2.550 + TVA7%(0.179) + timbre 1.000
-        self.assertEqual(data["total_display"], "3.73")  # 2-dp display
+        self.assertEqual(data["total"], "2.550")        # shop: HT only (no TVA/timbre)
+        self.assertEqual(data["total_display"], "2.55")  # 2-dp display
         self.assertIn("sale_id", data)
         self.assertIn("printed", data)
         self.assertTrue(data["receipt_url"].endswith(f"/receipt"))
@@ -124,13 +124,13 @@ class ApiTests(TestCase):
             "terminal": "C1", "payment_method": "CASH", "discount": "0.255",
             "lines": [{"product": str(self.product.id), "qty": "3", "discount": "0.255"}],
         }
-        # gross 2.550 - line 0.255 = 2.295; header 0.255 → HT 2.040; TVA 7% = 0.143; +timbre 1
+        # gross 2.550 - line 0.255 = 2.295; header 0.255 → HT 2.040; shop: no TVA/timbre
         r = self.client.post("/api/v1/pos/checkout", body, format="json")
         self.assertEqual(r.status_code, 201)
         data = r.json()
         self.assertEqual(data["subtotal"], "2.040")
-        self.assertEqual(data["tax_total"], "0.143")
-        self.assertEqual(data["total"], "3.183")
+        self.assertEqual(data["tax_total"], "0.000")
+        self.assertEqual(data["total"], "2.040")
 
     def test_checkout_denied_without_create_sale(self):
         plain = User.objects.create_user("auditor", password="pw-strong-123")

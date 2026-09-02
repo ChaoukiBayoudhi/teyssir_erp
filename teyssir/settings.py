@@ -276,6 +276,11 @@ MONEY_DISPLAY_DP = 2  # display 2 decimals
 
 # --- Store / fiscal identity (printed on receipts/factures, spec §13.5) ------
 STORE_MATRICULE_FISCAL = os.environ.get("TEYSSIR_MATRICULE_FISCAL", "")
+# Shop pricing: when false (default), POS/checkout/quotations ignore TVA + timbre —
+# totals = product prices after remises only. Set TEYSSIR_APPLY_VAT_AND_TIMBRE=1 to restore.
+APPLY_VAT_AND_TIMBRE = os.environ.get("TEYSSIR_APPLY_VAT_AND_TIMBRE", "0").strip().lower() in (
+    "1", "true", "yes", "on",
+)
 # Receipt printer target for this node: dummy | file:/path | tcp:host:port (spec §6)
 # Read at send time from TEYSSIR_PRINTER (client LAN IP — never hardcode a shop address).
 
