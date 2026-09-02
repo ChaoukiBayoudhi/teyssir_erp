@@ -3,11 +3,16 @@
     Never throws: if setup fails, the caller falls back to SQLite.
 
     Usage:
-        .\deploy\windows\Install-Postgres.ps1 -Db teyssir -User teyssir -Password <generated>
+        .\deploy\windows\Install-Postgres.ps1 -DatabaseName teyssir -User teyssir -Password <generated>
+
+    Note: do NOT use a parameter named -Db (or Alias Db). With [CmdletBinding()] it
+    conflicts with the common -Debug parameter on Windows PowerShell 5.1.
 #>
 [CmdletBinding()]
 param(
-    [string]$Db = "teyssir",
+    # Application database name (was -Db; renamed to avoid -Debug conflict).
+    [Alias('Database')]
+    [string]$DatabaseName = "teyssir",
     [string]$User = "teyssir",
     [string]$Password = "",
     [string]$Port = "5432",
@@ -101,30 +106,30 @@ function Test-AppLogin {
     $psql = Get-PsqlExe
     if (-not $psql -or -not $Password) { return $false }
     $env:PGPASSWORD = $Password
-    & $psql -U $User -h $HostName -p $Port -d $Db -v ON_ERROR_STOP=1 -c "SELECT 1" 2>&1 | Out-Null
+    & $psql -U $User -h $HostName -p $Port -d $DatabaseName -v ON_ERROR_STOP=1 -c "SELECT 1" 2>&1 | Out-Null
     $ok = ($LASTEXITCODE -eq 0)
     Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
     return $ok
 }
 
 function Remove-TeyssirDatabase {
-    $safeDb = $Db.Replace("'", "''")
-    Write-Pg ("Terminating connections to database $Db ...") "Yellow"
+    $safeDb = $DatabaseName.Replace("'", "''")
+    Write-Pg ("Terminating connections to database $DatabaseName ...") "Yellow"
     Invoke-PsqlAdmin @"
 SELECT pg_terminate_backend(pid)
 FROM pg_stat_activity
 WHERE datname = '$safeDb' AND pid <> pg_backend_pid();
 "@
-    Write-Pg ("Dropping database $Db ...") "Yellow"
+    Write-Pg ("Dropping database $DatabaseName ...") "Yellow"
     Invoke-PsqlAdmin "DROP DATABASE IF EXISTS $safeDb;"
-    Write-Pg "Database $Db dropped." "Green"
+    Write-Pg "Database $DatabaseName dropped." "Green"
 }
 
 function New-TeyssirDatabase {
     if (-not $Password) { throw "POSTGRES_PASSWORD is empty" }
     $safePass = $Password.Replace("'", "''")
     $safeUser = $User.Replace("'", "''")
-    $safeDb = $Db.Replace("'", "''")
+    $safeDb = $DatabaseName.Replace("'", "''")
     Write-Pg "Creating role and database (UTF-8) ..."
     Invoke-PsqlAdmin @"
 DO `$`$
@@ -142,7 +147,7 @@ END
         Invoke-PsqlAdmin "CREATE DATABASE $safeDb OWNER $safeUser ENCODING 'UTF8' TEMPLATE template0 LC_COLLATE 'C' LC_CTYPE 'C';"
     }
     Invoke-PsqlAdmin "GRANT ALL PRIVILEGES ON DATABASE $safeDb TO $safeUser;"
-    Write-Pg "Database $Db ready (owner $User)." "Green"
+    Write-Pg "Database $DatabaseName ready (owner $User)." "Green"
 }
 
 try {

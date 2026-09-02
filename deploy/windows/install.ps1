@@ -217,8 +217,45 @@ function Install-NodeIfNeeded {
 }
 
 function Invoke-Py([string[]]$PyArgs) {
-    & $script:VenvPython @PyArgs
-    return $LASTEXITCODE
+    # Continue on native stderr so Django/pip noise does not abort under -ErrorAction Stop.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        Write-Host ("  > python " + ($PyArgs -join " ")) -ForegroundColor DarkGray
+        & $script:VenvPython @PyArgs
+        $code = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $prevEap
+    }
+    if ($null -eq $code) { $code = 1 }
+    if ($code -ne 0) {
+        Write-Host ("  ! python exited $code -- " + ($PyArgs -join " ")) -ForegroundColor Red
+    }
+    return [int]$code
+}
+
+function Set-DbBackend([string]$Backend) {
+    Set-DotEnvValue $envPath "TEYSSIR_DB" $Backend
+    # Process env wins over dotenv (load_dotenv does not override). Keep them aligned.
+    $env:TEYSSIR_DB = $Backend
+}
+
+function Remove-HubSqliteFiles {
+    foreach ($sqliteName in @("teyssir_hub.sqlite3", "db.sqlite3")) {
+        $sqlitePath = Join-Path $Root $sqliteName
+        foreach ($p in @($sqlitePath, ($sqlitePath + "-wal"), ($sqlitePath + "-shm"))) {
+            if (Test-Path -LiteralPath $p) {
+                try {
+                    Remove-Item -LiteralPath $p -Force -ErrorAction Stop
+                    Write-Host ("  Removed stale SQLite file: " + $p) -ForegroundColor Yellow
+                }
+                catch {
+                    Write-Warning ("Could not remove $p : " + $_.Exception.Message)
+                }
+            }
+        }
+    }
 }
 
 # --- elevation hint ----------------------------------------------------------
@@ -373,13 +410,13 @@ if ($Role -eq "hub" -and -not $SkipPostgres) {
     $admin = $PostgresSuperPassword
     if (-not $admin) { $admin = $env:POSTGRES_ADMIN_PASSWORD }
     try {
-        & $pgScript -Db teyssir -User teyssir -Password $pgPassForDb -SuperPassword $admin
+        & $pgScript -DatabaseName teyssir -User teyssir -Password $pgPassForDb -SuperPassword $admin
     }
     catch {
         Write-Warning ("PostgreSQL setup skipped: " + $_.Exception.Message)
     }
     if ($global:TeyssirPostgresReady) {
-        Set-DotEnvValue $envPath "TEYSSIR_DB" "postgres"
+        Set-DbBackend "postgres"
         Set-DotEnvValue $envPath "POSTGRES_DB" "teyssir"
         Set-DotEnvValue $envPath "POSTGRES_USER" "teyssir"
         Set-DotEnvValue $envPath "POSTGRES_PASSWORD" $pgPassForDb
@@ -388,16 +425,16 @@ if ($Role -eq "hub" -and -not $SkipPostgres) {
         Write-Host "  Hub database: PostgreSQL (teyssir)." -ForegroundColor Green
     }
     else {
-        Set-DotEnvValue $envPath "TEYSSIR_DB" "sqlite"
+        Set-DbBackend "sqlite"
         Write-Warning "PostgreSQL not ready -- hub will use SQLite (teyssir_hub.sqlite3). See docs/POSTGRESQL-SETUP.md"
     }
 }
 elseif ($Role -eq "hub" -and $SkipPostgres) {
-    Set-DotEnvValue $envPath "TEYSSIR_DB" "sqlite"
+    Set-DbBackend "sqlite"
     Write-Host "Hub: -SkipPostgres -- using SQLite."
 }
 elseif ($Role -eq "till") {
-    Set-DotEnvValue $envPath "TEYSSIR_DB" "sqlite"
+    Set-DbBackend "sqlite"
     Write-Host "Till node: SQLite (offline). PostgreSQL is not installed on tills."
 }
 
@@ -421,27 +458,46 @@ if ($Role -eq "hub" -and -not $SkipFirewall) {
 # 5) Database + static ------------------------------------------------------
 Write-Host "Setting up the database ..."
 function Invoke-DjangoSetup {
-    $migrate = Invoke-Py @("manage.py", "migrate", "--noinput")
-    if ($migrate -ne 0) { return $false }
-    $rbac = Invoke-Py @("manage.py", "seed_rbac")
-    if ($rbac -ne 0) { return $false }
-    $fiscal = Invoke-Py @("manage.py", "seed_fiscal")
-    if ($fiscal -ne 0) { return $false }
+    $steps = @(
+        @{ Name = "migrate --noinput"; Args = @("manage.py", "migrate", "--noinput") },
+        @{ Name = "seed_rbac"; Args = @("manage.py", "seed_rbac") },
+        @{ Name = "seed_fiscal"; Args = @("manage.py", "seed_fiscal") }
+    )
+    foreach ($step in $steps) {
+        $code = Invoke-Py -PyArgs ([string[]]$step.Args)
+        if ($code -ne 0) {
+            Write-Warning ("Database step failed: manage.py " + $step.Name + " (exit $code). Django output is above.")
+            return $false
+        }
+    }
     Invoke-Py @("manage.py", "collectstatic", "--noinput") | Out-Null
     return $true
 }
 
+$dbBackendNow = (Get-DotEnvValue $envPath "TEYSSIR_DB")
+if (-not $dbBackendNow) { $dbBackendNow = $env:TEYSSIR_DB }
 if (-not (Invoke-DjangoSetup)) {
-    if ($Role -eq "hub" -and ((Get-DotEnvValue $envPath "TEYSSIR_DB") -eq "postgres")) {
+    $hint = "Re-run the failing step manually for full traceback: .\.venv\Scripts\python.exe manage.py migrate --noinput"
+    if ($Role -eq "hub" -and ($dbBackendNow -match "^(postgres|postgresql|pg)$")) {
         Write-Warning "PostgreSQL migrate/seed failed -- falling back to SQLite so the shop can still open."
-        Set-DotEnvValue $envPath "TEYSSIR_DB" "sqlite"
+        Set-DbBackend "sqlite"
         $global:TeyssirPostgresReady = $false
+        Remove-HubSqliteFiles
         if (-not (Invoke-DjangoSetup)) {
-            throw "Database setup failed on SQLite as well. See the messages above."
+            throw ("Database setup failed on SQLite as well. " + $hint)
+        }
+    }
+    elseif ($Role -eq "hub") {
+        # Already on SQLite (Postgres soft-fail earlier) -- wipe stale DB and retry once.
+        Write-Warning "SQLite migrate/seed failed -- removing hub SQLite files and retrying once."
+        Remove-HubSqliteFiles
+        Set-DbBackend "sqlite"
+        if (-not (Invoke-DjangoSetup)) {
+            throw ("Database setup failed (migrate / seed_rbac / seed_fiscal). " + $hint)
         }
     }
     else {
-        throw "Database setup failed (migrate / seed_rbac / seed_fiscal). See the messages above."
+        throw ("Database setup failed (migrate / seed_rbac / seed_fiscal). " + $hint)
     }
 }
 

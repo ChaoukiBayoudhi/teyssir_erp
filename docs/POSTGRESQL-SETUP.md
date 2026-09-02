@@ -28,6 +28,10 @@ Flags:
 | `-PostgresSuperPassword <pwd>` | Existing Postgres superuser password (`postgres`) |
 | env `POSTGRES_ADMIN_PASSWORD` | Same as `-PostgresSuperPassword` |
 
+`Install-Postgres.ps1` uses **`-DatabaseName`** (alias `-Database`) for the app DB name.
+Do **not** pass `-Db` — on Windows PowerShell 5.1 it conflicts with common parameter `-Debug`
+and aborts Postgres setup.
+
 Re-run with the superuser password if PostgreSQL was already installed:
 
 ```powershell

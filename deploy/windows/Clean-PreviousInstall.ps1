@@ -203,7 +203,7 @@ if ($envRole -eq "hub" -and $envDbBackend -match "^(postgres|postgresql|pg)$") {
     elseif (Test-Path $pgScript) {
         Write-CleanLog ("  PostgreSQL : DROP + recreation base '{0}' ..." -f $pgDb) "Yellow"
         try {
-            & $pgScript -Db $pgDb -User $pgUser -Password $pgPass -SuperPassword $superPass -ResetDatabase
+            & $pgScript -DatabaseName $pgDb -User $pgUser -Password $pgPass -SuperPassword $superPass -ResetDatabase
             if ($global:TeyssirPostgresReady) {
                 $pgResetOk = $true
                 Write-CleanLog "  PostgreSQL : base réinitialisée (vide, prête pour migrate)." "Green"

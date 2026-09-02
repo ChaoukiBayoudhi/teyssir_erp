@@ -632,6 +632,7 @@ Donnez à chaque magasin un `TEYSSIR_STORE_CODE` (S1, S2…). Sur chaque Hub :
 |----------|----------|
 | **Port 8000 déjà utilisé** / page ne charge pas | Un seul processus doit écouter : `nssm stop TeyssirBackend` **ou** fermez `start-teyssir.bat` — **pas les deux**. Vérifiez : `Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue`. Puis `nssm start TeyssirBackend`. |
 | **PostgreSQL → SQLite (soft-fail)** | Message `[PG]` dans la console : le Hub tourne en `teyssir_hub.sqlite3`. Relancez en admin, ou `$env:POSTGRES_ADMIN_PASSWORD="…"` puis `install_all.ps1 -Role hub`. Guide : [POSTGRESQL-SETUP.md](POSTGRESQL-SETUP.md). |
+| **« Db » en conflit avec « Debug »** / Postgres skipped puis migrate échoue | Ancien bug `-Db` vs `-Debug` (Windows PowerShell). **git pull** le tip feature, puis `install_all.ps1 -Role hub -FreshInstall`. `Install-Postgres.ps1` utilise `-DatabaseName` (jamais `-Db`). |
 | **Tesseract : langues manquantes** (arabe / français) | Réinstallez UB Mannheim en cochant **ara**, **fra**, **eng**. Contrôle : `/health/` → `tesseract.langs`. |
 | **OCR vide** sous le service Windows | PATH minimal NSSM : vérifiez `TEYSSIR_TESSERACT_CMD` dans `.env`, puis `nssm restart TeyssirBackend`. Menu → **Diagnostics**. |
 | **Imprimante / Discover** | Relancez `.\deploy\windows\Discover-Printer.ps1` ; l'imprimante doit être sur le **même LAN**, port **9100**. Si rien → `dummy` (normal). Pas d'IP inventée. |
