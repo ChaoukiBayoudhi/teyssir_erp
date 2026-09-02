@@ -1,4 +1,4 @@
-﻿<#
+<#
     Teyssir -- per-caisse (till) setup wrapper (Phase 4)
     ----------------------------------------------------
     Thin, idempotent entry for one till terminal. Always Role=till.
@@ -56,6 +56,49 @@ $ErrorActionPreference = "Stop"
 
 function Write-Caisse([string]$Message, [string]$Color = "Gray") {
     Write-Host $Message -ForegroundColor $Color
+}
+
+# See install_all.ps1 -- NativeCommandError.Message is often only the first stderr line.
+function Get-TeyssirErrorText {
+    param($ErrorRecord)
+    if ($null -eq $ErrorRecord) { return "(no error record)" }
+    $parts = New-Object System.Collections.Generic.List[string]
+    try {
+        $asString = ($ErrorRecord | Out-String).Trim()
+        if ($asString) { [void]$parts.Add($asString) }
+    }
+    catch { }
+    try {
+        if ($ErrorRecord.Exception) {
+            $ex = $ErrorRecord.Exception.ToString()
+            if ($ex -and ($parts -notcontains $ex)) { [void]$parts.Add($ex) }
+        }
+    }
+    catch { }
+    try {
+        if ($ErrorRecord.ScriptStackTrace) {
+            [void]$parts.Add(("PS ScriptStackTrace:`n{0}" -f $ErrorRecord.ScriptStackTrace))
+        }
+    }
+    catch { }
+    try {
+        $native = @()
+        foreach ($e in @($global:Error | Select-Object -First 50)) {
+            $native += ("{0}" -f $e)
+        }
+        if ($native.Count -gt 0) {
+            [void]$parts.Add(("Recent error stream ({0} records):`n{1}" -f $native.Count, ($native -join "`n")))
+        }
+    }
+    catch { }
+    $text = ($parts -join "`n---`n").Trim()
+    if (-not $text) {
+        try { $text = [string]$ErrorRecord.Exception.Message } catch { $text = "$ErrorRecord" }
+    }
+    if ($text.Length -gt 16000) {
+        $text = $text.Substring(0, 16000) + "`n... (truncated at 16000 chars)"
+    }
+    return $text
 }
 
 function Get-EnvOrEmpty([string]$Name) {
@@ -207,7 +250,11 @@ try {
     $exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
 }
 catch {
-    Write-Caisse ("setup_app.ps1 failed: {0}" -f $_.Exception.Message) "Red"
+    $detail = Get-TeyssirErrorText $_
+    Write-Caisse "setup_app.ps1 failed -- full error follows:" "Red"
+    foreach ($line in ($detail -split "`r?`n")) {
+        Write-Caisse $line "Red"
+    }
     $exitCode = 1
 }
 

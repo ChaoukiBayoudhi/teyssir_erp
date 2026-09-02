@@ -1,4 +1,4 @@
-﻿<#
+<#
     Teyssir - Windows installer
     ----------------------------
     Prefer an *elevated* PowerShell (Run as Administrator) inside the project folder
@@ -59,11 +59,11 @@ Write-Host "Project: $Root"
 if ($FreshInstall) {
     $cleanScript = Join-Path $PSScriptRoot "Clean-PreviousInstall.ps1"
     if (-not (Test-Path $cleanScript)) {
-        Write-Host "ERREUR -- Clean-PreviousInstall.ps1 manquant ; impossible d'exécuter -FreshInstall." -ForegroundColor Red
+        Write-Host "ERROR -- Clean-PreviousInstall.ps1 missing; cannot run -FreshInstall." -ForegroundColor Red
         exit 3
     }
     $removeVenv = -not $KeepVenv
-    Write-Host "==== FreshInstall : effacement de l'installation Teyssir précédente (DB, .env, service) ====" -ForegroundColor Yellow
+    Write-Host "==== FreshInstall: wiping previous Teyssir install (DB, .env, service) ====" -ForegroundColor Yellow
     $cleanArgs = @{
         FreshInstall = $true
         Role         = $Role
@@ -77,15 +77,21 @@ if ($FreshInstall) {
         & $cleanScript @cleanArgs
         $cleanExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
         if ($cleanExit -ne 0) {
-            Write-Host ("Clean-PreviousInstall a échoué (exit {0}). Installation annulée." -f $cleanExit) -ForegroundColor Red
+            Write-Host ("Clean-PreviousInstall failed (exit {0}). Install aborted." -f $cleanExit) -ForegroundColor Red
             exit $cleanExit
         }
     }
     catch {
-        Write-Host ("Clean-PreviousInstall a échoué : {0}" -f $_.Exception.Message) -ForegroundColor Red
+        $cleanMsg = $_.Exception.Message
+        try {
+            $more = ($global:Error | Select-Object -First 20 | ForEach-Object { "$_" }) -join "`n"
+            if ($more) { $cleanMsg = $cleanMsg + "`n" + $more }
+        }
+        catch { }
+        Write-Host ("Clean-PreviousInstall failed: {0}" -f $cleanMsg) -ForegroundColor Red
         exit 3
     }
-    Write-Host "FreshInstall : effacement terminé -- poursuite de l'installation normale." -ForegroundColor Green
+    Write-Host "FreshInstall: wipe done -- continuing with normal install." -ForegroundColor Green
 }
 
 function Test-IsAdmin {
@@ -106,9 +112,11 @@ function New-Key([int]$n) {
 }
 
 function Set-DotEnvValue([string]$Path, [string]$Key, [string]$Value) {
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     $lines = @()
     if (Test-Path $Path) {
-        $lines = [System.IO.File]::ReadAllLines($Path)
+        # Explicit UTF-8 (no BOM): PS 5.1 / .NET Framework ReadAllLines() can use ANSI.
+        $lines = [System.IO.File]::ReadAllLines($Path, $utf8NoBom)
     }
     $found = $false
     $out = New-Object System.Collections.Generic.List[string]
@@ -123,12 +131,15 @@ function Set-DotEnvValue([string]$Path, [string]$Key, [string]$Value) {
     [System.IO.File]::WriteAllText(
         $Path,
         (($out -join "`n") + "`n"),
-        (New-Object System.Text.UTF8Encoding($false)))
+        $utf8NoBom)
 }
 
 function Get-DotEnvValue([string]$Path, [string]$Key) {
     if (-not (Test-Path $Path)) { return $null }
-    $line = [System.IO.File]::ReadAllLines($Path) | Where-Object { $_ -match ("^\s*" + [regex]::Escape($Key) + "=") } | Select-Object -First 1
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $line = [System.IO.File]::ReadAllLines($Path, $utf8NoBom) |
+        Where-Object { $_ -match ("^\s*" + [regex]::Escape($Key) + "=") } |
+        Select-Object -First 1
     if (-not $line) { return $null }
     return $line.Substring($line.IndexOf("=") + 1)
 }
@@ -244,6 +255,7 @@ function Invoke-Py([string[]]$PyArgs) {
     foreach ($line in $lines) {
         Write-Host $line
     }
+    $script:LastPyFull = ($lines -join "`n")
     if ($lines.Count -gt 8) {
         $script:LastPyTail = @($lines[-8..-1])
     }
@@ -255,6 +267,48 @@ function Invoke-Py([string[]]$PyArgs) {
         Write-Host ("  ! python exited $exitCode -- " + ($PyArgs -join " ")) -ForegroundColor Red
     }
     # Emit ONLY the numeric exit code on the success stream.
+    return $exitCode
+}
+
+function Invoke-NativePy {
+    # Run any python.exe with Continue + 2>&1 capture (venv create, pip, etc.).
+    param(
+        [Parameter(Mandatory = $true)][string]$Exe,
+        [Parameter(Mandatory = $true)][string[]]$PyArgs,
+        [string]$Label = "python"
+    )
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $output = $null
+    $code = 1
+    try {
+        Write-Host ("  > {0} {1}" -f $Label, ($PyArgs -join " ")) -ForegroundColor DarkGray
+        $output = & $Exe @PyArgs 2>&1
+        $code = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $prevEap
+    }
+    if ($null -eq $code) { $code = 1 }
+    $exitCode = 1
+    try { $exitCode = [int]$code } catch { $exitCode = 1 }
+    $lines = @()
+    if ($null -ne $output) {
+        $lines = @($output | ForEach-Object { "$_" })
+    }
+    foreach ($line in $lines) {
+        Write-Host $line
+    }
+    $script:LastPyFull = ($lines -join "`n")
+    if ($lines.Count -gt 8) {
+        $script:LastPyTail = @($lines[-8..-1])
+    }
+    else {
+        $script:LastPyTail = @($lines)
+    }
+    if ($exitCode -ne 0) {
+        Write-Host ("  ! {0} exited {1} -- {2}" -f $Label, $exitCode, ($PyArgs -join " ")) -ForegroundColor Red
+    }
     return $exitCode
 }
 
@@ -293,15 +347,27 @@ $script:SystemPython = Install-PythonIfMissing
 # 2) Virtual environment + dependencies -------------------------------------
 if (-not (Test-Path ".venv\Scripts\python.exe")) {
     Write-Host "Creating virtual environment (.venv) ..."
-    & $script:SystemPython -m venv .venv
-    if ($LASTEXITCODE -ne 0) { throw "python -m venv failed." }
+    $venvCode = Invoke-NativePy -Exe $script:SystemPython -PyArgs @("-m", "venv", ".venv") -Label "python"
+    if ($venvCode -ne 0) {
+        $hint = ""
+        if ($script:LastPyFull) { $hint = "`n" + $script:LastPyFull }
+        throw ("python -m venv failed." + $hint)
+    }
 }
 $script:VenvPython = (Resolve-Path ".venv\Scripts\python.exe").Path
 Write-Host "Installing Python dependencies ..."
-& $script:VenvPython -m pip install --upgrade pip
-if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed." }
-& $script:VenvPython -m pip install -r requirements.txt
-if ($LASTEXITCODE -ne 0) { throw "pip install -r requirements.txt failed. Check the messages above (network / Microsoft C++ Build Tools)." }
+$pipUp = Invoke-NativePy -Exe $script:VenvPython -PyArgs @("-m", "pip", "install", "--upgrade", "pip") -Label "pip"
+if ($pipUp -ne 0) {
+    $hint = ""
+    if ($script:LastPyFull) { $hint = "`n" + $script:LastPyFull }
+    throw ("pip upgrade failed." + $hint)
+}
+$pipReq = Invoke-NativePy -Exe $script:VenvPython -PyArgs @("-m", "pip", "install", "-r", "requirements.txt") -Label "pip"
+if ($pipReq -ne 0) {
+    $hint = ""
+    if ($script:LastPyFull) { $hint = "`n" + $script:LastPyFull }
+    throw ("pip install -r requirements.txt failed. Check the messages above (network / Microsoft C++ Build Tools)." + $hint)
+}
 
 # 3) Front-end build (only if not already built) ----------------------------
 Install-NodeIfNeeded
@@ -508,13 +574,29 @@ function Invoke-DjangoSetup {
             return $false
         }
     }
-    Invoke-Py @("manage.py", "collectstatic", "--noinput") | Out-Null
+    $csRaw = Invoke-Py -PyArgs @("manage.py", "collectstatic", "--noinput")
+    if ($csRaw -is [System.Array]) { $csCode = [int](@($csRaw)[-1]) }
+    else { try { $csCode = [int]$csRaw } catch { $csCode = 1 } }
+    if ($csCode -ne 0) {
+        Write-Warning ("collectstatic exited {0} (non-fatal). Last lines: {1}" -f $csCode, (($script:LastPyTail | Select-Object -Last 5) -join " | "))
+    }
+    # Soft django check -- surfaces settings/DB issues without aborting install.
+    $chkRaw = Invoke-Py -PyArgs @("manage.py", "check")
+    if ($chkRaw -is [System.Array]) { $chkCode = [int](@($chkRaw)[-1]) }
+    else { try { $chkCode = [int]$chkRaw } catch { $chkCode = 1 } }
+    if ($chkCode -ne 0) {
+        Write-Warning ("manage.py check exited {0} (non-fatal). Last lines: {1}" -f $chkCode, (($script:LastPyTail | Select-Object -Last 5) -join " | "))
+    }
     return $true
 }
 
 $dbBackendNow = (Get-DotEnvValue $envPath "TEYSSIR_DB")
 if (-not $dbBackendNow) { $dbBackendNow = $env:TEYSSIR_DB }
 if (-not (Invoke-DjangoSetup)) {
+    $pyDump = ""
+    if ($script:LastPyFull) {
+        $pyDump = "`n---- python output ----`n" + $script:LastPyFull + "`n---- end ----"
+    }
     $hint = "Re-run the failing step manually for full traceback: .\.venv\Scripts\python.exe manage.py migrate --noinput"
     if ($Role -eq "hub" -and ($dbBackendNow -match "^(postgres|postgresql|pg)$")) {
         Write-Warning "PostgreSQL migrate/seed failed -- falling back to SQLite so the shop can still open."
@@ -522,7 +604,10 @@ if (-not (Invoke-DjangoSetup)) {
         $global:TeyssirPostgresReady = $false
         Remove-HubSqliteFiles
         if (-not (Invoke-DjangoSetup)) {
-            throw ("Database setup failed on SQLite as well. " + $hint)
+            if ($script:LastPyFull) {
+                $pyDump = "`n---- python output ----`n" + $script:LastPyFull + "`n---- end ----"
+            }
+            throw ("Database setup failed on SQLite as well. " + $hint + $pyDump)
         }
     }
     elseif ($Role -eq "hub") {
@@ -531,11 +616,14 @@ if (-not (Invoke-DjangoSetup)) {
         Remove-HubSqliteFiles
         Set-DbBackend "sqlite"
         if (-not (Invoke-DjangoSetup)) {
-            throw ("Database setup failed (migrate / seed_rbac / seed_fiscal). " + $hint)
+            if ($script:LastPyFull) {
+                $pyDump = "`n---- python output ----`n" + $script:LastPyFull + "`n---- end ----"
+            }
+            throw ("Database setup failed (migrate / seed_rbac / seed_fiscal). " + $hint + $pyDump)
         }
     }
     else {
-        throw ("Database setup failed (migrate / seed_rbac / seed_fiscal). " + $hint)
+        throw ("Database setup failed (migrate / seed_rbac / seed_fiscal). " + $hint + $pyDump)
     }
 }
 
@@ -647,9 +735,19 @@ from django.contrib.auth import get_user_model
 print("1" if get_user_model().objects.filter(is_superuser=True).exists() else "0")
 '@
 $probeFile = Join-Path $env:TEMP "teyssir_admin_probe.py"
-[System.IO.File]::WriteAllText($probeFile, $probe)
-$probeOut = & $script:VenvPython $probeFile 2>$null
-if ($probeOut -match "1") { $hasAdmin = $true }
+# UTF-8 no BOM -- avoids Python syntax issues on some Windows code pages.
+[System.IO.File]::WriteAllText($probeFile, $probe, (New-Object System.Text.UTF8Encoding($false)))
+$probeCode = Invoke-Py -PyArgs @($probeFile)
+$probeOut = ""
+if ($script:LastPyFull) {
+    $probeOut = ($script:LastPyFull -split "`r?`n" | Where-Object { $_ -match '^[01]$' } | Select-Object -Last 1)
+}
+if ($probeCode -ne 0) {
+    Write-Warning ("Admin probe failed (exit {0}) -- will try createsuperuser. Output: {1}" -f $probeCode, (($script:LastPyTail | Select-Object -Last 5) -join " | "))
+}
+elseif ($probeOut -match "1") {
+    $hasAdmin = $true
+}
 
 if ($SkipAdmin) {
     Write-Host "Skipping administrator creation (-SkipAdmin)."
@@ -665,17 +763,34 @@ else {
     if ($userName -and $userPass) {
         Write-Host "Creating administrator '$userName' (non-interactive) ..."
         $env:DJANGO_SUPERUSER_PASSWORD = $userPass
-        & $script:VenvPython manage.py createsuperuser --noinput --username $userName --email "owner@localhost"
+        $suCode = Invoke-Py -PyArgs @("manage.py", "createsuperuser", "--noinput", "--username", $userName, "--email", "owner@localhost")
         Remove-Item Env:DJANGO_SUPERUSER_PASSWORD -ErrorAction SilentlyContinue
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Non-interactive createsuperuser failed. You can run: .\.venv\Scripts\python.exe manage.py createsuperuser"
+        if ($suCode -ne 0) {
+            Write-Warning ("Non-interactive createsuperuser failed (exit {0}). You can run: .\.venv\Scripts\python.exe manage.py createsuperuser" -f $suCode)
+            if ($script:LastPyFull) {
+                Write-Warning ("createsuperuser output:`n" + $script:LastPyFull)
+            }
         }
     }
     else {
         Write-Host ""
         Write-Host "Create the first administrator account (owner):" -ForegroundColor Green
         Write-Host "  (Tip: set -AdminUser / -AdminPassword or TEYSSIR_ADMIN_USER / TEYSSIR_ADMIN_PASSWORD to skip the prompt.)"
-        & $script:VenvPython manage.py createsuperuser
+        # Interactive: do not redirect streams (prompts need a real console).
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & $script:VenvPython manage.py createsuperuser
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "Interactive createsuperuser did not complete. You can run: .\.venv\Scripts\python.exe manage.py createsuperuser"
+            }
+        }
+        catch {
+            Write-Warning ("createsuperuser skipped: " + $_.Exception.Message)
+        }
+        finally {
+            $ErrorActionPreference = $prevEap
+        }
     }
 }
 

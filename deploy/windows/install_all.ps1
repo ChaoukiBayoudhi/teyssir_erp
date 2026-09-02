@@ -1,4 +1,4 @@
-﻿<#
+<#
     Teyssir -- preferred Windows entry (Phase 2)
     --------------------------------------------
     Logging, careful auto-elevate (hub), host deps via winget, then install.ps1.
@@ -107,6 +107,53 @@ function Write-InstallLog([string]$Message, [string]$Color = "Gray") {
         }
         catch { }
     }
+}
+
+# NativeCommandError.Message is often only the FIRST stderr line (e.g. Python
+# "Traceback (most recent call last):"). Dump Out-String + recent $Error so the
+# full traceback reaches the log and console.
+function Get-TeyssirErrorText {
+    param($ErrorRecord)
+    if ($null -eq $ErrorRecord) { return "(no error record)" }
+    $parts = New-Object System.Collections.Generic.List[string]
+    try {
+        $asString = ($ErrorRecord | Out-String).Trim()
+        if ($asString) { [void]$parts.Add($asString) }
+    }
+    catch { }
+    try {
+        if ($ErrorRecord.Exception) {
+            $ex = $ErrorRecord.Exception.ToString()
+            if ($ex -and ($parts -notcontains $ex)) { [void]$parts.Add($ex) }
+        }
+    }
+    catch { }
+    try {
+        if ($ErrorRecord.ScriptStackTrace) {
+            [void]$parts.Add(("PS ScriptStackTrace:`n{0}" -f $ErrorRecord.ScriptStackTrace))
+        }
+    }
+    catch { }
+    try {
+        # Python tracebacks often arrive as one ErrorRecord per stderr line; the
+        # terminating record is only line 1. Reconstruct from the error stream.
+        $native = @()
+        foreach ($e in @($global:Error | Select-Object -First 50)) {
+            $native += ("{0}" -f $e)
+        }
+        if ($native.Count -gt 0) {
+            [void]$parts.Add(("Recent error stream ({0} records):`n{1}" -f $native.Count, ($native -join "`n")))
+        }
+    }
+    catch { }
+    $text = ($parts -join "`n---`n").Trim()
+    if (-not $text) {
+        try { $text = [string]$ErrorRecord.Exception.Message } catch { $text = "$ErrorRecord" }
+    }
+    if ($text.Length -gt 16000) {
+        $text = $text.Substring(0, 16000) + "`n... (truncated at 16000 chars)"
+    }
+    return $text
 }
 
 # --- logging ----------------------------------------------------------------
@@ -235,7 +282,11 @@ try {
     $exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
 }
 catch {
-    Write-InstallLog ("install.ps1 failed: {0}" -f $_.Exception.Message) "Red"
+    $detail = Get-TeyssirErrorText $_
+    Write-InstallLog "install.ps1 failed -- full error follows:" "Red"
+    foreach ($line in ($detail -split "`r?`n")) {
+        Write-InstallLog $line "Red"
+    }
     $exitCode = 1
 }
 
