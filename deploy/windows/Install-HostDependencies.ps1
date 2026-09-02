@@ -1,5 +1,5 @@
-<#
-    Teyssir — host dependency installer / verifier (Windows).
+﻿<#
+    Teyssir -- host dependency installer / verifier (Windows).
     Idempotent: skips packages already present and usable.
     Soft-fails optional tools; never installs Redis.
     Called by install_all.ps1 (and safe to run alone).
@@ -57,7 +57,7 @@ function Invoke-WingetInstall {
         [ValidateSet("machine", "user", "")] [string]$Scope = ""
     )
     if (-not (Test-Winget)) {
-        Write-Dep "winget unavailable — cannot install $Id" "Warn"
+        Write-Dep "winget unavailable -- cannot install $Id" "Warn"
         return $false
     }
     $wingetArgs = @(
@@ -130,7 +130,7 @@ function Install-PythonHost {
         $global:TeyssirPythonExe = $exe
         return $exe
     }
-    Write-Dep "Python 3.11+ missing — installing Python.Python.3.12 via winget ..." "Warn"
+    Write-Dep "Python 3.11+ missing -- installing Python.Python.3.12 via winget ..." "Warn"
     Invoke-WingetInstall -Id "Python.Python.3.12" -Scope "machine" | Out-Null
     Refresh-Path
     $exe = Get-PythonExe
@@ -164,7 +164,7 @@ function Install-GitHost {
         $global:TeyssirGitReady = $true
         return
     }
-    Write-Dep "Git not found — optional install via winget (ZIP path still works without it)." "Warn"
+    Write-Dep "Git not found -- optional install via winget (ZIP path still works without it)." "Warn"
     Invoke-WingetInstall -Id "Git.Git" | Out-Null
     Refresh-Path
     $git = Get-Command git -ErrorAction SilentlyContinue
@@ -173,7 +173,7 @@ function Install-GitHost {
         $global:TeyssirGitReady = $true
     }
     else {
-        Write-Dep "Git still missing — OK for ZIP deployments; clone via GitHub Desktop or install later." "Warn"
+        Write-Dep "Git still missing -- OK for ZIP deployments; clone via GitHub Desktop or install later." "Warn"
         $global:TeyssirGitReady = $false
     }
 }
@@ -192,11 +192,11 @@ function Install-NodeHost {
         return
     }
     if ($distOk -and -not $ForceNode) {
-        Write-Dep "Node.js not found — skipped (frontend\dist already present)." "Ok"
+        Write-Dep "Node.js not found -- skipped (frontend\dist already present)." "Ok"
         $global:TeyssirNodeReady = $false
         return
     }
-    Write-Dep "Node.js LTS missing and frontend\dist absent — installing OpenJS.NodeJS.LTS ..." "Warn"
+    Write-Dep "Node.js LTS missing and frontend\dist absent -- installing OpenJS.NodeJS.LTS ..." "Warn"
     Invoke-WingetInstall -Id "OpenJS.NodeJS.LTS" | Out-Null
     Refresh-Path
     $npm = Get-Command npm -ErrorAction SilentlyContinue
@@ -205,7 +205,7 @@ function Install-NodeHost {
         $global:TeyssirNodeReady = $true
     }
     else {
-        Write-Dep "Node.js still missing — copy frontend\dist from a build PC, or install Node LTS manually." "Warn"
+        Write-Dep "Node.js still missing -- copy frontend\dist from a build PC, or install Node LTS manually." "Warn"
         $global:TeyssirNodeReady = $false
     }
 }
@@ -254,7 +254,7 @@ function Install-TesseractHost {
     }
     $exe = Get-TesseractExe
     if (-not $exe) {
-        Write-Dep "Tesseract missing — installing UB-Mannheim.TesseractOCR (eng/fra/ara) ..." "Warn"
+        Write-Dep "Tesseract missing -- installing UB-Mannheim.TesseractOCR (eng/fra/ara) ..." "Warn"
         if (Test-Winget) {
             Invoke-WingetInstall -Id "UB-Mannheim.TesseractOCR" | Out-Null
         }
@@ -268,12 +268,12 @@ function Install-TesseractHost {
             }
         }
         else {
-            Write-Dep "winget/choco unavailable — install Tesseract (UB Mannheim) with eng+fra+ara manually." "Warn"
+            Write-Dep "winget/choco unavailable -- install Tesseract (UB Mannheim) with eng+fra+ara manually." "Warn"
         }
         $exe = Get-TesseractExe
     }
     if (-not $exe) {
-        Write-Dep "Tesseract not found — book OCR uses manual/vision fallback." "Warn"
+        Write-Dep "Tesseract not found -- book OCR uses manual/vision fallback." "Warn"
         $global:TeyssirTesseractReady = $false
         $global:TeyssirTesseractCmd = $null
         $global:TeyssirTesseractLangsOk = $false
@@ -289,7 +289,7 @@ function Install-TesseractHost {
     }
     else {
         $miss = ($langs.Missing -join ",")
-        Write-Dep ("Tesseract missing language packs: {0}. Re-run UB Mannheim installer and tick eng, fra, ara. Soft-fail — OCR continues with installed packs." -f $miss) "Warn"
+        Write-Dep ("Tesseract missing language packs: {0}. Re-run UB Mannheim installer and tick eng, fra, ara. Soft-fail -- OCR continues with installed packs." -f $miss) "Warn"
         $global:TeyssirTesseractLangsOk = $false
     }
 }
@@ -316,7 +316,7 @@ Install-TesseractHost
 Write-LibzbarNote
 
 Write-Host ""
-Write-Dep ("Summary — Python:{0} Git:{1} Node:{2} Tesseract:{3} Langs(eng+fra+ara):{4}" -f `
+Write-Dep ("Summary -- Python:{0} Git:{1} Node:{2} Tesseract:{3} Langs(eng+fra+ara):{4}" -f `
         $(if ($global:TeyssirPythonReady) { "OK" } else { "MISSING" }), `
         $(if ($global:TeyssirGitReady) { "OK" } else { "optional/miss" }), `
         $(if ($global:TeyssirNodeReady) { "OK" } else { "optional/miss" }), `

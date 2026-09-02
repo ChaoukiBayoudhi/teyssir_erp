@@ -1,6 +1,6 @@
-<#
-    Teyssir — caisse C2 wrapper (Phase 4)
-    Thin ID shim → setup_caisse.ps1 -Terminal C2 (idempotent).
+﻿<#
+    Teyssir -- caisse C2 wrapper (Phase 4)
+    Thin ID shim -> setup_caisse.ps1 -Terminal C2 (idempotent).
 
         .\deploy\windows\setup_caisse_C2.ps1 -HubUrl http://teyssir-hub.local:8000 -SyncKey <key>
         .\deploy\windows\setup_caisse_C2.ps1 -StoreCode S1 -DiscoverPrinter

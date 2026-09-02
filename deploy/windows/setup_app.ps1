@@ -1,5 +1,5 @@
-<#
-    Teyssir — application-layer bootstrap (Phase 3)
+﻿<#
+    Teyssir -- application-layer bootstrap (Phase 3)
     ------------------------------------------------
     Run after host deps (install_all.ps1 / Install-HostDependencies.ps1), or alone
     when Python/Node are already present. Idempotent; never deletes shop data.
@@ -69,7 +69,7 @@ function Test-IsAdmin {
 }
 
 function Get-ProjectRoot {
-    # Script lives in deploy\windows — walk up until manage.py, else PSScriptRoot\..\..
+    # Script lives in deploy\windows -- walk up until manage.py, else PSScriptRoot\..\..
     $start = $PSScriptRoot
     $cand = $start
     for ($i = 0; $i -lt 6; $i++) {
@@ -141,7 +141,7 @@ function Ensure-GitCheckout {
             return $Root
         }
         if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-            Write-Setup "git not on PATH — skip pull (app files already present)." "Yellow"
+            Write-Setup "git not on PATH -- skip pull (app files already present)." "Yellow"
             return $Root
         }
         Write-Setup "Pulling latest (git pull --ff-only) ..." "Cyan"
@@ -165,7 +165,7 @@ function Ensure-GitCheckout {
     }
 
     if ((Test-Path $manage) -and -not (Test-Path $gitDir)) {
-        Write-Setup "Project present without .git (ZIP layout) — skip clone/pull." "Yellow"
+        Write-Setup "Project present without .git (ZIP layout) -- skip clone/pull." "Yellow"
         return $Root
     }
 
@@ -186,7 +186,7 @@ function Ensure-GitCheckout {
     if (Test-Path $dest) {
         throw ("Clone target exists but is not a Teyssir tree: {0}. Pass -CloneTarget or remove it." -f $dest)
     }
-    Write-Setup ("Cloning {0} → {1} ..." -f $Url, $dest) "Cyan"
+    Write-Setup ("Cloning {0} -> {1} ..." -f $Url, $dest) "Cyan"
     & git clone $Url $dest
     if ($LASTEXITCODE -ne 0) { throw "git clone failed." }
     return (Resolve-Path $dest).Path
@@ -228,7 +228,7 @@ function Invoke-AppValidation {
         Write-Setup "frontend\dist present" "Green"
     }
     else {
-        Write-Setup "WARN: frontend\dist\index.html missing — UI will be empty until npm build or SkipBuild copy." "Yellow"
+        Write-Setup "WARN: frontend\dist\index.html missing -- UI will be empty until npm build or SkipBuild copy." "Yellow"
         $ok = $false
     }
 
@@ -246,13 +246,13 @@ function Invoke-AppValidation {
     if (-not $healthOk) {
         $svc = Get-Service -Name "TeyssirBackend" -ErrorAction SilentlyContinue
         if ($svc -and $svc.Status -eq "Running") {
-            Write-Setup "TeyssirBackend is Running but /health/ did not answer yet — wait a few seconds, then open-teyssir.ps1 or http://localhost:8000/health/" "Yellow"
+            Write-Setup "TeyssirBackend is Running but /health/ did not answer yet -- wait a few seconds, then open-teyssir.ps1 or http://localhost:8000/health/" "Yellow"
         }
         elseif ($svc) {
             Write-Setup ("TeyssirBackend status={0}. Start-Service TeyssirBackend, then check {1}" -f $svc.Status, $healthUrl) "Yellow"
         }
         else {
-            Write-Setup ("Backend not reachable at {0}. After install, use Desktop « Teyssir ERP », Start-Service TeyssirBackend, or deploy\windows\start-teyssir.bat — then open-teyssir.ps1 / {0}" -f $healthUrl) "Yellow"
+            Write-Setup ("Backend not reachable at {0}. After install, use Desktop " Teyssir ERP ", Start-Service TeyssirBackend, or deploy\windows\start-teyssir.bat -- then open-teyssir.ps1 / {0}" -f $healthUrl) "Yellow"
         }
     }
 
@@ -260,7 +260,7 @@ function Invoke-AppValidation {
         Write-Setup "==== Validation passed ====" "Green"
     }
     elseif ($ok) {
-        Write-Setup "==== App files OK — start the service to complete health check ====" "Yellow"
+        Write-Setup "==== App files OK -- start the service to complete health check ====" "Yellow"
     }
     else {
         Write-Setup "==== Validation finished with warnings/failures (see above) ====" "Yellow"
@@ -273,7 +273,7 @@ $Root = Get-ProjectRoot
 Write-Setup "==== Teyssir setup_app (role: $Role) ====" "Green"
 Write-Setup ("Resolved root: {0}" -f $Root)
 if (-not (Test-IsAdmin)) {
-    Write-Setup "Not Administrator — hub PostgreSQL / firewall / service may soft-skip (same as install.ps1)." "Yellow"
+    Write-Setup "Not Administrator -- hub PostgreSQL / firewall / service may soft-skip (same as install.ps1)." "Yellow"
 }
 
 $Root = Ensure-GitCheckout -Root $Root -Url $RepoUrl -Target $CloneTarget -NoPull:$SkipPull
@@ -305,7 +305,7 @@ else {
             )) "Green"
     }
     else {
-        Write-Setup "Local LLM missing or incomplete — calling Install-LocalLlm.ps1 ..." "Cyan"
+        Write-Setup "Local LLM missing or incomplete -- calling Install-LocalLlm.ps1 ..." "Cyan"
         try {
             if ($SkipVision) {
                 & $llmScript -Model $LlmModel -VisionModel $VisionModel -SkipVision
@@ -356,6 +356,6 @@ if ($exitCode -eq 0) {
 
 Write-Setup ""
 Write-Setup ("==== setup_app finished (exit {0}) ====" -f $exitCode) $(if ($exitCode -eq 0) { "Green" } else { "Red" })
-Write-Setup "Chain: install_all.ps1 (host deps) → setup_app.ps1 (this) → install.ps1. No Redis."
+Write-Setup "Chain: install_all.ps1 (host deps) -> setup_app.ps1 (this) -> install.ps1. No Redis."
 Write-Setup "Printer: -DiscoverPrinter / -Printer tcp:IP:9100 / Discover-Printer.ps1"
 exit $exitCode

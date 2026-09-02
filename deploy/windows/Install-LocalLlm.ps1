@@ -1,9 +1,9 @@
-<#
-    Teyssir — local LLM (Ollama) helper for Windows Hub/tills.
+﻿<#
+    Teyssir -- local LLM (Ollama) helper for Windows Hub/tills.
     Called by install_all.ps1 (explicit Phase 2) and install.ps1. Never throws:
     the ERP must install even if AI setup fails.
 
-    Default: detect Ollama → winget/silent install if missing → ensure text model
+    Default: detect Ollama -> winget/silent install if missing -> ensure text model
     (mistral) and vision model (qwen2.5vl:3b). Idempotent: skips pulls when
     already present. Soft-fail on disk/network. -SkipVision / -SkipPull to opt out.
 
@@ -71,7 +71,7 @@ function Install-OllamaSilent {
         Write-Llm ("Ollama already installed: " + (( & (Get-OllamaExe) --version) 2>&1 | Select-Object -First 1)) "Green"
         return $true
     }
-    Write-Llm "Ollama not found — installing (Windows, silent) ..." "Yellow"
+    Write-Llm "Ollama not found -- installing (Windows, silent) ..." "Yellow"
     try {
         if (Get-Command winget -ErrorAction SilentlyContinue) {
             Write-Llm "Trying winget Ollama.Ollama ..."
@@ -153,21 +153,21 @@ function Pull-OllamaModel {
     param([string]$Name, [string]$Kind = "model")
     if (-not $Name) { return $false }
     if (Test-OllamaModelPresent -Name $Name) {
-        Write-Llm ("$Kind '$Name' already present — skip pull.") "Green"
+        Write-Llm ("$Kind '$Name' already present -- skip pull.") "Green"
         return $true
     }
-    Write-Llm ("$Kind '$Name' missing — ollama pull (soft-fail on disk/network) ...") "Yellow"
+    Write-Llm ("$Kind '$Name' missing -- ollama pull (soft-fail on disk/network) ...") "Yellow"
     try {
         & (Get-OllamaExe) pull $Name
         if ($LASTEXITCODE -eq 0 -or (Test-OllamaModelPresent -Name $Name)) {
             Write-Llm ("$Kind $Name is available.") "Green"
             return $true
         }
-        Write-Llm ("ollama pull $Name exited " + $LASTEXITCODE + " — continuing without it (ERP still runs).") "Yellow"
+        Write-Llm ("ollama pull $Name exited " + $LASTEXITCODE + " -- continuing without it (ERP still runs).") "Yellow"
         return $false
     }
     catch {
-        Write-Llm ("$Kind pull skipped: " + $_.Exception.Message + " — ERP continues without it.") "Yellow"
+        Write-Llm ("$Kind pull skipped: " + $_.Exception.Message + " -- ERP continues without it.") "Yellow"
         return $false
     }
 }
@@ -186,7 +186,7 @@ try {
             Write-Llm ("API ready at " + $OllamaUrl) "Green"
         }
         else {
-            Write-Llm "Ollama API did not respond on $OllamaUrl — ERP continues without AI." "Yellow"
+            Write-Llm "Ollama API did not respond on $OllamaUrl -- ERP continues without AI." "Yellow"
         }
 
         if ($script:LlmReady -and -not $SkipPull) {
@@ -203,7 +203,7 @@ try {
                 $null = $PullVision  # accepted for backward-compatible callers
                 $script:VisionReady = Pull-OllamaModel -Name $VisionModel -Kind "vision model"
                 if (-not $script:VisionReady) {
-                    Write-Llm "Vision pull failed — bookscan keeps Tesseract; retry: Install-LocalLlm.ps1 (no -SkipVision)." "Yellow"
+                    Write-Llm "Vision pull failed -- bookscan keeps Tesseract; retry: Install-LocalLlm.ps1 (no -SkipVision)." "Yellow"
                 }
             }
 
@@ -228,13 +228,13 @@ catch {
     Write-Llm ("LLM setup skipped: " + $_.Exception.Message) "Yellow"
 }
 
-# Exported for the caller (install_all.ps1 / install.ps1) — always set
+# Exported for the caller (install_all.ps1 / install.ps1) -- always set
 $global:TeyssirLlmReady = [bool]$script:LlmReady
 $global:TeyssirLlmModelReady = [bool]$script:ModelReady
 $global:TeyssirLlmModel = $Model
 $global:TeyssirVisionModelReady = [bool]$script:VisionReady
 $global:TeyssirVisionModel = $VisionModel
-Write-Llm ("Summary — Ollama API:{0} text({1}):{2} vision({3}):{4}" -f `
+Write-Llm ("Summary -- Ollama API:{0} text({1}):{2} vision({3}):{4}" -f `
         $(if ($script:LlmReady) { "OK" } else { "no" }), `
         $Model, $(if ($script:ModelReady) { "OK" } else { "miss/skip" }), `
         $VisionModel, $(if ($SkipVision) { "skipped" } elseif ($script:VisionReady) { "OK" } else { "miss/skip" })) "Gray"

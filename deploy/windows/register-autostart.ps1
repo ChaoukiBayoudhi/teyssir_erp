@@ -1,8 +1,8 @@
-<#
-    Register till→hub sync (and a logon fallback if the Windows service is absent).
+﻿<#
+    Register till->hub sync (and a logon fallback if the Windows service is absent).
 
     Prefer NSSM service (Install-WindowsService.ps1) for the backend on hub/till.
-    This script never creates « Teyssir Server » when TeyssirBackend already exists
+    This script never creates " Teyssir Server " when TeyssirBackend already exists
     (avoids two listeners on port 8000).
 
     Unregister (reversible):
@@ -25,7 +25,7 @@ $sync = Join-Path $Root "deploy\windows\sync-now.bat"
 
 $svc = Get-Service -Name "TeyssirBackend" -ErrorAction SilentlyContinue
 if ($svc) {
-    Write-Host "Windows service 'TeyssirBackend' is installed — skipping scheduled task 'Teyssir Server' (no duplicate)." -ForegroundColor Green
+    Write-Host "Windows service 'TeyssirBackend' is installed -- skipping scheduled task 'Teyssir Server' (no duplicate)." -ForegroundColor Green
 }
 else {
     $action = New-ScheduledTaskAction -Execute $start

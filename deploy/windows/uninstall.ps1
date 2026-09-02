@@ -1,4 +1,4 @@
-<#
+﻿<#
     Remove the Teyssir Windows service, desktop shortcut, and scheduled tasks.
     Does NOT delete the project folder, database, or .env.
 

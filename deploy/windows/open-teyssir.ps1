@@ -1,4 +1,4 @@
-<#
+﻿<#
     Wait until the local backend answers, then open the PWA in the default browser.
     Used by the "Teyssir ERP" desktop shortcut.
 #>

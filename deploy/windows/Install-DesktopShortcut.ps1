@@ -1,4 +1,4 @@
-<#
+﻿<#
     Create "Teyssir ERP" on the user Desktop (and Start Menu) with the branding icon.
     Opens the default browser at http://localhost:8000 after waiting for /health/.
     Prefers open-teyssir.vbs via wscript so double-click shows no console flash.

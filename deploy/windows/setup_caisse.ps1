@@ -1,18 +1,18 @@
-<#
-    Teyssir — per-caisse (till) setup wrapper (Phase 4)
+﻿<#
+    Teyssir -- per-caisse (till) setup wrapper (Phase 4)
     ----------------------------------------------------
     Thin, idempotent entry for one till terminal. Always Role=till.
-    Chains to setup_app.ps1 (→ install.ps1). Prefer the ID wrappers:
+    Chains to setup_app.ps1 (-> install.ps1). Prefer the ID wrappers:
 
         .\deploy\windows\setup_caisse_C1.ps1 -HubUrl http://teyssir-hub.local:8000 -SyncKey <key>
-        .\deploy\windows\setup_caisse.ps1 -Terminal C2 -HubUrl http://… -SyncKey <key> -DiscoverPrinter
-        .\deploy\windows\setup_caisse_C1.ps1 -HubUrl http://… -SyncKey <key> -FreshInstall
+        .\deploy\windows\setup_caisse.ps1 -Terminal C2 -HubUrl http://... -SyncKey <key> -DiscoverPrinter
+        .\deploy\windows\setup_caisse_C1.ps1 -HubUrl http://... -SyncKey <key> -FreshInstall
 
     Optional env fallbacks (when param empty): TEYSSIR_TERMINAL, TEYSSIR_STORE_CODE,
     TEYSSIR_HUB_URL, TEYSSIR_SYNC_KEY, TEYSSIR_PRINTER.
 
-    Printer: pass -Printer tcp:IP:9100, or -DiscoverPrinter (LAN /24 scan → tcp:… or dummy).
-    Never hardcodes a shop / Aclas IP. No parallel installer — extends the existing kit.
+    Printer: pass -Printer tcp:IP:9100, or -DiscoverPrinter (LAN /24 scan -> tcp:... or dummy).
+    Never hardcodes a shop / Aclas IP. No parallel installer -- extends the existing kit.
 #>
 [CmdletBinding()]
 param(
@@ -47,7 +47,7 @@ param(
     [switch]$ValidateOnly,
     [switch]$SkipChecks,
     [switch]$OpenPos,
-    # Wipe local till DB / .env / service then reinstall (forwarded → setup_app → install)
+    # Wipe local till DB / .env / service then reinstall (forwarded -> setup_app -> install)
     [switch]$FreshInstall,
     [switch]$KeepVenv
 )
@@ -102,14 +102,14 @@ function Invoke-CaisseChecks {
         Write-Caisse ("Local till health OK: {0}" -f $localHealth) "Green"
     }
     else {
-        Write-Caisse "Local /health/ not up yet — start TeyssirBackend or Desktop « Teyssir ERP », then re-check." "Yellow"
+        Write-Caisse "Local /health/ not up yet -- start TeyssirBackend or Desktop " Teyssir ERP ", then re-check." "Yellow"
     }
 
     # 3) Printer discover helper (document + optional invoke path)
     $disc = Join-Path $WindowsDeploy "Discover-Printer.ps1"
     Write-Caisse "Printer: use -DiscoverPrinter on install, or run:"
     Write-Caisse ("  {0}" -f $disc)
-    Write-Caisse "  (writes tcp:IP:9100 or dummy — never invents a shop Aclas IP)"
+    Write-Caisse "  (writes tcp:IP:9100 or dummy -- never invents a shop Aclas IP)"
     if (Test-Path $disc) {
         Write-Caisse "  Discover-Printer.ps1 present." "Green"
     }
@@ -120,7 +120,7 @@ function Invoke-CaisseChecks {
     # 4) POS UI launch path
     $openPs1 = Join-Path $WindowsDeploy "open-teyssir.ps1"
     $shortcutPs1 = Join-Path $WindowsDeploy "Install-DesktopShortcut.ps1"
-    Write-Caisse "POS UI: Desktop shortcut « Teyssir ERP » (Install-DesktopShortcut.ps1) or:"
+    Write-Caisse "POS UI: Desktop shortcut " Teyssir ERP " (Install-DesktopShortcut.ps1) or:"
     Write-Caisse ("  {0}" -f $openPs1)
     if ($LaunchPos -and (Test-Path $openPs1)) {
         Write-Caisse "Launching POS (open-teyssir.ps1) ..." "Cyan"
@@ -135,7 +135,7 @@ function Invoke-CaisseChecks {
         Write-Caisse "  open-teyssir.ps1 missing." "Yellow"
     }
     if (Test-Path $shortcutPs1) {
-        Write-Caisse "  Install-DesktopShortcut.ps1 present (Phase 5 — usually run by install.ps1)." "Green"
+        Write-Caisse "  Install-DesktopShortcut.ps1 present (Phase 5 -- usually run by install.ps1)." "Green"
     }
 }
 
@@ -200,7 +200,7 @@ foreach ($key in @(
 if (-not $forward.ContainsKey("LlmModel")) { $forward["LlmModel"] = $LlmModel }
 if (-not $forward.ContainsKey("VisionModel")) { $forward["VisionModel"] = $VisionModel }
 
-Write-Caisse "Chain: setup_caisse → setup_app.ps1 → install.ps1 (idempotent)." "Cyan"
+Write-Caisse "Chain: setup_caisse -> setup_app.ps1 -> install.ps1 (idempotent)." "Cyan"
 $exitCode = 0
 try {
     & $setupApp @forward
@@ -220,5 +220,5 @@ Write-Caisse ("==== setup_caisse {0} finished (exit {1}) ====" -f $Terminal, $ex
     if ($exitCode -eq 0) { "Green" } else { "Red" }
 )
 Write-Caisse "Printer: -DiscoverPrinter | -Printer tcp:IP:9100 | Discover-Printer.ps1 (no hardcoded Aclas IP)."
-Write-Caisse "POS: Desktop « Teyssir ERP » or .\deploy\windows\open-teyssir.ps1"
+Write-Caisse "POS: Desktop " Teyssir ERP " or .\deploy\windows\open-teyssir.ps1"
 exit $exitCode

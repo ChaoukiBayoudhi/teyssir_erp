@@ -1,5 +1,5 @@
-<#
-    Teyssir — remove a previous Windows installation before a clean re-install.
+﻿<#
+    Teyssir -- remove a previous Windows installation before a clean re-install.
 
     Destructive: database, .env, optional .venv. Service, tasks, and shortcuts are removed.
     Does NOT delete the project folder, media\, or manual backups.
@@ -13,7 +13,7 @@
 
         .\deploy\windows\install_all.ps1 -Role hub -FreshInstall
         .\deploy\windows\setup_app.ps1 -Role hub -FreshInstall
-        .\deploy\windows\setup_caisse_C1.ps1 -FreshInstall -HubUrl … -SyncKey …
+        .\deploy\windows\setup_caisse_C1.ps1 -FreshInstall -HubUrl ... -SyncKey ...
 
     Logs: %LOCALAPPDATA%\Teyssir\logs\clean_previous_<timestamp>.log
 #>
@@ -84,7 +84,7 @@ function Remove-ItemIfExists([string]$Path, [string]$Label) {
 if (-not $FreshInstall -and -not $ConfirmWipeData) {
     Write-Host @"
 
-ERREUR — opération annulée.
+ERREUR -- opération annulée.
 
 Cette commande efface la base de données et le fichier .env.
 Relancez avec l'un de ces indicateurs explicites :
@@ -105,7 +105,7 @@ Write-CleanLog ("Project: {0}" -f $Root)
 Write-CleanLog ("Log:     {0}" -f $logPath)
 
 $venvWarnLine = if ($RemoveVenv) {
-    "║    • L'environnement virtuel Python (.venv)`n"
+    "║    * L'environnement virtuel Python (.venv)`n"
 }
 else {
     ""
@@ -114,17 +114,17 @@ else {
 Write-CleanLog (@"
 
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║  ATTENTION — INSTALLATION PROPRE (effacement des données Teyssir)            ║
+║  ATTENTION -- INSTALLATION PROPRE (effacement des données Teyssir)            ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║  Cette opération va SUPPRIMER :                                              ║
-║    • Le service Windows TeyssirBackend et les tâches planifiées              ║
-║    • Les raccourcis Bureau / Menu Démarrer « Teyssir ERP »                   ║
-║    • La base de données (PostgreSQL « teyssir » ou fichiers SQLite)          ║
-║    • Le fichier .env (copie de sauvegarde .env.bak.<horodatage> créée)       ║
+║    * Le service Windows TeyssirBackend et les tâches planifiées              ║
+║    * Les raccourcis Bureau / Menu Démarrer " Teyssir ERP "                   ║
+║    * La base de données (PostgreSQL " teyssir " ou fichiers SQLite)          ║
+║    * Le fichier .env (copie de sauvegarde .env.bak.<horodatage> créée)       ║
 $venvWarnLine║  CONSERVÉ (non supprimé) :                                                   ║
-║    • Dossier du projet, code source, frontend\dist                           ║
-║    • Dossier media\ (images livres, fichiers uploadés)                       ║
-║    • Sauvegardes manuelles (.sql, copies SQLite) ailleurs sur le disque      ║
+║    * Dossier du projet, code source, frontend\dist                           ║
+║    * Dossier media\ (images livres, fichiers uploadés)                       ║
+║    * Sauvegardes manuelles (.sql, copies SQLite) ailleurs sur le disque      ║
 ║                                                                              ║
 ║  Un autre dossier Teyssir ailleurs sur le PC n'est PAS touché.               ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
@@ -146,11 +146,11 @@ if (Test-Path $envPath) {
     Write-CleanLog ("Configuration lue depuis .env : role=$envRole db=$envDbBackend terminal=$envTerminal")
 }
 else {
-    Write-CleanLog ".env absent — nettoyage des emplacements par défaut uniquement." "DarkGray"
+    Write-CleanLog ".env absent -- nettoyage des emplacements par défaut uniquement." "DarkGray"
 }
 
 # --- 1) service, tasks, shortcuts (reuse uninstall.ps1) ----------------------
-Write-CleanLog "Étape 1/4 — service, tâches planifiées, raccourcis ..." "Cyan"
+Write-CleanLog "Étape 1/4 -- service, tâches planifiées, raccourcis ..." "Cyan"
 $uninstallScript = Join-Path $PSScriptRoot "uninstall.ps1"
 if (Test-Path $uninstallScript) {
     try {
@@ -161,11 +161,11 @@ if (Test-Path $uninstallScript) {
     }
 }
 else {
-    Write-CleanLog "uninstall.ps1 introuvable — étape ignorée." "Yellow"
+    Write-CleanLog "uninstall.ps1 introuvable -- étape ignorée." "Yellow"
 }
 
 # --- 2) database wipe --------------------------------------------------------
-Write-CleanLog "Étape 2/4 — base de données ..." "Cyan"
+Write-CleanLog "Étape 2/4 -- base de données ..." "Cyan"
 
 function Get-SqliteCandidates {
     param([string]$ForRole, [string]$ForTerminal)
@@ -201,7 +201,7 @@ if ($envRole -eq "hub" -and $envDbBackend -match "^(postgres|postgresql|pg)$") {
         Write-CleanLog "  Tentative de DROP via rôle applicatif ou fichiers SQLite de repli ..." "Yellow"
     }
     elseif (Test-Path $pgScript) {
-        Write-CleanLog ("  PostgreSQL : DROP + recréation base « {0} » ..." -f $pgDb) "Yellow"
+        Write-CleanLog ("  PostgreSQL : DROP + recréation base " {0} " ..." -f $pgDb) "Yellow"
         try {
             & $pgScript -Db $pgDb -User $pgUser -Password $pgPass -SuperPassword $superPass -ResetDatabase
             if ($global:TeyssirPostgresReady) {
@@ -209,7 +209,7 @@ if ($envRole -eq "hub" -and $envDbBackend -match "^(postgres|postgresql|pg)$") {
                 Write-CleanLog "  PostgreSQL : base réinitialisée (vide, prête pour migrate)." "Green"
             }
             else {
-                Write-CleanLog "  PostgreSQL : reset incomplet — vérifiez le journal [PG]." "Yellow"
+                Write-CleanLog "  PostgreSQL : reset incomplet -- vérifiez le journal [PG]." "Yellow"
             }
         }
         catch {
@@ -239,13 +239,13 @@ if ($envRole -eq "hub" -and -not $pgResetOk) {
 }
 
 # --- 3) .env backup + remove -------------------------------------------------
-Write-CleanLog "Étape 3/4 — fichier .env ..." "Cyan"
+Write-CleanLog "Étape 3/4 -- fichier .env ..." "Cyan"
 if (Test-Path $envPath) {
     $bakStamp = Get-Date -Format "yyyyMMdd_HHmmss"
     $bakPath = Join-Path $Root (".env.bak." + $bakStamp)
     try {
         Copy-Item -LiteralPath $envPath -Destination $bakPath -Force
-        Write-CleanLog ("  Sauvegarde .env → {0}" -f $bakPath) "Green"
+        Write-CleanLog ("  Sauvegarde .env -> {0}" -f $bakPath) "Green"
         Remove-Item -LiteralPath $envPath -Force
         Write-CleanLog "  .env supprimé (sera régénéré par install.ps1)." "Yellow"
     }
@@ -258,7 +258,7 @@ else {
 }
 
 # --- 4) optional venv --------------------------------------------------------
-Write-CleanLog "Étape 4/4 — environnement Python ..." "Cyan"
+Write-CleanLog "Étape 4/4 -- environnement Python ..." "Cyan"
 if ($RemoveVenv) {
     Remove-ItemIfExists (Join-Path $Root ".venv") ".venv"
     Remove-ItemIfExists (Join-Path $Root "venv") "venv"

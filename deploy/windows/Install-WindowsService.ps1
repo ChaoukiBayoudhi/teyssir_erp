@@ -1,4 +1,4 @@
-<#
+﻿<#
     Register Teyssir as a Windows service (NSSM + waitress).
     Called by install.ps1. Never throws: the ERP install continues without the service.
 
@@ -54,7 +54,7 @@ function Install-Nssm {
         Write-Svc ("NSSM: " + $exe) "Green"
         return $exe
     }
-    Write-Svc "NSSM not found — installing ..." "Yellow"
+    Write-Svc "NSSM not found -- installing ..." "Yellow"
     try {
         if (Get-Command winget -ErrorAction SilentlyContinue) {
             winget install --id NSSM.NSSM -e --accept-package-agreements --accept-source-agreements --disable-interactivity --silent | Out-Host
@@ -107,7 +107,7 @@ try {
     $python = Join-Path $Root ".venv\Scripts\python.exe"
     $serve = Join-Path $Root "deploy\windows\serve.py"
     if (-not (Test-Path $python) -or -not (Test-Path $serve)) {
-        Write-Svc "Python venv or serve.py missing — skip service." "Yellow"
+        Write-Svc "Python venv or serve.py missing -- skip service." "Yellow"
         return
     }
 
@@ -144,7 +144,7 @@ try {
         }
     }
     else {
-        Write-Svc "Service $ServiceName already exists — updating paths (no duplicate)." "Green"
+        Write-Svc "Service $ServiceName already exists -- updating paths (no duplicate)." "Green"
         if ($existing.Status -eq "Running") {
             & $nssm stop $ServiceName | Out-Null
             Start-Sleep -Seconds 2
@@ -241,7 +241,7 @@ try {
     }
     else {
         $st = (Get-Service $ServiceName -ErrorAction SilentlyContinue).Status
-        Write-Svc ("Service status=$st — check $stderr or start-teyssir.bat as fallback.") "Yellow"
+        Write-Svc ("Service status=$st -- check $stderr or start-teyssir.bat as fallback.") "Yellow"
         if ($st -eq "Running") { $global:TeyssirServiceReady = $true }
     }
 }

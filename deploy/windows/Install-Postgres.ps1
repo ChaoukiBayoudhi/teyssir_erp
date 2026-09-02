@@ -1,5 +1,5 @@
-<#
-    Teyssir — PostgreSQL helper for the Windows HUB only.
+﻿<#
+    Teyssir -- PostgreSQL helper for the Windows HUB only.
     Never throws: if setup fails, the caller falls back to SQLite.
 
     Usage:
@@ -48,7 +48,7 @@ function Install-PostgresSilent {
         Write-Pg ("psql found: " + (( & (Get-PsqlExe) --version) 2>&1 | Select-Object -First 1)) "Green"
         return $true
     }
-    Write-Pg "PostgreSQL not found — installing (Windows, silent) ..." "Yellow"
+    Write-Pg "PostgreSQL not found -- installing (Windows, silent) ..." "Yellow"
     if (-not $SuperPassword) {
         $alphabet = [char[]]((48..57) + (65..90) + (97..122))
         $SuperPassword = -join (1..24 | ForEach-Object { $alphabet | Get-Random })
@@ -167,7 +167,7 @@ try {
         }
     }
     elseif (Test-AppLogin) {
-        Write-Pg "Existing database is reachable as $User — skipping create (re-run safe)." "Green"
+        Write-Pg "Existing database is reachable as $User -- skipping create (re-run safe)." "Green"
         $script:Ready = $true
     }
     else {
@@ -184,7 +184,7 @@ try {
             $script:Ready = $true
         }
         else {
-            Write-Pg "Role/database created but login as $User failed — hub will use SQLite." "Yellow"
+            Write-Pg "Role/database created but login as $User failed -- hub will use SQLite." "Yellow"
         }
     }
 }

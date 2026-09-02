@@ -1,4 +1,4 @@
-<#
+﻿<#
     Teyssir - Windows installer
     ----------------------------
     Prefer an *elevated* PowerShell (Run as Administrator) inside the project folder
@@ -13,7 +13,7 @@
 
         .\deploy\windows\install.ps1 -Role hub -FreshInstall
 
-    Hub: PostgreSQL when possible (SQLite fallback — never abort).
+    Hub: PostgreSQL when possible (SQLite fallback -- never abort).
     Till: SQLite only (PostgreSQL is never installed).
     Local Ollama is optional; a failure there never aborts the ERP install.
     Registers Windows service TeyssirBackend (NSSM + waitress, auto-start) and a Desktop shortcut.
@@ -59,7 +59,7 @@ Write-Host "Project: $Root"
 if ($FreshInstall) {
     $cleanScript = Join-Path $PSScriptRoot "Clean-PreviousInstall.ps1"
     if (-not (Test-Path $cleanScript)) {
-        Write-Host "ERREUR — Clean-PreviousInstall.ps1 manquant ; impossible d'exécuter -FreshInstall." -ForegroundColor Red
+        Write-Host "ERREUR -- Clean-PreviousInstall.ps1 manquant ; impossible d'exécuter -FreshInstall." -ForegroundColor Red
         exit 3
     }
     $removeVenv = -not $KeepVenv
@@ -85,7 +85,7 @@ if ($FreshInstall) {
         Write-Host ("Clean-PreviousInstall a échoué : {0}" -f $_.Exception.Message) -ForegroundColor Red
         exit 3
     }
-    Write-Host "FreshInstall : effacement terminé — poursuite de l'installation normale." -ForegroundColor Green
+    Write-Host "FreshInstall : effacement terminé -- poursuite de l'installation normale." -ForegroundColor Green
 }
 
 function Test-IsAdmin {
@@ -176,7 +176,7 @@ function Install-PythonIfMissing {
         Write-Host ("Python: " + ((& $exe --version) 2>&1))
         return $exe
     }
-    Write-Warning "Python 3.11+ not found — attempting silent install (winget)."
+    Write-Warning "Python 3.11+ not found -- attempting silent install (winget)."
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
         throw "Python not found and winget is unavailable. Install Python 3.12+ from https://www.python.org/downloads/windows/ (tick 'Add python.exe to PATH'), then re-run."
     }
@@ -205,7 +205,7 @@ function Install-NodeIfNeeded {
     if ($SkipBuild) { return }
     if (Test-Path "frontend\dist\index.html") { return }
     if (Get-Command npm -ErrorAction SilentlyContinue) { return }
-    Write-Warning "Node.js/npm not found and frontend\dist is missing — attempting winget OpenJS.NodeJS.LTS."
+    Write-Warning "Node.js/npm not found and frontend\dist is missing -- attempting winget OpenJS.NodeJS.LTS."
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { return }
     try {
         winget install --id OpenJS.NodeJS.LTS -e --accept-package-agreements --accept-source-agreements --disable-interactivity --silent | Out-Host
@@ -268,7 +268,7 @@ if (-not (Test-Path $envPath)) {
     $secret = New-Key 50
     if (-not $SyncKey) { $SyncKey = New-Key 40 }
     if ($Role -eq "till" -and -not $syncKeyFromCaller) {
-        Write-Warning "No -SyncKey given. A random key was generated — this till cannot sync until TEYSSIR_SYNC_KEY matches the Hub. Re-run with -SyncKey <hub-key> (updates .env) or edit .env by hand."
+        Write-Warning "No -SyncKey given. A random key was generated -- this till cannot sync until TEYSSIR_SYNC_KEY matches the Hub. Re-run with -SyncKey <hub-key> (updates .env) or edit .env by hand."
     }
     $pcName = [System.Net.Dns]::GetHostName()
     $pgPass = New-Key 28
@@ -327,7 +327,7 @@ if ($Role -eq "till") {
     if ($syncKeyFromCaller) { Set-DotEnvValue $envPath "TEYSSIR_SYNC_KEY" $SyncKey }
 }
 
-# 4a) Receipt printer (client LAN — never assume a fixed shop IP) ------------
+# 4a) Receipt printer (client LAN -- never assume a fixed shop IP) ------------
 $resolvedPrinter = $Printer
 if ($DiscoverPrinter -and -not $resolvedPrinter) {
     Write-Host "Scanning local /24 for ESC/POS on TCP 9100 ..."
@@ -341,7 +341,7 @@ if ($DiscoverPrinter -and -not $resolvedPrinter) {
     }
     if (-not $resolvedPrinter) { $resolvedPrinter = "dummy" }
     if ($resolvedPrinter -eq "dummy") {
-        Write-Warning "No printer found — TEYSSIR_PRINTER=dummy (set -Printer tcp:IP:9100 later)."
+        Write-Warning "No printer found -- TEYSSIR_PRINTER=dummy (set -Printer tcp:IP:9100 later)."
     }
     else {
         Write-Host ("Discovered printer: " + $resolvedPrinter) -ForegroundColor Green
@@ -362,7 +362,7 @@ elseif (Test-Path $envPath) {
     }
 }
 
-# 4b) PostgreSQL (HUB only) — optional, never fails the ERP install ----------
+# 4b) PostgreSQL (HUB only) -- optional, never fails the ERP install ----------
 $global:TeyssirPostgresReady = $false
 if ($Role -eq "hub" -and -not $SkipPostgres) {
     Write-Host "Setting up PostgreSQL for the hub ..."
@@ -389,19 +389,19 @@ if ($Role -eq "hub" -and -not $SkipPostgres) {
     }
     else {
         Set-DotEnvValue $envPath "TEYSSIR_DB" "sqlite"
-        Write-Warning "PostgreSQL not ready — hub will use SQLite (teyssir_hub.sqlite3). See docs/POSTGRESQL-SETUP.md"
+        Write-Warning "PostgreSQL not ready -- hub will use SQLite (teyssir_hub.sqlite3). See docs/POSTGRESQL-SETUP.md"
     }
 }
 elseif ($Role -eq "hub" -and $SkipPostgres) {
     Set-DotEnvValue $envPath "TEYSSIR_DB" "sqlite"
-    Write-Host "Hub: -SkipPostgres — using SQLite."
+    Write-Host "Hub: -SkipPostgres -- using SQLite."
 }
 elseif ($Role -eq "till") {
     Set-DotEnvValue $envPath "TEYSSIR_DB" "sqlite"
     Write-Host "Till node: SQLite (offline). PostgreSQL is not installed on tills."
 }
 
-# 4c) Hub firewall (port 8000) — best-effort --------------------------------
+# 4c) Hub firewall (port 8000) -- best-effort --------------------------------
 if ($Role -eq "hub" -and -not $SkipFirewall) {
     try {
         $existing = Get-NetFirewallRule -DisplayName "Teyssir 8000" -ErrorAction SilentlyContinue
@@ -433,7 +433,7 @@ function Invoke-DjangoSetup {
 
 if (-not (Invoke-DjangoSetup)) {
     if ($Role -eq "hub" -and ((Get-DotEnvValue $envPath "TEYSSIR_DB") -eq "postgres")) {
-        Write-Warning "PostgreSQL migrate/seed failed — falling back to SQLite so the shop can still open."
+        Write-Warning "PostgreSQL migrate/seed failed -- falling back to SQLite so the shop can still open."
         Set-DotEnvValue $envPath "TEYSSIR_DB" "sqlite"
         $global:TeyssirPostgresReady = $false
         if (-not (Invoke-DjangoSetup)) {
@@ -445,7 +445,7 @@ if (-not (Invoke-DjangoSetup)) {
     }
 }
 
-# 5b) Tesseract OCR — optional, never fails the ERP install -----------------
+# 5b) Tesseract OCR -- optional, never fails the ERP install -----------------
 $global:TeyssirTesseractReady = $false
 $tessCandidates = @(
     "C:\Program Files\Tesseract-OCR\tesseract.exe",
@@ -462,7 +462,7 @@ if (-not $tessCmd) {
             choco install tesseract -y --no-progress 2>&1 | Out-Host
         }
         else {
-            Write-Warning "winget/choco unavailable — install Tesseract manually (UB Mannheim) with eng+fra+ara."
+            Write-Warning "winget/choco unavailable -- install Tesseract manually (UB Mannheim) with eng+fra+ara."
         }
     }
     catch {
@@ -489,7 +489,7 @@ if ($tessCmd) {
             Write-Host "  Tesseract languages eng+fra+ara present." -ForegroundColor Green
         }
         else {
-            Write-Warning ("Tesseract missing language packs: {0}. Re-run UB Mannheim installer and tick eng, fra, ara. Soft-fail — OCR continues with installed packs." -f ($missingLangs -join ","))
+            Write-Warning ("Tesseract missing language packs: {0}. Re-run UB Mannheim installer and tick eng, fra, ara. Soft-fail -- OCR continues with installed packs." -f ($missingLangs -join ","))
         }
     }
     catch {
@@ -497,7 +497,7 @@ if ($tessCmd) {
     }
 }
 else {
-    Write-Warning "Tesseract not found — book OCR will use manual/vision fallback. See docs/INSTALL-WINDOWS.md (OCR Troubleshooting)."
+    Write-Warning "Tesseract not found -- book OCR will use manual/vision fallback. See docs/INSTALL-WINDOWS.md (OCR Troubleshooting)."
 }
 if (Test-Path $envPath) {
     Set-DotEnvValue $envPath "TEYSSIR_OCR_PROVIDER" "tesseract"
@@ -508,7 +508,7 @@ if (Test-Path $envPath) {
     }
 }
 
-# 6) Local LLM (Ollama) — optional, never fails the ERP install -------------
+# 6) Local LLM (Ollama) -- optional, never fails the ERP install -------------
 $global:TeyssirLlmReady = $false
 $global:TeyssirVisionModelReady = $false
 if (-not $SkipLlm) {
@@ -561,7 +561,7 @@ if ($SkipAdmin) {
     Write-Host "Skipping administrator creation (-SkipAdmin)."
 }
 elseif ($hasAdmin) {
-    Write-Host "An administrator already exists — skipping createsuperuser (re-run safe)." -ForegroundColor Green
+    Write-Host "An administrator already exists -- skipping createsuperuser (re-run safe)." -ForegroundColor Green
 }
 else {
     $userName = $AdminUser
@@ -586,7 +586,7 @@ else {
 }
 
 # Scheduled tasks (till sync + logon fallback if service missing). Reversible via uninstall.ps1.
-# Hub boot uses NSSM TeyssirBackend (below) — do not also force a logon server task.
+# Hub boot uses NSSM TeyssirBackend (below) -- do not also force a logon server task.
 if ($SkipAutostart) {
     Write-Host "Skipping scheduled-task autostart (-SkipAutostart). Service still installs unless -SkipService."
 }
@@ -639,7 +639,7 @@ Write-Host ""
 Write-Host "==== Installation complete ====" -ForegroundColor Green
 if ($global:TeyssirServiceReady) {
     Write-Host "Backend:              Windows service TeyssirBackend (automatic at boot, no terminal)"
-    Write-Host "Open Teyssir:         double-click the Desktop icon  « Teyssir ERP »"
+    Write-Host "Open Teyssir:         double-click the Desktop icon  " Teyssir ERP ""
 }
 else {
     Write-Host "Start Teyssir with:  deploy\windows\start-teyssir.bat"
@@ -647,14 +647,14 @@ else {
 }
 Write-Host "Health check:        http://localhost:8000/health/"
 if ($resolvedPrinter) {
-    Write-Host ("Printer:             TEYSSIR_PRINTER=" + $resolvedPrinter + "  (Menu → Diagnostics to verify)")
+    Write-Host ("Printer:             TEYSSIR_PRINTER=" + $resolvedPrinter + "  (Menu -> Diagnostics to verify)")
 }
 if ($global:TeyssirTesseractReady) {
     if ($global:TeyssirTesseractLangsOk) {
-        Write-Host "OCR (Tesseract):     ready (eng+fra+ara) — see Menu → Diagnostics"
+        Write-Host "OCR (Tesseract):     ready (eng+fra+ara) -- see Menu -> Diagnostics"
     }
     else {
-        Write-Host "OCR (Tesseract):     binary OK — verify eng+fra+ara packs (Menu → Diagnostics / docs/INSTALL-WINDOWS.md)"
+        Write-Host "OCR (Tesseract):     binary OK -- verify eng+fra+ara packs (Menu -> Diagnostics / docs/INSTALL-WINDOWS.md)"
     }
 }
 else {
@@ -663,15 +663,15 @@ else {
 if ($global:TeyssirLlmReady) {
     $modelNote = $LlmModel
     if ($global:TeyssirLlmModelReady) { $modelNote = "$LlmModel (downloaded)" }
-    Write-Host ("Local AI:            Ollama ready · " + $modelNote)
+    Write-Host ("Local AI:            Ollama ready - " + $modelNote)
     if ($global:TeyssirVisionModelReady) {
-        Write-Host ("  Vision (bookscan):  " + $VisionModel + " ready — gated fallback. See docs/LOCAL-AI.md")
+        Write-Host ("  Vision (bookscan):  " + $VisionModel + " ready -- gated fallback. See docs/LOCAL-AI.md")
     }
     elseif ($SkipVision) {
         Write-Host ("  Vision (bookscan):  skipped (-SkipVision). Pull later: ollama pull " + $VisionModel)
     }
     else {
-        Write-Host ("  Vision (bookscan):  not on disk yet — retry Install-LocalLlm.ps1 or ollama pull " + $VisionModel)
+        Write-Host ("  Vision (bookscan):  not on disk yet -- retry Install-LocalLlm.ps1 or ollama pull " + $VisionModel)
     }
 }
 else {
@@ -683,13 +683,13 @@ if ($Role -eq "hub") {
         Write-Host "Backup:              pg_dump -U teyssir teyssir  (see docs/POSTGRESQL-SETUP.md)"
     }
     else {
-        Write-Host "Hub database:        SQLite fallback  (teyssir_hub.sqlite3 — see docs/POSTGRESQL-SETUP.md)"
+        Write-Host "Hub database:        SQLite fallback  (teyssir_hub.sqlite3 -- see docs/POSTGRESQL-SETUP.md)"
     }
-    Write-Host "Next:                Desktop icon « Teyssir ERP »  ·  uninstall: deploy\windows\uninstall.ps1"
+    Write-Host "Next:                Desktop icon " Teyssir ERP "  -  uninstall: deploy\windows\uninstall.ps1"
 }
 else {
     Write-Host "Till database:       SQLite  (offline)"
     Write-Host ("Till terminal:       " + $Terminal)
     Write-Host ("Hub URL:             " + (Get-DotEnvValue $envPath "TEYSSIR_HUB_URL"))
-    Write-Host "Next:                Desktop icon « Teyssir ERP »  ·  uninstall: deploy\windows\uninstall.ps1"
+    Write-Host "Next:                Desktop icon " Teyssir ERP "  -  uninstall: deploy\windows\uninstall.ps1"
 }

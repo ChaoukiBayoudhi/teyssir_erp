@@ -1,5 +1,5 @@
-<#
-    Teyssir — preferred Windows entry (Phase 2)
+﻿<#
+    Teyssir -- preferred Windows entry (Phase 2)
     --------------------------------------------
     Logging, careful auto-elevate (hub), host deps via winget, then install.ps1.
 
@@ -8,11 +8,11 @@
         .\deploy\windows\install_all.ps1 -Role till -Terminal C1 `
             -HubUrl http://teyssir-hub.local:8000 -SyncKey <hub-key>
         .\deploy\windows\install_all.ps1 -Role hub -FreshInstall
-            # Forwards -FreshInstall to install.ps1 → Clean-PreviousInstall.ps1
+            # Forwards -FreshInstall to install.ps1 -> Clean-PreviousInstall.ps1
         .\deploy\windows\install_all.ps1 -Role till -DiscoverPrinter
 
     Till without admin: continues (soft path). Hub without admin: UAC re-launch
-    unless -NoElevate. Does not install Redis. Does not hardcode a shop printer IP —
+    unless -NoElevate. Does not install Redis. Does not hardcode a shop printer IP --
     use -DiscoverPrinter / -Printer tcp:IP:9100 / Discover-Printer.ps1.
 #>
 [CmdletBinding()]
@@ -48,7 +48,7 @@ param(
     [switch]$NoElevate,
     # Force elevate even for till (rare: machine-scope winget)
     [switch]$ForceElevate,
-    # Drop previous install (DB, .env, service) then reinstall — destructive; see Clean-PreviousInstall.ps1
+    # Drop previous install (DB, .env, service) then reinstall -- destructive; see Clean-PreviousInstall.ps1
     [switch]$FreshInstall,
     # With -FreshInstall: also remove .venv for a clean pip install (default on -FreshInstall)
     [switch]$KeepVenv
@@ -117,7 +117,7 @@ try {
     $transcriptStarted = $true
 }
 catch {
-    Write-Host ("(Transcript unavailable — file log only: {0})" -f $logPath) -ForegroundColor DarkGray
+    Write-Host ("(Transcript unavailable -- file log only: {0})" -f $logPath) -ForegroundColor DarkGray
 }
 
 Write-InstallLog "==== Teyssir install_all (role: $Role) ====" "Green"
@@ -134,7 +134,7 @@ if (-not $isAdmin -and -not $NoElevate) {
 }
 
 if ($wantElevate) {
-    Write-InstallLog "Not elevated — re-launching as Administrator (hub / -ForceElevate). Accept the UAC prompt." "Yellow"
+    Write-InstallLog "Not elevated -- re-launching as Administrator (hub / -ForceElevate). Accept the UAC prompt." "Yellow"
     $argLine = Get-ForwardedArgList
     try {
         $p = Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $argLine -Wait -PassThru
@@ -146,7 +146,7 @@ if ($wantElevate) {
     }
 }
 elseif (-not $isAdmin) {
-    Write-InstallLog "Not running as Administrator (till soft path). PostgreSQL/firewall/service steps may be skipped — OK for most tills." "Yellow"
+    Write-InstallLog "Not running as Administrator (till soft path). PostgreSQL/firewall/service steps may be skipped -- OK for most tills." "Yellow"
 }
 else {
     Write-InstallLog "Running as Administrator." "Green"
@@ -168,8 +168,8 @@ catch {
     Write-InstallLog ("Host dependencies warning: {0}" -f $_.Exception.Message) "Yellow"
 }
 
-# --- local LLM (Ollama + mistral + qwen2.5vl:3b) — default on, soft-fail ----
-# Explicit Phase 2 check: detect → winget install → pull models if missing.
+# --- local LLM (Ollama + mistral + qwen2.5vl:3b) -- default on, soft-fail ----
+# Explicit Phase 2 check: detect -> winget install -> pull models if missing.
 # Reuses Install-LocalLlm.ps1; install.ps1 will re-run safely (idempotent).
 if ($SkipLlm) {
     Write-InstallLog "Local LLM skipped (-SkipLlm). Shop runs without Ollama/Vision." "Yellow"
@@ -193,7 +193,7 @@ else {
             ) "Green"
         }
         else {
-            Write-InstallLog "Ollama not ready after install attempt — ERP continues without local AI (soft-fail)." "Yellow"
+            Write-InstallLog "Ollama not ready after install attempt -- ERP continues without local AI (soft-fail)." "Yellow"
         }
     }
     catch {
@@ -202,7 +202,7 @@ else {
 }
 
 if ($DepsOnly) {
-    Write-InstallLog "==== DepsOnly — skipping install.ps1 ====" "Green"
+    Write-InstallLog "==== DepsOnly -- skipping install.ps1 ====" "Green"
     Write-InstallLog ("Log saved: {0}" -f $logPath)
     if ($transcriptStarted) { Stop-Transcript | Out-Null }
     exit 0
@@ -244,7 +244,7 @@ Write-InstallLog ("==== install_all finished (exit {0}) ====" -f $exitCode) $(if
 Write-InstallLog ("Log: {0}" -f $logPath)
 Write-InstallLog "Printer: use -DiscoverPrinter, -Printer tcp:IP:9100, or .\deploy\windows\Discover-Printer.ps1 (no fake shop IP)."
 Write-InstallLog "Local AI: Ollama + mistral (+ qwen2.5vl:3b unless -SkipVision); soft-fail if pull fails. -SkipLlm to opt out."
-Write-InstallLog "libzbar: optional DLL — see docs/INSTALL-WINDOWS.md (ISBN barcode soft-fail without it)."
+Write-InstallLog "libzbar: optional DLL -- see docs/INSTALL-WINDOWS.md (ISBN barcode soft-fail without it)."
 
 if ($transcriptStarted) {
     try { Stop-Transcript | Out-Null } catch { }

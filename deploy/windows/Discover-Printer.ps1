@@ -1,4 +1,4 @@
-<#
+﻿<#
     Scan the local /24 for an ESC/POS printer on TCP 9100.
     Prints tcp:HOST:9100 or dummy (soft-fail). See deploy/discover_printer.py.
 
