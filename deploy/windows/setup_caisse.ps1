@@ -102,7 +102,7 @@ function Invoke-CaisseChecks {
         Write-Caisse ("Local till health OK: {0}" -f $localHealth) "Green"
     }
     else {
-        Write-Caisse "Local /health/ not up yet -- start TeyssirBackend or Desktop " Teyssir ERP ", then re-check." "Yellow"
+        Write-Caisse "Local /health/ not up yet -- start TeyssirBackend or Desktop 'Teyssir ERP', then re-check." "Yellow"
     }
 
     # 3) Printer discover helper (document + optional invoke path)
@@ -120,7 +120,7 @@ function Invoke-CaisseChecks {
     # 4) POS UI launch path
     $openPs1 = Join-Path $WindowsDeploy "open-teyssir.ps1"
     $shortcutPs1 = Join-Path $WindowsDeploy "Install-DesktopShortcut.ps1"
-    Write-Caisse "POS UI: Desktop shortcut " Teyssir ERP " (Install-DesktopShortcut.ps1) or:"
+    Write-Caisse "POS UI: Desktop shortcut 'Teyssir ERP' (Install-DesktopShortcut.ps1) or:"
     Write-Caisse ("  {0}" -f $openPs1)
     if ($LaunchPos -and (Test-Path $openPs1)) {
         Write-Caisse "Launching POS (open-teyssir.ps1) ..." "Cyan"
@@ -220,5 +220,5 @@ Write-Caisse ("==== setup_caisse {0} finished (exit {1}) ====" -f $Terminal, $ex
     if ($exitCode -eq 0) { "Green" } else { "Red" }
 )
 Write-Caisse "Printer: -DiscoverPrinter | -Printer tcp:IP:9100 | Discover-Printer.ps1 (no hardcoded Aclas IP)."
-Write-Caisse "POS: Desktop " Teyssir ERP " or .\deploy\windows\open-teyssir.ps1"
+Write-Caisse "POS: Desktop 'Teyssir ERP' or .\deploy\windows\open-teyssir.ps1"
 exit $exitCode

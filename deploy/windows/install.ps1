@@ -639,7 +639,7 @@ Write-Host ""
 Write-Host "==== Installation complete ====" -ForegroundColor Green
 if ($global:TeyssirServiceReady) {
     Write-Host "Backend:              Windows service TeyssirBackend (automatic at boot, no terminal)"
-    Write-Host "Open Teyssir:         double-click the Desktop icon  " Teyssir ERP ""
+    Write-Host "Open Teyssir:         double-click the Desktop icon  'Teyssir ERP'"
 }
 else {
     Write-Host "Start Teyssir with:  deploy\windows\start-teyssir.bat"
@@ -685,11 +685,11 @@ if ($Role -eq "hub") {
     else {
         Write-Host "Hub database:        SQLite fallback  (teyssir_hub.sqlite3 -- see docs/POSTGRESQL-SETUP.md)"
     }
-    Write-Host "Next:                Desktop icon " Teyssir ERP "  -  uninstall: deploy\windows\uninstall.ps1"
+    Write-Host "Next:                Desktop icon 'Teyssir ERP'  -  uninstall: deploy\windows\uninstall.ps1"
 }
 else {
     Write-Host "Till database:       SQLite  (offline)"
     Write-Host ("Till terminal:       " + $Terminal)
     Write-Host ("Hub URL:             " + (Get-DotEnvValue $envPath "TEYSSIR_HUB_URL"))
-    Write-Host "Next:                Desktop icon " Teyssir ERP "  -  uninstall: deploy\windows\uninstall.ps1"
+    Write-Host "Next:                Desktop icon 'Teyssir ERP'  -  uninstall: deploy\windows\uninstall.ps1"
 }

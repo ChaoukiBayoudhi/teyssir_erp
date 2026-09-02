@@ -118,8 +118,8 @@ Write-CleanLog (@"
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║  Cette opération va SUPPRIMER :                                              ║
 ║    * Le service Windows TeyssirBackend et les tâches planifiées              ║
-║    * Les raccourcis Bureau / Menu Démarrer " Teyssir ERP "                   ║
-║    * La base de données (PostgreSQL " teyssir " ou fichiers SQLite)          ║
+║    * Les raccourcis Bureau / Menu Démarrer 'Teyssir ERP'                   ║
+║    * La base de données (PostgreSQL 'teyssir' ou fichiers SQLite)          ║
 ║    * Le fichier .env (copie de sauvegarde .env.bak.<horodatage> créée)       ║
 $venvWarnLine║  CONSERVÉ (non supprimé) :                                                   ║
 ║    * Dossier du projet, code source, frontend\dist                           ║
@@ -201,7 +201,7 @@ if ($envRole -eq "hub" -and $envDbBackend -match "^(postgres|postgresql|pg)$") {
         Write-CleanLog "  Tentative de DROP via rôle applicatif ou fichiers SQLite de repli ..." "Yellow"
     }
     elseif (Test-Path $pgScript) {
-        Write-CleanLog ("  PostgreSQL : DROP + recréation base " {0} " ..." -f $pgDb) "Yellow"
+        Write-CleanLog ("  PostgreSQL : DROP + recreation base '{0}' ..." -f $pgDb) "Yellow"
         try {
             & $pgScript -Db $pgDb -User $pgUser -Password $pgPass -SuperPassword $superPass -ResetDatabase
             if ($global:TeyssirPostgresReady) {

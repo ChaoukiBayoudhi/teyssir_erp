@@ -2,7 +2,7 @@
     Register till->hub sync (and a logon fallback if the Windows service is absent).
 
     Prefer NSSM service (Install-WindowsService.ps1) for the backend on hub/till.
-    This script never creates " Teyssir Server " when TeyssirBackend already exists
+    This script never creates 'Teyssir Server' when TeyssirBackend already exists
     (avoids two listeners on port 8000).
 
     Unregister (reversible):

@@ -252,7 +252,7 @@ function Invoke-AppValidation {
             Write-Setup ("TeyssirBackend status={0}. Start-Service TeyssirBackend, then check {1}" -f $svc.Status, $healthUrl) "Yellow"
         }
         else {
-            Write-Setup ("Backend not reachable at {0}. After install, use Desktop " Teyssir ERP ", Start-Service TeyssirBackend, or deploy\windows\start-teyssir.bat -- then open-teyssir.ps1 / {0}" -f $healthUrl) "Yellow"
+            Write-Setup ("Backend not reachable at {0}. After install, use Desktop 'Teyssir ERP', Start-Service TeyssirBackend, or deploy\windows\start-teyssir.bat -- then open-teyssir.ps1 / {0}" -f $healthUrl) "Yellow"
         }
     }
 
