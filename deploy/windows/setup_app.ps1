@@ -204,9 +204,14 @@ function Invoke-AppValidation {
     }
 
     Write-Setup "django check ..."
-    & $venvPy manage.py check 2>&1 | ForEach-Object { Write-Setup ("  {0}" -f $_) }
-    if ($LASTEXITCODE -ne 0) {
-        Write-Setup "FAIL: manage.py check" "Red"
+    # Capture output first so log lines do not confuse callers; success = LASTEXITCODE only.
+    $checkOut = & $venvPy manage.py check 2>&1
+    $checkCode = $LASTEXITCODE
+    if ($null -eq $checkCode) { $checkCode = 1 }
+    try { $checkCode = [int]$checkCode } catch { $checkCode = 1 }
+    @($checkOut) | ForEach-Object { Write-Setup ("  {0}" -f $_) }
+    if ($checkCode -ne 0) {
+        Write-Setup ("FAIL: manage.py check (exit {0})" -f $checkCode) "Red"
         $ok = $false
     }
     else {
@@ -214,9 +219,13 @@ function Invoke-AppValidation {
     }
 
     Write-Setup "migrate --check ..."
-    & $venvPy manage.py migrate --check 2>&1 | ForEach-Object { Write-Setup ("  {0}" -f $_) }
-    if ($LASTEXITCODE -ne 0) {
-        Write-Setup "WARN: migrate --check reported pending migrations (re-run setup_app / install.ps1)." "Yellow"
+    $migOut = & $venvPy manage.py migrate --check 2>&1
+    $migCode = $LASTEXITCODE
+    if ($null -eq $migCode) { $migCode = 1 }
+    try { $migCode = [int]$migCode } catch { $migCode = 1 }
+    @($migOut) | ForEach-Object { Write-Setup ("  {0}" -f $_) }
+    if ($migCode -ne 0) {
+        Write-Setup ("WARN: migrate --check exit {0} (pending migrations? re-run setup_app / install.ps1)." -f $migCode) "Yellow"
         $ok = $false
     }
     else {

@@ -41,9 +41,37 @@ function Get-PsqlExe {
     Refresh-Path
     $cmd = Get-Command psql -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
-    foreach ($ver in @("17", "16", "15", "14")) {
+
+    # Prefer highest installed major version under Program Files (14, 15, ..., 18, 19, ...).
+    $pgRoot = "C:\Program Files\PostgreSQL"
+    if (Test-Path -LiteralPath $pgRoot) {
+        $candidates = Get-ChildItem -LiteralPath $pgRoot -Directory -ErrorAction SilentlyContinue |
+            Where-Object {
+                (Test-Path -LiteralPath (Join-Path $_.FullName "bin\psql.exe")) -or
+                (Test-Path -LiteralPath (Join-Path $_.FullName "bin\pg_ctl.exe"))
+            } |
+            ForEach-Object {
+                $verNum = 0
+                $parsed = [int]::TryParse($_.Name, [ref]$verNum)
+                [pscustomobject]@{
+                    Dir     = $_.FullName
+                    Ver     = $(if ($parsed) { $verNum } else { 0 })
+                    Psql    = (Join-Path $_.FullName "bin\psql.exe")
+                    HasPsql = (Test-Path -LiteralPath (Join-Path $_.FullName "bin\psql.exe"))
+                }
+            } |
+            Where-Object { $_.HasPsql } |
+            Sort-Object -Property Ver -Descending
+        $ranked = @($candidates)
+        if ($ranked.Count -gt 0) {
+            return $ranked[0].Psql
+        }
+    }
+
+    # Hardcoded fallback if directory scan is unavailable.
+    foreach ($ver in @("19", "18", "17", "16", "15", "14", "13")) {
         $p = "C:\Program Files\PostgreSQL\$ver\bin\psql.exe"
-        if (Test-Path $p) { return $p }
+        if (Test-Path -LiteralPath $p) { return $p }
     }
     return $null
 }

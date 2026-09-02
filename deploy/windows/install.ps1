@@ -218,21 +218,44 @@ function Install-NodeIfNeeded {
 
 function Invoke-Py([string[]]$PyArgs) {
     # Continue on native stderr so Django/pip noise does not abort under -ErrorAction Stop.
+    # Capture stdout/stderr into a variable so they NEVER enter this function's success
+    # output stream. Otherwise `$code = Invoke-Py ...` becomes an Object[] of log lines
+    # plus the exit int, and `if ($code -ne 0)` is truthy even when Python exited 0
+    # (classic PS false failure when logging goes to stderr / migrate writes stdout).
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
+    $output = $null
     try {
         Write-Host ("  > python " + ($PyArgs -join " ")) -ForegroundColor DarkGray
-        & $script:VenvPython @PyArgs
+        $output = & $script:VenvPython @PyArgs 2>&1
         $code = $LASTEXITCODE
     }
     finally {
         $ErrorActionPreference = $prevEap
     }
     if ($null -eq $code) { $code = 1 }
-    if ($code -ne 0) {
-        Write-Host ("  ! python exited $code -- " + ($PyArgs -join " ")) -ForegroundColor Red
+    $exitCode = 1
+    try { $exitCode = [int]$code } catch { $exitCode = 1 }
+
+    $lines = @()
+    if ($null -ne $output) {
+        $lines = @($output | ForEach-Object { "$_" })
     }
-    return [int]$code
+    foreach ($line in $lines) {
+        Write-Host $line
+    }
+    if ($lines.Count -gt 8) {
+        $script:LastPyTail = @($lines[-8..-1])
+    }
+    else {
+        $script:LastPyTail = @($lines)
+    }
+
+    if ($exitCode -ne 0) {
+        Write-Host ("  ! python exited $exitCode -- " + ($PyArgs -join " ")) -ForegroundColor Red
+    }
+    # Emit ONLY the numeric exit code on the success stream.
+    return $exitCode
 }
 
 function Set-DbBackend([string]$Backend) {
@@ -464,9 +487,24 @@ function Invoke-DjangoSetup {
         @{ Name = "seed_fiscal"; Args = @("manage.py", "seed_fiscal") }
     )
     foreach ($step in $steps) {
-        $code = Invoke-Py -PyArgs ([string[]]$step.Args)
+        $raw = Invoke-Py -PyArgs ([string[]]$step.Args)
+        # Honor numeric exit only (LASTEXITCODE). Never treat $? or captured log text as failure.
+        if ($raw -is [System.Array]) {
+            $code = [int](@($raw)[-1])
+        }
+        else {
+            try { $code = [int]$raw } catch { $code = 1 }
+        }
         if ($code -ne 0) {
-            Write-Warning ("Database step failed: manage.py " + $step.Name + " (exit $code). Django output is above.")
+            $tailBits = @()
+            if ($script:LastPyTail -and $script:LastPyTail.Count -gt 0) {
+                $tailBits = @($script:LastPyTail | Select-Object -Last 5)
+            }
+            $tailMsg = ""
+            if ($tailBits.Count -gt 0) {
+                $tailMsg = " Last lines: " + ($tailBits -join " | ")
+            }
+            Write-Warning ("Database step failed: manage.py " + $step.Name + " (exit " + $code + ")." + $tailMsg)
             return $false
         }
     }
