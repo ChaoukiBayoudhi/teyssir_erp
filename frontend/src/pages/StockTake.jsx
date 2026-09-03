@@ -6,6 +6,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { searchProducts, stocktake } from "../api";
 import LangToggle from "../LangToggle.jsx";
+import { fmtQty } from "../format.js";
 
 export default function StockTake({ onBack, onLogout }) {
   const { t } = useTranslation();
@@ -32,7 +33,7 @@ export default function StockTake({ onBack, onLogout }) {
     setRows((r) =>
       r.find((x) => x.product.id === p.id)
         ? r
-        : [...r, { product: p, system: Number(p.qty_on_hand), counted: String(p.qty_on_hand) }]
+        : [...r, { product: p, system: Number(p.qty_on_hand), counted: fmtQty(p.qty_on_hand) }]
     );
   };
 
@@ -76,7 +77,7 @@ export default function StockTake({ onBack, onLogout }) {
             {results.map((p) => (
               <ListItemButton key={p.id} onClick={() => add(p)}>
                 <ListItemText primary={p.name_fr}
-                              secondary={`${p.sku} · ${t("system")}: ${Number(p.qty_on_hand)}`} />
+                              secondary={`${p.sku} · ${t("system")}: ${fmtQty(p.qty_on_hand)}`} />
               </ListItemButton>
             ))}
           </List>
@@ -102,7 +103,7 @@ export default function StockTake({ onBack, onLogout }) {
                     <TableCell align="right">
                       <TextField size="small" type="number" value={x.counted}
                                  onChange={(e) => setCounted(x.product.id, e.target.value)}
-                                 sx={{ width: 90 }} inputProps={{ min: 0, style: { textAlign: "right" } }} />
+                                 sx={{ width: 90 }} inputProps={{ min: 0, step: 1, style: { textAlign: "right" } }} />
                     </TableCell>
                     <TableCell align="right" sx={{
                       fontVariantNumeric: "tabular-nums", fontWeight: 700,

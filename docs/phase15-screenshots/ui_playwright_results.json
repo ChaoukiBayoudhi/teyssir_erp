@@ -1,0 +1,34 @@
+{
+  "results": [
+    {
+      "case": "C",
+      "ok": true,
+      "note": "Math school — ui_case_C_result.png"
+    },
+    {
+      "case": "A",
+      "ok": true,
+      "note": "Beauty — ui_case_A_result.png"
+    },
+    {
+      "case": "D",
+      "ok": false,
+      "ms": 160763
+    },
+    {
+      "case": "E",
+      "ok": false,
+      "ms": 160405
+    },
+    {
+      "case": "F",
+      "ok": false,
+      "ms": 160701
+    },
+    {
+      "case": "B",
+      "ok": false,
+      "ms": 160343
+    }
+  ]
+}

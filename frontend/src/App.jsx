@@ -3,7 +3,7 @@ import { CacheProvider } from "@emotion/react";
 import { ThemeProvider, CssBaseline } from "@mui/material";
 import { useTranslation } from "react-i18next";
 import { makeTheme, ltrCache, rtlCache } from "./theme";
-import { getToken, clearToken } from "./api";
+import { getToken, clearToken, fetchMe } from "./api";
 import Login from "./pages/Login.jsx";
 import Pos from "./pages/Pos.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
@@ -18,18 +18,35 @@ import Quotation from "./pages/Quotation.jsx";
 import PurchaseOrders from "./pages/PurchaseOrders.jsx";
 import Catalog from "./pages/Catalog.jsx";
 import ProductCreate from "./pages/ProductCreate.jsx";
+import ProductEdit from "./pages/ProductEdit.jsx";
 import PdfConvert from "./pages/PdfConvert.jsx";
+import Diagnostics from "./pages/Diagnostics.jsx";
 
 export default function App() {
   const { i18n } = useTranslation();
   const [authed, setAuthed] = useState(Boolean(getToken()));
   const [view, setView] = useState("pos");
+  const [editProductId, setEditProductId] = useState(null);
+  const [canDiagnostics, setCanDiagnostics] = useState(false);
   const dir = i18n.language === "ar" ? "rtl" : "ltr";
 
   useEffect(() => {
     document.documentElement.dir = dir;
     document.documentElement.lang = i18n.language;
   }, [dir, i18n.language]);
+
+  useEffect(() => {
+    if (!authed) {
+      setCanDiagnostics(false);
+      return;
+    }
+    fetchMe()
+      .then((me) => {
+        const caps = me.capabilities || [];
+        setCanDiagnostics(Boolean(me.is_superuser || caps.includes("configure_system")));
+      })
+      .catch(() => setCanDiagnostics(false));
+  }, [authed]);
 
   const theme = useMemo(() => makeTheme(dir), [dir]);
   const cache = dir === "rtl" ? rtlCache : ltrCache;
@@ -69,11 +86,18 @@ export default function App() {
           <PurchaseOrders onBack={() => setView("pos")} onLogout={logout} />
         ) : view === "catalog" ? (
           <Catalog onBack={() => setView("pos")} onLogout={logout}
-                   onNewProduct={() => setView("newProduct")} />
+                   onNewProduct={() => setView("newProduct")}
+                   onEditProduct={(id) => { setEditProductId(id); setView("editProduct"); }} />
         ) : view === "newProduct" ? (
-          <ProductCreate onBack={() => setView("pos")} onLogout={logout} />
+          <ProductCreate onBack={() => setView("pos")} onLogout={logout}
+                         onNewBook={() => setView("book")} />
+        ) : view === "editProduct" && editProductId ? (
+          <ProductEdit productId={editProductId} onLogout={logout}
+                       onBack={() => { setEditProductId(null); setView("catalog"); }} />
         ) : view === "pdfConvert" ? (
           <PdfConvert onBack={() => setView("pos")} onLogout={logout} />
+        ) : view === "diagnostics" ? (
+          <Diagnostics onBack={() => setView("pos")} onLogout={logout} />
         ) : (
           <Pos
             onLogout={logout}
@@ -88,6 +112,7 @@ export default function App() {
             onCatalog={() => setView("catalog")}
             onNewProduct={() => setView("newProduct")}
             onPdfConvert={() => setView("pdfConvert")}
+            onDiagnostics={canDiagnostics ? () => setView("diagnostics") : null}
           />
         )}
       </ThemeProvider>

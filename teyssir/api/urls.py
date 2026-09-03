@@ -4,14 +4,16 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     BarcodeLookupView, CashOpenView, CashXView, CashZView, CatalogSearchView, CategoryListView,
-    CheckoutView, CustomerViewSet, PdfToDocxView, ProductCreateView, ProductDetailView,
+    CheckoutView, CustomerViewSet, PdfToDocxDownloadView, PdfToDocxJobView, PdfToDocxView,
+    ProductCreateView, ProductDetailView,
     ProductViewSet,
     QuotationConvertView, QuotationCreateView, ReceiveView, ReservationCreateView,
     BookCreateView, BookScanView, FinancialsView, ProductImageView, ProductImagesView, ScanJobView,
     PurchaseInvoiceView, PurchaseOrderViewSet, ReservationReleaseView, ReturnView,
+    SaleReceiptView,
     ConsolidatedReportView, SalesReportView, StockTakeView, SupplierViewSet, TaxRateViewSet,
     TrialBalanceView,
-    VatDeclarationView, me,
+    VatDeclarationView, diagnostics, me,
 )
 
 router = DefaultRouter()
@@ -24,8 +26,10 @@ router.register("purchasing/orders", PurchaseOrderViewSet, basename="po")
 urlpatterns = [
     path("auth/token", obtain_auth_token, name="auth-token"),
     path("me", me, name="me"),
+    path("diagnostics", diagnostics, name="diagnostics"),
     path("pos/checkout", CheckoutView.as_view(), name="pos-checkout"),
     path("pos/return", ReturnView.as_view(), name="pos-return"),
+    path("pos/sales/<uuid:pk>/receipt", SaleReceiptView.as_view(), name="sale-receipt"),
     path("cash/open", CashOpenView.as_view(), name="cash-open"),
     path("cash/x", CashXView.as_view(), name="cash-x"),
     path("cash/z", CashZView.as_view(), name="cash-z"),
@@ -41,6 +45,9 @@ urlpatterns = [
     path("catalog/lookup", BarcodeLookupView.as_view(), name="barcode-lookup"),
     path("catalog/register", ProductCreateView.as_view(), name="product-register"),
     path("tools/pdf-to-docx", PdfToDocxView.as_view(), name="pdf-to-docx"),
+    path("tools/pdf-to-docx/<uuid:pk>", PdfToDocxJobView.as_view(), name="pdf-to-docx-job"),
+    path("tools/pdf-to-docx/<uuid:pk>/download", PdfToDocxDownloadView.as_view(),
+         name="pdf-to-docx-download"),
     path("catalog/products/<uuid:pk>/detail", ProductDetailView.as_view(), name="product-detail"),
     path("catalog/books/scan", BookScanView.as_view(), name="book-scan"),
     path("catalog/books/scan/<uuid:pk>", ScanJobView.as_view(), name="scan-job"),

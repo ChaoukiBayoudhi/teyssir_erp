@@ -4,6 +4,7 @@ __pycache__/
 *.sqlite3-wal
 *.sqlite3-shm
 .env
+.teyssir_admin_probe.py
 .venv/
 venv/
 /staticfiles/
@@ -12,4 +13,7 @@ venv/
 *.pdf
 *.docx
 /logs/
-conc_test.sqlite3*
+# Clean install wipe backups
+.env.bak.*
+# Frontend build output (built by npm on install; not committed)
+frontend/dist/

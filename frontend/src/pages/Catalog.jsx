@@ -2,20 +2,21 @@ import { useEffect, useState } from "react";
 import {
   AppBar, Toolbar, Typography, Button, Box, Paper, Stack, Alert, Chip, TextField, MenuItem,
   Select, Table, TableHead, TableRow, TableCell, TableBody, TableContainer, Avatar, Pagination,
-  Dialog, DialogTitle, DialogContent, Divider, Grid, CircularProgress,
+  Dialog, DialogTitle, DialogContent, DialogActions, Divider, Grid, CircularProgress, IconButton,
 } from "@mui/material";
 import { useTranslation } from "react-i18next";
-import { catalogSearch, productDetail, listCategories } from "../api";
+import { catalogSearch, productDetail, listCategories, deleteProduct } from "../api";
 import ImageViewer from "../components/ImageViewer.jsx";
 import LangToggle from "../LangToggle.jsx";
+import { fmtQty } from "../format.js";
 
 function StockChip({ row, t }) {
   if (row.out_of_stock) return <Chip size="small" color="error" label={t("outOfStock")} />;
-  if (row.low_stock) return <Chip size="small" color="warning" label={`${t("lowStock")} · ${row.qty_on_hand}`} />;
-  return <Chip size="small" color="success" variant="outlined" label={row.qty_on_hand} />;
+  if (row.low_stock) return <Chip size="small" color="warning" label={`${t("lowStock")} · ${fmtQty(row.qty_on_hand)}`} />;
+  return <Chip size="small" color="success" variant="outlined" label={fmtQty(row.qty_on_hand)} />;
 }
 
-export default function Catalog({ onBack, onLogout, onNewProduct }) {
+export default function Catalog({ onBack, onLogout, onNewProduct, onEditProduct }) {
   const { t } = useTranslation();
   const [q, setQ] = useState("");
   const [category, setCategory] = useState("");
@@ -29,6 +30,8 @@ export default function Catalog({ onBack, onLogout, onNewProduct }) {
   const [error, setError] = useState("");
   const [detail, setDetail] = useState(null);
   const [viewer, setViewer] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [deletingId, setDeletingId] = useState(null);
 
   useEffect(() => { listCategories().then(setCats).catch(() => {}); }, []);
   useEffect(() => { setPage(1); }, [q, category, type, stock, ordering]);
@@ -41,11 +44,37 @@ export default function Catalog({ onBack, onLogout, onNewProduct }) {
       } catch (e) { setError(String(e.message || e)); } finally { setLoading(false); }
     }, 250);   // debounce → instant search while typing
     return () => clearTimeout(timer);
-  }, [q, category, type, stock, ordering, page]);
+  }, [q, category, type, stock, ordering, page, reloadKey]);
 
   const openDetail = async (id) => {
     setDetail({ loading: true });
     try { setDetail(await productDetail(id)); } catch (e) { setError(String(e.message || e)); setDetail(null); }
+  };
+
+  const askDelete = (row, e) => {
+    e?.stopPropagation?.();
+    const label = row.name_fr || row.sku || "";
+    if (!window.confirm(t("confirmDeleteProduct", { name: label }))) return;
+    doDelete(row.id);
+  };
+
+  const doDelete = async (id) => {
+    setDeletingId(id); setError("");
+    try {
+      await deleteProduct(id);
+      if (detail?.id === id) setDetail(null);
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      setError(String(e.message || e).replace(/^\d+:\s*/, ""));
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const startEdit = (id, e) => {
+    e?.stopPropagation?.();
+    setDetail(null);
+    onEditProduct?.(id);
   };
 
   const results = data?.results || [];
@@ -61,7 +90,7 @@ export default function Catalog({ onBack, onLogout, onNewProduct }) {
         </Toolbar>
       </AppBar>
 
-      <Box sx={{ p: 2, maxWidth: 1040, mx: "auto" }}>
+      <Box sx={{ p: 2, maxWidth: 1100, mx: "auto" }}>
         {error && <Alert severity="warning" sx={{ mb: 2 }}>{error}</Alert>}
 
         <Paper sx={{ p: 2, mb: 2 }}>
@@ -102,6 +131,7 @@ export default function Catalog({ onBack, onLogout, onNewProduct }) {
                   <TableCell>{t("category")}</TableCell>
                   <TableCell align="right">{t("price")}</TableCell>
                   <TableCell align="center">{t("stock")}</TableCell>
+                  <TableCell align="right">{t("actions")}</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -114,15 +144,25 @@ export default function Catalog({ onBack, onLogout, onNewProduct }) {
                     </TableCell>
                     <TableCell>
                       <Typography variant="body2" fontWeight={600}>{r.name_fr}</Typography>
-                      <Typography variant="caption" color="text.secondary">{r.sku}</Typography>
+                      <Typography variant="caption" color="text.secondary">{r.reference || r.sku}</Typography>
                     </TableCell>
                     <TableCell>{r.category}</TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: "tabular-nums" }}>{r.sale_price}</TableCell>
                     <TableCell align="center"><StockChip row={r} t={t} /></TableCell>
+                    <TableCell align="right" onClick={(e) => e.stopPropagation()}>
+                      <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                        {onEditProduct && (
+                          <Button size="small" onClick={(e) => startEdit(r.id, e)}>{t("edit")}</Button>
+                        )}
+                        <IconButton size="small" color="error" aria-label={t("delete")}
+                                    disabled={deletingId === r.id}
+                                    onClick={(e) => askDelete(r, e)}>✕</IconButton>
+                      </Stack>
+                    </TableCell>
                   </TableRow>
                 ))}
                 {!loading && results.length === 0 && (
-                  <TableRow><TableCell colSpan={5} align="center" sx={{ py: 4, color: "text.secondary" }}>{t("noResults")}</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={6} align="center" sx={{ py: 4, color: "text.secondary" }}>{t("noResults")}</TableCell></TableRow>
                 )}
               </TableBody>
             </Table>
@@ -163,9 +203,12 @@ export default function Catalog({ onBack, onLogout, onNewProduct }) {
                 )}
                 <Grid item xs={detail.images?.length > 0 ? 8 : 12}>
                   <Info label={t("sku")} value={detail.sku} />
+                  {detail.reference && <Info label={t("reference")} value={detail.reference} />}
+                  {detail.brand && <Info label={t("brand")} value={detail.brand} />}
+                  {detail.color && <Info label={t("color")} value={detail.color} />}
                   <Info label={t("category")} value={detail.category} />
-                  <Info label={t("price")} value={`${detail.sale_price} · TVA ${detail.tax_rate_percent}%`} />
-                  <Info label={t("stock")} value={`${detail.qty_on_hand} (${t("lowStock")} ≤ ${detail.reorder_point})`} />
+                  <Info label={t("price")} value={`${detail.sale_price} DT`} />
+                  <Info label={t("stock")} value={`${fmtQty(detail.qty_on_hand)} (${t("lowStock")} ≤ ${fmtQty(detail.reorder_point)})`} />
                   {detail.barcodes?.length > 0 && (
                     <Info label={t("barcodes")} value={detail.barcodes.map((b) => b.value).join(", ")} />
                   )}
@@ -190,6 +233,14 @@ export default function Catalog({ onBack, onLogout, onNewProduct }) {
                 </>
               )}
             </DialogContent>
+            <DialogActions>
+              <Button color="error" disabled={deletingId === detail.id}
+                      onClick={() => askDelete(detail)}>{t("delete")}</Button>
+              {onEditProduct && (
+                <Button variant="contained" onClick={() => startEdit(detail.id)}>{t("edit")}</Button>
+              )}
+              <Button onClick={() => setDetail(null)}>{t("cancel")}</Button>
+            </DialogActions>
           </>
         )}
       </Dialog>

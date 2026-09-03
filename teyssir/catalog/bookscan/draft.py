@@ -6,6 +6,12 @@ from dataclasses import asdict, dataclass, field
 class BookDraft:
     isbn13: str = ""
     isbn10: str = ""
+    # Phase 2B: non-ISBN product identity (CNP 619…, GTIN, Code128, …)
+    barcode_raw: str = ""
+    barcode_symbology: str = ""
+    barcode_kind: str = ""  # isbn13 | gtin | local_product | ""
+    # school_cnp | isbn_edition | unknown — Tunisian CNP vs 978/979 novels
+    edition_kind: str = ""
     title: str = ""
     subtitle: str = ""
     authors: list = field(default_factory=list)
@@ -14,6 +20,8 @@ class BookDraft:
     series: str = ""
     edition: str = ""
     languages: list = field(default_factory=list)
+    # Phase 15.2: scalar ar|fr|en|mixed:ar+fr (keeps languages[] compatible)
+    language_detected: str = ""
     pub_year: int | None = None
     pages: int | None = None
     dimensions: str = ""

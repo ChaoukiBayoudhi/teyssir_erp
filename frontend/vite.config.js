@@ -9,6 +9,13 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
+      // New npm builds emit a new SW; cleanup so upgrade clients drop old TVA UI chunks.
+      workbox: {
+        cacheId: "teyssir-pwa-20260903-vat-off",
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+        skipWaiting: true,
+      },
       includeAssets: ["favicon.svg", "favicon.ico", "apple-touch-icon.png"],
       manifest: {
         name: "Teyssir — Librairie & POS",

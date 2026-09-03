@@ -116,7 +116,7 @@ export default function PurchaseOrders({ onBack, onLogout }) {
                     <TableRow key={x.product.id}>
                       <TableCell>{x.product.name_fr}</TableCell>
                       <TableCell align="right"><TextField size="small" type="number" value={x.qty}
-                        onChange={(e) => setField(x.product.id, "qty", e.target.value)} sx={{ width: 80 }} /></TableCell>
+                        onChange={(e) => setField(x.product.id, "qty", e.target.value)} sx={{ width: 80 }} inputProps={{ min: 1, step: 1 }} /></TableCell>
                       <TableCell align="right"><TextField size="small" type="number" value={x.cost}
                         onChange={(e) => setField(x.product.id, "cost", e.target.value)} sx={{ width: 100 }} inputProps={{ step: "0.001" }} /></TableCell>
                     </TableRow>

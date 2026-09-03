@@ -119,30 +119,14 @@ WSGI_APPLICATION = "teyssir.wsgi.application"
 # --- Database: hub=PostgreSQL, till=SQLite (spec §7) --------------------------
 # Engine defaults from the role but can be overridden with TEYSSIR_DB (e.g. run a hub on
 # SQLite for local/dev/CI without a PostgreSQL server).
+from teyssir.core.db import database_config as _database_config
+
 DB_BACKEND = os.environ.get("TEYSSIR_DB", "postgres" if ROLE == "hub" else "sqlite").lower()
-if DB_BACKEND == "postgres":
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": os.environ.get("POSTGRES_DB", "teyssir"),
-            "USER": os.environ.get("POSTGRES_USER", "teyssir"),
-            "PASSWORD": os.environ.get("POSTGRES_PASSWORD", ""),
-            "HOST": os.environ.get("POSTGRES_HOST", "127.0.0.1"),
-            "PORT": os.environ.get("POSTGRES_PORT", "5432"),
-        }
-    }
-else:
-    default_name = "teyssir_hub.sqlite3" if ROLE == "hub" else f"teyssir_{TERMINAL}.sqlite3"
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / os.environ.get("TEYSSIR_SQLITE_NAME", default_name),
-            # transaction_mode=IMMEDIATE makes every atomic() take the write lock at BEGIN, so
-            # concurrent writes (waitress serves with multiple threads) WAIT on busy_timeout instead
-            # of failing with "database is locked" on a read->write upgrade. `timeout` = busy_timeout.
-            "OPTIONS": {"timeout": 20, "transaction_mode": "IMMEDIATE"},
-        }
-    }
+DATABASES = {
+    "default": _database_config(
+        role=ROLE, backend=DB_BACKEND, base_dir=BASE_DIR, terminal=TERMINAL, environ=os.environ,
+    )
+}
 
 # --- Auth / security (spec §18) ----------------------------------------------
 AUTH_USER_MODEL = "accounts.User"
@@ -206,15 +190,74 @@ if os.environ.get("TEYSSIR_S3_BUCKET"):
 
 # Book registration / OCR providers (replaceable; docs/BOOK-OCR-ARCHITECTURE.md)
 OCR_PROVIDER = os.environ.get("TEYSSIR_OCR_PROVIDER", "tesseract")          # tesseract|manual|vision
+# Absolute Tesseract binary (LaunchAgent / NSSM often lack Homebrew / Program Files on PATH).
+def _default_tesseract_cmd() -> str:
+    import sys as _sys
+    if _sys.platform == "darwin":
+        for cand in ("/opt/homebrew/bin/tesseract", "/usr/local/bin/tesseract"):
+            if Path(cand).is_file():
+                return cand
+    elif _sys.platform == "win32":
+        for cand in (
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        ):
+            if Path(cand).is_file():
+                return cand
+    return "tesseract"
+
+
+TESSERACT_CMD = (
+    os.environ.get("TEYSSIR_TESSERACT_CMD")
+    or os.environ.get("TESSERACT_CMD")
+    or _default_tesseract_cmd()
+)
+# Below this OCR mean-confidence (0–100), drafts are flagged for manual review.
+OCR_CONFIDENCE_THRESHOLD = float(os.environ.get("TEYSSIR_OCR_CONFIDENCE_THRESHOLD", "45"))
+# When Tesseract returns a weak/empty draft, try local Ollama vision (qwen2.5vl) once.
+OCR_VISION_FALLBACK = os.environ.get("TEYSSIR_OCR_VISION_FALLBACK", "true").strip().lower() in (
+    "1", "true", "yes", "on",
+)
 METADATA_PROVIDERS = [
-    p for p in os.environ.get("TEYSSIR_METADATA_PROVIDERS", "openlibrary").split(",") if p
+    p for p in os.environ.get(
+        "TEYSSIR_METADATA_PROVIDERS", "openlibrary,googlebooks"
+    ).split(",") if p
 ]
 # Vision-LLM OCR (OCR_PROVIDER=vision): free, offline, local — Ollama + a vision model.
-OLLAMA_URL = os.environ.get("TEYSSIR_OLLAMA_URL", "http://localhost:11434")
+OLLAMA_URL = os.environ.get("TEYSSIR_OLLAMA_URL", os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"))
 VISION_MODEL = os.environ.get("TEYSSIR_VISION_MODEL", "qwen2.5vl:3b")
+# Hard timeout for primary vision / dual-cover fallback (CPU qwen2.5vl needs ~40–70s).
 VISION_TIMEOUT = int(os.environ.get("TEYSSIR_VISION_TIMEOUT", "120"))
+# Soft timeout when vision is only a Tesseract fallback (raised for dual-image).
+VISION_FALLBACK_TIMEOUT = float(os.environ.get("TEYSSIR_VISION_FALLBACK_TIMEOUT", "45"))
+# Max image edge (px) before base64→Ollama; phone photos are huge and starve the timeout budget.
+VISION_IMAGE_MAX_EDGE = int(os.environ.get("TEYSSIR_VISION_IMAGE_MAX_EDGE", "1280"))
+# Dual front+back: smaller edge so Ollama finishes under VISION_TIMEOUT on CPU.
+VISION_DUAL_MAX_EDGE = int(os.environ.get("TEYSSIR_VISION_DUAL_MAX_EDGE", "768"))
+# P15-T3: content-hash cache for dual-image Vision JSON (local FS under media/).
+VISION_CACHE_ENABLED = os.environ.get("TEYSSIR_VISION_CACHE", "true").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+VISION_CACHE_DIR = os.environ.get("TEYSSIR_VISION_CACHE_DIR") or str(BASE_DIR / "media" / "vision_cache")
+VISION_CACHE_TTL_SECONDS = int(os.environ.get("TEYSSIR_VISION_CACHE_TTL", str(7 * 24 * 3600)))
+VISION_CACHE_MAX_ENTRIES = int(os.environ.get("TEYSSIR_VISION_CACHE_MAX", "200"))
+# Phase 15.6: optional accuracy mode for low-quality camera covers (extra title_band
+# Tess variants + slightly longer Vision budget). Default off keeps Phase 2C fast path.
+BOOKSCAN_ACCURACY = os.environ.get("TEYSSIR_BOOKSCAN_ACCURACY", "").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+# Optional text LLM (Ollama). ERP must run when this is false or Ollama is down.
+USE_LLM = os.environ.get("USE_LLM", os.environ.get("TEYSSIR_USE_LLM", "false")).strip().lower() in (
+    "1", "true", "yes", "on",
+)
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", os.environ.get("TEYSSIR_LLM_PROVIDER", "ollama"))
+LLM_MODEL = os.environ.get("LLM_MODEL", os.environ.get("TEYSSIR_LLM_MODEL", "mistral"))
 # Scan execution: inline (sync, default) | thread (background, so slow OCR doesn't block the request)
 SCAN_EXECUTOR = os.environ.get("TEYSSIR_SCAN_EXECUTOR", "inline")
+# PDF→Word: thread by default on Windows Hub (long converts must not block waitress); inline elsewhere/tests.
+import sys as _sys
+_CONVERT_DEFAULT = "thread" if _sys.platform == "win32" else "inline"
+CONVERT_EXECUTOR = os.environ.get("TEYSSIR_CONVERT_EXECUTOR", _CONVERT_DEFAULT)
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
@@ -233,8 +276,13 @@ MONEY_DISPLAY_DP = 2  # display 2 decimals
 
 # --- Store / fiscal identity (printed on receipts/factures, spec §13.5) ------
 STORE_MATRICULE_FISCAL = os.environ.get("TEYSSIR_MATRICULE_FISCAL", "")
+# Shop pricing: when false (default), POS/checkout/quotations ignore TVA + timbre —
+# totals = product prices after remises only. Set TEYSSIR_APPLY_VAT_AND_TIMBRE=1 to restore.
+APPLY_VAT_AND_TIMBRE = os.environ.get("TEYSSIR_APPLY_VAT_AND_TIMBRE", "0").strip().lower() in (
+    "1", "true", "yes", "on",
+)
 # Receipt printer target for this node: dummy | file:/path | tcp:host:port (spec §6)
-# (read at send time from TEYSSIR_PRINTER env)
+# Read at send time from TEYSSIR_PRINTER (client LAN IP — never hardcode a shop address).
 
 # --- Logging -----------------------------------------------------------------
 # The node runs headless (waitress). Persist warnings/errors to a rotating file so a shop problem

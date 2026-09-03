@@ -38,13 +38,13 @@ export default function Quotation({ onBack, onLogout }) {
   const remove = (id) => setCart((c) => c.filter((l) => l.product.id !== id));
 
   const totals = useMemo(() => {
-    let sub = 0, tax = 0;
+    let sub = 0;
     for (const l of cart) {
       const base = r3(l.qty * Number(l.product.sale_price));
       sub = r3(sub + base);
-      tax = r3(tax + r3((base * Number(l.product.tax_rate_percent || 0)) / 100));
     }
-    return { sub, tax, total: r3(sub + tax) };
+    // Shop: quotations are HT-only (no TVA line in UI).
+    return { sub, total: sub };
   }, [cart]);
 
   const saveQuote = async () => {
@@ -107,13 +107,12 @@ export default function Quotation({ onBack, onLogout }) {
                   <Box sx={{ flexGrow: 1 }}><Typography>{l.product.name_fr}</Typography></Box>
                   <TextField size="small" type="number" label={t("qty")} value={l.qty}
                              onChange={(e) => setQty(l.product.id, parseInt(e.target.value || "1", 10))}
-                             sx={{ width: 80 }} inputProps={{ min: 1 }} />
+                             sx={{ width: 80 }} inputProps={{ min: 1, step: 1 }} />
                   <IconButton onClick={() => remove(l.product.id)} aria-label="remove">✕</IconButton>
                 </Stack>
               ))}
               <Divider sx={{ my: 2 }} />
               <Stack direction="row" justifyContent="space-between"><span>{t("subtotal")}</span><span>{fmt(totals.sub)}</span></Stack>
-              <Stack direction="row" justifyContent="space-between"><span>{t("tva")}</span><span>{fmt(totals.tax)}</span></Stack>
               <Stack direction="row" justifyContent="space-between" sx={{ fontWeight: 700 }}>
                 <span>{t("total")}</span><span>{fmt(totals.total)} DT</span>
               </Stack>

@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 
 from teyssir.catalog.models import Barcode, Product, TaxRate
 from teyssir.core.money import display
+from teyssir.core.qty import format_qty
 from teyssir.customers.models import Customer
 from teyssir.customers.services import balance, charge_account, post_payment, statement
 from teyssir.inventory.services import post_stocktake
@@ -54,22 +55,30 @@ CanViewReports = capability("view_financial_reports")
 
 
 class ProductViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
-    """Catalog read + search + barcode lookup for the POS (spec §12/§13)."""
+    """Catalog read + search + barcode lookup for the POS (spec §12/§13).
+
+    Query params:
+      - ``search`` / ``q``: unified ranked search (name FR/AR, SKU, reference, ISBN, barcode)
+      - ``barcode``: exact barcode / SKU / reference / ISBN (scanner path)
+    """
 
     serializer_class = ProductSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
+        from teyssir.catalog.search import lookup_by_code, search_products
+
         qs = Product.objects.filter(active=True).select_related("tax_rate")
         barcode = self.request.query_params.get("barcode")
-        search = self.request.query_params.get("search")
+        search = (
+            self.request.query_params.get("search")
+            or self.request.query_params.get("q")
+            or ""
+        )
         if barcode:
-            ids = Barcode.objects.filter(value=barcode).values_list("product_id", flat=True)
-            return qs.filter(id__in=list(ids))
-        if search:
-            qs = qs.filter(
-                Q(name_fr__icontains=search) | Q(name_ar__icontains=search) | Q(sku__icontains=search)
-            )
+            return lookup_by_code(barcode, base=qs).order_by("name_fr")[:50]
+        if search.strip():
+            return search_products(search, base=qs)
         return qs.order_by("name_fr")[:50]
 
 
@@ -78,9 +87,11 @@ def _catalog_row(request, p, primary):
     img = primary.get(p.id)
     reorder = p.reorder_point or 0
     return {
-        "id": str(p.id), "sku": p.sku, "name_fr": p.name_fr, "name_ar": p.name_ar,
-        "sale_price": str(p.sale_price), "qty_on_hand": str(p.qty_on_hand),
-        "reorder_point": str(reorder), "is_book": p.is_book,
+        "id": str(p.id), "sku": p.sku, "reference": p.reference, "name_fr": p.name_fr,
+        "name_ar": p.name_ar, "sale_price": str(p.sale_price),
+        "qty_on_hand": format_qty(p.qty_on_hand),
+        "reorder_point": format_qty(reorder), "is_book": p.is_book,
+        "product_type": p.product_type, "color": p.color, "brand": p.brand,
         "category": p.category.name_fr if p.category_id else "",
         "out_of_stock": p.qty_on_hand <= 0,
         "low_stock": bool(reorder) and 0 < p.qty_on_hand <= reorder,
@@ -102,31 +113,22 @@ class CatalogSearchView(APIView):
 
         from django.db.models import F
 
-        from teyssir.catalog.models import Barcode, BookContributor, Product, ProductImage
+        from teyssir.catalog.models import Product, ProductImage
+        from teyssir.catalog.search import catalog_text_filter
 
         qs = Product.objects.filter(active=True).select_related("category")
 
-        q = (request.query_params.get("q") or "").strip()
+        q = (request.query_params.get("q") or request.query_params.get("search") or "").strip()
         if q:
-            barcode_ids = list(Barcode.objects.filter(value__icontains=q)
-                               .values_list("product_id", flat=True))
-            author_ids = list(BookContributor.objects.filter(contributor__name__icontains=q)
-                              .values_list("book__product_id", flat=True))
-            qs = qs.filter(
-                Q(name_fr__icontains=q) | Q(name_ar__icontains=q) | Q(sku__icontains=q)
-                | Q(isbn__icontains=q) | Q(internal_code__icontains=q)
-                | Q(book__isbn13__icontains=q) | Q(book__publisher__icontains=q)
-                | Q(book__subtitle__icontains=q)
-                | Q(id__in=barcode_ids) | Q(id__in=author_ids)
-            ).distinct()
+            qs = catalog_text_filter(qs, q)
 
         if request.query_params.get("category"):
             qs = qs.filter(category_id=request.query_params["category"])
         typ = request.query_params.get("type")
         if typ == "book":
-            qs = qs.filter(is_book=True)
-        elif typ == "supply":
-            qs = qs.filter(is_book=False)
+            qs = qs.filter(Q(is_book=True) | Q(product_type=Product.BOOK))
+        elif typ in ("supply", "furniture"):
+            qs = qs.filter(is_book=False, product_type=Product.FURNITURE)
         stock = request.query_params.get("stock")
         if stock == "in":
             qs = qs.filter(qty_on_hand__gt=0)
@@ -170,16 +172,19 @@ class BarcodeLookupView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        code = (request.query_params.get("barcode") or "").strip()
-        bc = (Barcode.objects.filter(value=code).select_related("product").first()
-              if code else None)
-        if not bc:
+        from teyssir.catalog.search import lookup_by_code
+
+        code = (request.query_params.get("barcode") or request.query_params.get("q") or "").strip()
+        if not code:
             return Response({"found": False, "barcode": code})
-        p = bc.product
+        p = lookup_by_code(code).select_related("tax_rate").first()
+        if not p:
+            return Response({"found": False, "barcode": code})
         return Response({"found": True, "barcode": code, "product": {
-            "id": str(p.id), "sku": p.sku, "name_fr": p.name_fr, "name_ar": p.name_ar,
-            "sale_price": str(p.sale_price), "qty_on_hand": str(p.qty_on_hand),
-            "is_book": p.is_book, "active": p.active,
+            "id": str(p.id), "sku": p.sku, "reference": p.reference,
+            "name_fr": p.name_fr, "name_ar": p.name_ar,
+            "sale_price": str(p.sale_price), "qty_on_hand": format_qty(p.qty_on_hand),
+            "is_book": p.is_book, "product_type": p.product_type, "active": p.active,
         }})
 
 
@@ -199,46 +204,208 @@ class ProductCreateView(APIView):
             p = create_product(
                 name_fr=d["name_fr"], name_ar=d.get("name_ar", ""),
                 category_id=d.get("category") or None, tax_rate_id=d.get("tax_rate") or None,
-                sale_price=d.get("sale_price", "0"), is_book=bool(d.get("is_book")),
+                sale_price=d.get("sale_price", "0"),
+                is_book=bool(d.get("is_book")),
+                product_type=d.get("product_type", ""),
+                reference=d.get("reference", "") or d.get("sku", ""),
+                color=d.get("color", ""), brand=d.get("brand", ""),
                 barcode=d.get("barcode", ""), symbology=d.get("symbology", ""),
                 initial_qty=d.get("initial_qty", "0"), cost=d.get("cost", "0"),
-                reorder_point=d.get("reorder_point", "0"), origin_terminal=settings.TERMINAL,
+                reorder_point=d.get("reorder_point", "0"),
+                isbn=d.get("isbn", ""),
+                origin_terminal=settings.TERMINAL,
             )
-        except ValueError as exc:                       # duplicate barcode
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-        return Response({"id": str(p.id), "sku": p.sku, "name": p.name_fr},
+        except ValueError as exc:
+            msg = str(exc)
+            code = status.HTTP_409_CONFLICT if "déjà" in msg or "existe déjà" in msg else status.HTTP_400_BAD_REQUEST
+            return Response({"detail": msg}, status=code)
+        return Response({"id": str(p.id), "sku": p.sku, "reference": p.reference,
+                         "name": p.name_fr, "product_type": p.product_type},
                         status=status.HTTP_201_CREATED)
 
 
 class PdfToDocxView(APIView):
-    """POST /tools/pdf-to-docx (multipart: file) — convert a PDF to Word (.docx) and return it
-    as a download. Free/offline (pdf2docx); layout, tables and images preserved."""
+    """POST /tools/pdf-to-docx — convert a PDF to Word (.docx).
+
+    * Tiny text PDFs (≤2 MB, ≤5 pages): run inline and return **200** + FileResponse
+      (backward-compatible with the original sync client / tests).
+    * Larger / slow jobs: create a ``ConvertJob``, enqueue (inline|thread), return
+      **202** ``{job_id, status}`` — client polls ``GET …/<job_id>`` then downloads.
+    """
 
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
         import os
+        import time
 
+        from django.conf import settings
         from django.http import HttpResponse
 
-        from teyssir.core.pdfconvert import convert_pdf_to_docx
+        from teyssir.core.convert_jobs import enqueue_convert
+        from teyssir.core.models import ConvertJob
+        from teyssir.core.pdfconvert import (
+            convert_pdf_to_docx, convert_workspace, profile_pdf, validate_pdf_header,
+        )
 
         upload = request.FILES.get("file")
         if not upload:
             return Response({"detail": "file is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        mode = (request.data.get("mode") or ConvertJob.AUTO).lower()
+        if mode not in (ConvertJob.FAST, ConvertJob.LAYOUT, ConvertJob.AUTO):
+            mode = ConvertJob.AUTO
+        force_async = str(request.data.get("async", "")).lower() in ("1", "true", "yes")
+
+        # Stream to a job workspace via chunks — never upload.read() into a giant buffer first.
+        job = ConvertJob.objects.create(
+            status=ConvertJob.PENDING, mode=mode,
+            original_name=os.path.basename(upload.name or "document.pdf"),
+        )
+        workspace = convert_workspace(job.id)
+        src_abs = os.path.join(workspace, "in.pdf")
+        size = 0
         try:
-            docx_bytes = convert_pdf_to_docx(upload.read())
-        except ValueError as exc:                       # not a PDF / too big / empty
+            with open(src_abs, "wb") as out:
+                for chunk in upload.chunks():
+                    size += len(chunk)
+                    if size > 25 * 1024 * 1024:
+                        raise ValueError("PDF larger than 25 MB")
+                    out.write(chunk)
+            with open(src_abs, "rb") as fh:
+                pdf_bytes = fh.read()
+            validate_pdf_header(pdf_bytes)
+            profile = profile_pdf(pdf_bytes)
+        except ValueError as exc:
+            job.status = ConvertJob.FAILED
+            job.error = str(exc)
+            job.save(update_fields=["status", "error", "updated_at"])
+            self._cleanup_job_files(job)
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception:                               # malformed/encrypted PDF etc.
+        except Exception:
+            job.status = ConvertJob.FAILED
+            job.error = "invalid upload"
+            job.save(update_fields=["status", "error", "updated_at"])
+            self._cleanup_job_files(job)
             return Response({"detail": "conversion failed — the PDF may be damaged or protected"},
                             status=status.HTTP_422_UNPROCESSABLE_ENTITY)
-        name = os.path.splitext(os.path.basename(upload.name or "document"))[0] + ".docx"
-        resp = HttpResponse(
-            docx_bytes,
-            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+        job.input_path = os.path.join("convert", str(job.id), "in.pdf")
+        job.output_path = os.path.join("convert", str(job.id), "out.docx")
+        job.page_count = profile.pages
+        job.save(update_fields=["input_path", "output_path", "page_count", "updated_at"])
+
+        # Sync fast-path for tiny PDFs (unless client forced async).
+        if profile.fits_sync and not force_async:
+            t0 = time.perf_counter()
+            try:
+                docx_bytes, used, _ = convert_pdf_to_docx(pdf_bytes, mode=mode)
+            except Exception:
+                job.status = ConvertJob.FAILED
+                job.error = "conversion failed"
+                job.save(update_fields=["status", "error", "updated_at"])
+                return Response({"detail": "conversion failed — the PDF may be damaged or protected"},
+                                status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+            dst_abs = os.path.join(str(settings.MEDIA_ROOT), job.output_path)
+            with open(dst_abs, "wb") as fh:
+                fh.write(docx_bytes)
+            job.status = ConvertJob.DONE
+            job.mode_used = used
+            job.elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            from django.utils import timezone
+            job.finished_at = timezone.now()
+            job.save()
+            name = os.path.splitext(job.original_name or "document")[0] + ".docx"
+            resp = HttpResponse(
+                docx_bytes,
+                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            resp["Content-Disposition"] = f'attachment; filename="{name}"'
+            resp["X-Convert-Job-Id"] = str(job.id)
+            resp["X-Convert-Mode"] = used
+            return resp
+
+        enqueue_convert(job.id)
+        return Response(
+            {
+                "job_id": str(job.id),
+                "status": "pending",
+                "pages": profile.pages,
+                "mode": mode,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    @staticmethod
+    def _cleanup_job_files(job):
+        import os
+        import shutil
+
+        from django.conf import settings
+
+        try:
+            root = os.path.join(str(settings.MEDIA_ROOT), "convert", str(job.id))
+            shutil.rmtree(root, ignore_errors=True)
+        except Exception:
+            pass
+
+
+class PdfToDocxJobView(APIView):
+    """GET /tools/pdf-to-docx/<job_id> — poll conversion status."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        from teyssir.core.models import ConvertJob
+
+        job = ConvertJob.objects.filter(pk=pk).first()
+        if not job:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        payload = {
+            "job_id": str(job.id),
+            "status": job.status.lower(),
+            "mode": job.mode,
+            "mode_used": job.mode_used,
+            "pages": job.page_count,
+            "elapsed_ms": job.elapsed_ms,
+            "original_name": job.original_name,
+        }
+        if job.status == ConvertJob.DONE:
+            payload["download_url"] = f"/api/v1/tools/pdf-to-docx/{job.id}/download"
+        if job.status == ConvertJob.FAILED:
+            payload["error"] = job.error or "conversion failed"
+        return Response(payload)
+
+
+class PdfToDocxDownloadView(APIView):
+    """GET /tools/pdf-to-docx/<job_id>/download — stream the .docx via FileResponse."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        import os
+
+        from django.conf import settings
+        from django.http import FileResponse
+
+        from teyssir.core.models import ConvertJob
+
+        job = ConvertJob.objects.filter(pk=pk).first()
+        if not job:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        if job.status != ConvertJob.DONE:
+            return Response({"detail": f"job is {job.status.lower()}"},
+                            status=status.HTTP_409_CONFLICT)
+        abs_path = os.path.join(str(settings.MEDIA_ROOT), job.output_path)
+        if not os.path.isfile(abs_path):
+            return Response({"detail": "output missing"}, status=status.HTTP_404_NOT_FOUND)
+        name = os.path.splitext(job.original_name or "document")[0] + ".docx"
+        resp = FileResponse(
+            open(abs_path, "rb"),
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
         resp["Content-Disposition"] = f'attachment; filename="{name}"'
+        resp["X-Convert-Mode"] = job.mode_used or job.mode
         return resp
 
 
@@ -255,26 +422,40 @@ class CategoryListView(APIView):
 
 
 class ProductDetailView(APIView):
-    """GET /catalog/products/<pk>/detail — full product profile (info, stock, barcodes, cover
-    images, and the bibliographic book record) for the 'Show details' view."""
+    """GET /catalog/products/<pk>/detail — full product profile.
+    PATCH — update editable catalogue fields (``edit_product``).
+    Optional ``qty_on_hand`` sets absolute stock via a STOCKTAKE ledger adjustment
+    (same path as inventory stocktake — never write the cache alone).
+    DELETE — soft-delete (``active=False``) so the row leaves catalogue/POS search."""
 
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method in ("PATCH", "PUT", "DELETE"):
+            return [capability("edit_product")()]
+        return [IsAuthenticated()]
 
-    def get(self, request, pk):
-        from teyssir.catalog.models import Product, ProductImage
+    def _get_product(self, pk, *, active_only=False):
+        from teyssir.catalog.models import Product
 
-        p = (Product.objects.select_related("category", "tax_rate").filter(pk=pk).first())
-        if not p:
-            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        qs = Product.objects.select_related("category", "tax_rate")
+        if active_only:
+            qs = qs.filter(active=True)
+        return qs.filter(pk=pk).first()
+
+    def _detail_payload(self, request, p):
+        from teyssir.catalog.models import ProductImage
 
         data = {
-            "id": str(p.id), "sku": p.sku, "internal_code": p.internal_code,
+            "id": str(p.id), "sku": p.sku, "reference": p.reference,
+            "internal_code": p.internal_code,
             "name_fr": p.name_fr, "name_ar": p.name_ar,
             "category": p.category.name_fr if p.category_id else "",
-            "is_book": p.is_book, "isbn": p.isbn, "active": p.active,
+            "category_id": str(p.category_id) if p.category_id else "",
+            "tax_rate": str(p.tax_rate_id) if p.tax_rate_id else "",
+            "is_book": p.is_book, "product_type": p.product_type,
+            "isbn": p.isbn, "color": p.color, "brand": p.brand, "active": p.active,
             "sale_price": str(p.sale_price), "cost_avg": str(p.cost_avg),
-            "qty_on_hand": str(p.qty_on_hand), "reorder_point": str(p.reorder_point),
-            "reorder_qty": str(p.reorder_qty),
+            "qty_on_hand": format_qty(p.qty_on_hand), "reorder_point": format_qty(p.reorder_point),
+            "reorder_qty": format_qty(p.reorder_qty),
             "tax_rate_percent": str(p.tax_rate.rate_percent) if p.tax_rate_id else "0",
             "barcodes": list(p.barcodes.values("value", "symbology")),
             "images": [_image_payload(request, i)
@@ -285,6 +466,7 @@ class ProductDetailView(APIView):
             data["book"] = {
                 "isbn13": book.isbn13, "isbn10": book.isbn10, "subtitle": book.subtitle,
                 "publisher": book.publisher, "series": book.series, "edition": book.edition,
+                "edition_kind": book.edition_kind,
                 "languages": book.languages, "pub_year": book.pub_year, "pages": book.pages,
                 "dimensions": book.dimensions, "cover_type": book.cover_type,
                 "subject": book.subject, "description": book.description,
@@ -293,7 +475,70 @@ class ProductDetailView(APIView):
                     for bc in book.contributors.select_related("contributor").order_by("order")
                 ],
             }
-        return Response(data)
+        return data
+
+    def get(self, request, pk):
+        p = self._get_product(pk)
+        if not p:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(self._detail_payload(request, p))
+
+    def patch(self, request, pk):
+        from teyssir.catalog.services import update_product
+
+        p = self._get_product(pk, active_only=True)
+        if not p:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        d = request.data
+        kwargs = {}
+        for key in ("name_fr", "name_ar", "sale_price", "reorder_point", "reference",
+                    "color", "brand", "isbn"):
+            if key in d:
+                kwargs[key] = d.get(key)
+        if "category" in d:
+            cat = d.get("category")
+            if cat in (None, ""):
+                kwargs["clear_category"] = True
+            else:
+                kwargs["category_id"] = cat
+        if "tax_rate" in d:
+            tax = d.get("tax_rate")
+            if tax in (None, ""):
+                kwargs["clear_tax_rate"] = True
+            else:
+                kwargs["tax_rate_id"] = tax
+        try:
+            p = update_product(p, **kwargs)
+        except ValueError as exc:
+            msg = str(exc)
+            code = status.HTTP_409_CONFLICT if "déjà" in msg or "existe déjà" in msg else status.HTTP_400_BAD_REQUEST
+            return Response({"detail": msg}, status=code)
+
+        # Absolute stock set → STOCKTAKE variance on the ledger (spec §14.4), not a direct cache write.
+        if "qty_on_hand" in d:
+            from teyssir.core.qty import QtyError, to_qty
+
+            try:
+                counted = to_qty(d.get("qty_on_hand"), allow_negative=False, label="qty_on_hand")
+            except QtyError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            if counted != int(p.qty_on_hand or 0):
+                post_stocktake(
+                    [{"product_id": p.id, "counted_qty": counted}],
+                    terminal=settings.TERMINAL,
+                )
+                p.refresh_from_db()
+
+        return Response(self._detail_payload(request, p))
+
+    def delete(self, request, pk):
+        from teyssir.catalog.services import deactivate_product
+
+        p = self._get_product(pk, active_only=True)
+        if not p:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        deactivate_product(p)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class TaxRateViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
@@ -322,21 +567,32 @@ class CustomerViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
 
     @action(detail=True, methods=["post"])
     def payment(self, request, pk=None):
+        from teyssir.customers.services import AccountAmountError
+
         customer = self.get_object()
         amount = request.data.get("amount")
         if amount in (None, ""):
             return Response({"detail": "amount required"}, status=status.HTTP_400_BAD_REQUEST)
-        post_payment(customer, amount, note=request.data.get("note", ""))
+        allow_overpay = str(request.data.get("allow_overpay", "")).lower() in ("1", "true", "yes")
+        try:
+            post_payment(
+                customer, amount, note=request.data.get("note", ""),
+                allow_overpay=allow_overpay,
+            )
+        except AccountAmountError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response({"balance": str(balance(customer))}, status=status.HTTP_201_CREATED)
 
 
 class CheckoutView(APIView):
     """Build a sale from a cart and finalize it (offline-capable, spec §13)."""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [capability("create_sale")]
 
     @transaction.atomic
     def post(self, request):
+        from teyssir.sales.services import DiscountError
+
         ser = CheckoutSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
@@ -345,6 +601,7 @@ class CheckoutView(APIView):
         sale = Sale.objects.create(
             terminal=data["terminal"], status=Sale.DRAFT,
             customer_id=str(customer_id) if customer_id else "",
+            discount=data.get("discount") or 0,
             cash_session=current_session(data["terminal"]),  # attribute to the open shift (§13.3)
             created_by=request.user, origin_terminal=data["terminal"],
         )
@@ -358,18 +615,25 @@ class CheckoutView(APIView):
                 tax_rate=(product.tax_rate.rate_percent if product.tax_rate else 0),
                 origin_terminal=data["terminal"],
             )
-        invoice = finalize_sale(sale, payment_method=data["payment_method"])
+        try:
+            invoice = finalize_sale(sale, payment_method=data["payment_method"])
+        except DiscountError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         if data["payment_method"] == "ACCOUNT" and customer_id:
             charge_account(Customer.objects.get(pk=customer_id), sale.total, "SALE", sale.id)
-        _print_receipt(sale)
+        printed = _print_receipt(sale)
         return Response(
             {
                 "invoice_number": invoice.fiscal_number,
+                "sale_id": str(sale.id),
                 "subtotal": str(sale.subtotal),
+                "discount": str(sale.discount),
                 "tax_total": str(sale.tax_total),
                 "timbre": str(sale.timbre_amount_snapshot),
                 "total": str(sale.total),
                 "total_display": display(sale.total),
+                "printed": printed,
+                "receipt_url": f"/api/v1/pos/sales/{sale.id}/receipt",
             },
             status=status.HTTP_201_CREATED,
         )
@@ -408,7 +672,11 @@ class ReturnView(APIView):
 
 
 class SalesReportView(APIView):
-    """GET /api/v1/reports/sales?from=YYYY-MM-DD&to=YYYY-MM-DD (spec §15)."""
+    """GET /api/v1/reports/sales?from=YYYY-MM-DD&to=YYYY-MM-DD (spec §15).
+
+    Optional filters: store, payment, product_type (book|furniture), terminal.
+    Response is additive: existing KPI keys unchanged; series / category_mix / etc. appended.
+    """
 
     permission_classes = [CanViewReports]
 
@@ -418,8 +686,18 @@ class SalesReportView(APIView):
         if not date_from or not date_to:
             return Response({"detail": "from and to (YYYY-MM-DD) are required."},
                             status=status.HTTP_400_BAD_REQUEST)
-        store = request.query_params.get("store")        # Phase 6: optional per-store slice
-        return Response(sales_report(date_from, date_to, store=store))
+        store = request.query_params.get("store") or None
+        payment = request.query_params.get("payment") or None
+        product_type = request.query_params.get("product_type") or None
+        terminal = request.query_params.get("terminal") or None
+        if product_type and product_type not in ("book", "furniture"):
+            return Response({"detail": "product_type must be book or furniture."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        return Response(sales_report(
+            date_from, date_to,
+            store=store, payment_method=payment,
+            product_type=product_type, terminal=terminal,
+        ))
 
 
 class ConsolidatedReportView(APIView):
@@ -570,7 +848,7 @@ class StockTakeView(APIView):
 
 
 class QuotationCreateView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [capability("create_sale")]
 
     def post(self, request):
         ser = QuotationCreateSerializer(data=request.data)
@@ -590,7 +868,7 @@ class QuotationCreateView(APIView):
 
 
 class QuotationConvertView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [capability("create_sale")]
 
     def post(self, request, pk):
         q = Quotation.objects.filter(pk=pk).first()
@@ -603,7 +881,12 @@ class QuotationConvertView(APIView):
             )
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        return Response({"invoice_number": invoice.fiscal_number}, status=status.HTTP_201_CREATED)
+        sale = Sale.objects.filter(invoice=invoice).first() or invoice.sale
+        _print_receipt(sale)
+        return Response(
+            {"invoice_number": invoice.fiscal_number, "total_display": display(sale.total)},
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class ReservationCreateView(APIView):
@@ -684,6 +967,9 @@ def _scan_job_payload(request, job, images=None):
     body = {
         "job_id": str(job.id),
         "status": job.status.lower(),                       # pending | done | failed
+        "stage": job.stage or ("done" if job.status == ScanJob.DONE else
+                               "failed" if job.status == ScanJob.FAILED else "queued"),
+        "progress": 0 if job.progress is None else int(job.progress),
         "image_ids": [str(i) for i in job.image_ids],
         "images": [_image_payload(request, img) for img in images],
     }
@@ -711,7 +997,10 @@ class BookScanView(APIView):
         isbn = (request.data.get("isbn") or "").strip()
         images = [
             ProductImage.objects.create(
-                image=f, kind=ProductImage.COVER if i == 0 else ProductImage.OTHER, order=i)
+                image=f,
+                kind=(ProductImage.COVER if i == 0 else
+                      ProductImage.BACK if i == 1 else ProductImage.OTHER),
+                order=i)
             for i, f in enumerate(files)
         ]
         job = ScanJob.objects.create(isbn=isbn, image_ids=[str(img.id) for img in images])
@@ -722,7 +1011,8 @@ class BookScanView(APIView):
 
 
 class ScanJobView(APIView):
-    """GET /catalog/books/scan/<job_id> — poll a scan job until status is done/failed."""
+    """GET /catalog/books/scan/<job_id> — poll a scan job until status is done/failed.
+    DELETE — cancel a still-PENDING job (client navigated away / refresh mid-OCR)."""
 
     permission_classes = [capability("edit_product")]
 
@@ -734,6 +1024,23 @@ class ScanJobView(APIView):
             return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
         return Response(_scan_job_payload(request, job))
 
+    def delete(self, request, pk):
+        from teyssir.catalog.models import ScanJob
+
+        job = ScanJob.objects.filter(pk=pk).first()
+        if not job:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        # Only PENDING jobs are cancellable; DONE/FAILED are left alone (idempotent OK).
+        if job.status == ScanJob.PENDING:
+            ScanJob.objects.filter(pk=pk, status=ScanJob.PENDING).update(
+                status=ScanJob.FAILED,
+                stage="failed",
+                progress=100,
+                error="cancelled",
+            )
+            job.refresh_from_db()
+        return Response(_scan_job_payload(request, job))
+
 
 class BookCreateView(APIView):
     """POST reviewed JSON (+ image_ids) -> create Product + Book + Contributors."""
@@ -741,13 +1048,46 @@ class BookCreateView(APIView):
     permission_classes = [capability("edit_product")]
 
     def post(self, request):
-        from teyssir.catalog.bookscan.services import create_book_from_draft
+        from django.db import IntegrityError
+
+        from teyssir.catalog.bookscan.services import (
+            DuplicateBookIdentityError,
+            create_book_from_draft,
+        )
 
         d = request.data
-        product = create_book_from_draft(
-            data=d, image_ids=d.get("image_ids", []),
-            sale_price=d.get("sale_price", "0"), origin_terminal=settings.TERMINAL,
-        )
+        try:
+            product = create_book_from_draft(
+                data=d, image_ids=d.get("image_ids", []),
+                sale_price=d.get("sale_price", "0"), origin_terminal=settings.TERMINAL,
+            )
+        except DuplicateBookIdentityError as exc:
+            body = {"detail": str(exc), "code": "duplicate_barcode", "field": exc.field}
+            if exc.product is not None:
+                body["existing_id"] = str(exc.product.id)
+                body["existing_sku"] = exc.product.sku
+                body["existing_name"] = exc.product.name_fr
+            return Response(body, status=status.HTTP_409_CONFLICT)
+        except ValueError as exc:
+            msg = str(exc)
+            code = (
+                status.HTTP_409_CONFLICT
+                if "déjà" in msg or "existe déjà" in msg
+                else status.HTTP_400_BAD_REQUEST
+            )
+            return Response({"detail": msg}, status=code)
+        except IntegrityError:
+            # Last-resort: never leak Django debug HTML to the SPA error banner
+            return Response(
+                {
+                    "detail": (
+                        "Ce code-barres existe déjà. "
+                        "Modifiez l'article dans le catalogue."
+                    ),
+                    "code": "duplicate_barcode",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         return Response({"id": str(product.id), "sku": product.sku, "name": product.name_fr},
                         status=status.HTTP_201_CREATED)
 
@@ -792,23 +1132,105 @@ class ProductImageView(APIView):
         return Response(_image_payload(request, ProductImage.objects.get(pk=pk)))
 
 
-def _print_receipt(sale):
-    """Best-effort: print the receipt on the local node's printer; never block a sale."""
+def _print_receipt(sale, *, duplicate=False):
+    """Best-effort: print the receipt on the local node's printer; never block a sale.
+
+    Returns True if bytes were sent to a backend, False on any failure.
+    Reprints (``duplicate=True``) mark DUPLICATA and skip the drawer kick — same sale, no new fiscal doc.
+    """
+    import logging
+    import os
+
+    log = logging.getLogger("teyssir.printing")
+    target = os.environ.get("TEYSSIR_PRINTER", "dummy")
     try:
         from teyssir.printing.devices import send
         from teyssir.printing.receipt import render_sale_receipt
-        send(render_sale_receipt(sale))
-    except Exception:
-        pass
+
+        payload = render_sale_receipt(sale, duplicate=duplicate, kick=not duplicate)
+        n = send(payload)
+        ok = n > 0
+        log.info(
+            "receipt print sale=%s target=%s bytes=%s duplicate=%s ok=%s",
+            getattr(sale, "id", None), target, n, duplicate, ok,
+        )
+        return ok
+    except Exception as exc:
+        log.warning(
+            "receipt print failed sale=%s target=%s duplicate=%s err=%s",
+            getattr(sale, "id", None), target, duplicate, exc,
+        )
+        return False
+
+
+class SaleReceiptView(APIView):
+    """GET /pos/sales/<id>/receipt — plain-text receipt (preview / reprint / save as .txt).
+
+    Thermal ESC/POS is sent automatically at checkout; this endpoint lets the cashier
+    preview or download the same content without hardware. ``?print=1`` reprints
+    without creating a new sale (DUPLICATA).
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        from django.http import HttpResponse
+
+        from teyssir.printing.receipt import render_text
+        from teyssir.sales.models import Sale
+
+        sale = Sale.objects.filter(pk=pk, status=Sale.FINALIZED).first()
+        if not sale:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        fmt = (request.query_params.get("format") or "text").lower()
+        do_print = request.query_params.get("print") == "1"
+        text = render_text(sale, duplicate=do_print)
+        if fmt == "json":
+            printed = False
+            if do_print:
+                printed = _print_receipt(sale, duplicate=True)
+            return Response({
+                "sale_id": str(sale.id),
+                "text": text,
+                "invoice": getattr(getattr(sale, "invoice", None), "fiscal_number", ""),
+                "printed": printed if do_print else None,
+            })
+        # Re-print to the thermal device on demand (same sale — no duplicate fiscal doc)
+        printed = False
+        if do_print:
+            printed = _print_receipt(sale, duplicate=True)
+        name = f"receipt-{getattr(getattr(sale, 'invoice', None), 'fiscal_number', pk)}.txt"
+        resp = HttpResponse(text, content_type="text/plain; charset=utf-8")
+        resp["Content-Disposition"] = f'inline; filename="{name}"'
+        if do_print:
+            resp["X-Teyssir-Printed"] = "1" if printed else "0"
+        return resp
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def me(request):
+    caps = sorted(
+        p.split(".", 1)[-1]
+        for p in request.user.get_all_permissions()
+        if p.startswith("accounts.")
+    )
     return Response({
         "username": request.user.get_username(),
         "language": getattr(request.user, "preferred_language", "fr"),
         "terminal": request.headers.get("X-Terminal", ""),
         "store_code": settings.STORE_CODE,
         "role": settings.ROLE,
+        "is_superuser": bool(request.user.is_superuser),
+        "capabilities": caps,
     })
+
+
+@api_view(["GET"])
+@permission_classes([capability("configure_system")])
+def diagnostics(request):
+    """GET /api/v1/diagnostics — admin/owner node health for the Diagnostics UI."""
+    from teyssir.core.diagnostics import collect_diagnostics
+
+    ping = request.query_params.get("ping", "1") not in ("0", "false", "no")
+    return Response(collect_diagnostics(ping_llm=ping))

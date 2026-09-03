@@ -1,6 +1,7 @@
 """Quotation + reservation services (spec §13.2)."""
 from decimal import Decimal
 
+from django.conf import settings
 from django.db import transaction
 
 from teyssir.core import money
@@ -12,7 +13,11 @@ from .models import Quotation, QuotationLine, Reservation
 
 @transaction.atomic
 def create_quotation(*, customer_id="", items, terminal="", valid_until=None, created_by=None):
-    """Build a quote and compute totals (ex-timbre). No stock movement."""
+    """Build a quote and compute totals (ex-timbre). No stock movement.
+
+    When ``APPLY_VAT_AND_TIMBRE`` is false, tax_total is 0 and total = subtotal (product prices).
+    """
+    apply_vat = bool(getattr(settings, "APPLY_VAT_AND_TIMBRE", False))
     q = Quotation.objects.create(
         customer_id=customer_id, terminal=terminal, valid_until=valid_until,
         created_by=created_by, origin_terminal=terminal,
@@ -29,7 +34,8 @@ def create_quotation(*, customer_id="", items, terminal="", valid_until=None, cr
             tax_rate=rate, line_total=base, origin_terminal=terminal,
         )
         subtotal += base
-        tax_total += money.line_tax(base, rate)
+        if apply_vat:
+            tax_total += money.line_tax(base, rate)
     q.subtotal = to_money(subtotal)
     q.tax_total = to_money(tax_total)
     q.total = to_money(subtotal + tax_total)

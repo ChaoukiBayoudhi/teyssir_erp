@@ -25,7 +25,7 @@ class SupplierSerializer(serializers.ModelSerializer):
 
 class ReceiveLineSerializer(serializers.Serializer):
     product = serializers.UUIDField()
-    qty = serializers.DecimalField(max_digits=14, decimal_places=3)
+    qty = serializers.IntegerField(min_value=1)
     unit_cost = serializers.DecimalField(max_digits=14, decimal_places=3)
 
 
@@ -76,18 +76,19 @@ class ProductSerializer(serializers.ModelSerializer):
         source="tax_rate.rate_percent", max_digits=5, decimal_places=2,
         read_only=True, default=0,
     )
+    qty_on_hand = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Product
         fields = [
-            "id", "sku", "name_fr", "name_ar", "sale_price", "qty_on_hand",
-            "tax_rate", "tax_rate_percent", "is_book",
+            "id", "sku", "reference", "name_fr", "name_ar", "sale_price", "qty_on_hand",
+            "tax_rate", "tax_rate_percent", "is_book", "product_type", "color", "brand",
         ]
 
 
 class CheckoutLineSerializer(serializers.Serializer):
     product = serializers.UUIDField()
-    qty = serializers.DecimalField(max_digits=14, decimal_places=3, default=1)
+    qty = serializers.IntegerField(min_value=1, default=1)
     unit_price = serializers.DecimalField(max_digits=14, decimal_places=3, required=False)
     discount = serializers.DecimalField(max_digits=14, decimal_places=3, required=False, default=0)
 
@@ -99,11 +100,24 @@ class CheckoutSerializer(serializers.Serializer):
         choices=["CASH", "CARD", "ACCOUNT"], default="CASH",
     )
     customer = serializers.UUIDField(required=False, allow_null=True)
+    # Global (ticket) discount in TND HT — applied before TVA, after line discounts.
+    discount = serializers.DecimalField(
+        max_digits=14, decimal_places=3, required=False, default=0,
+    )
+
+    def validate(self, data):
+        if data.get("payment_method") == "ACCOUNT" and not data.get("customer"):
+            raise serializers.ValidationError(
+                {"customer": "customer is required when payment_method is ACCOUNT"}
+            )
+        if not data.get("lines"):
+            raise serializers.ValidationError({"lines": "at least one line is required"})
+        return data
 
 
 class ReturnLineSerializer(serializers.Serializer):
     product = serializers.UUIDField()
-    qty = serializers.DecimalField(max_digits=14, decimal_places=3, default=1)
+    qty = serializers.IntegerField(min_value=1, default=1)
     unit_price = serializers.DecimalField(max_digits=14, decimal_places=3)
     tax_rate = serializers.DecimalField(max_digits=5, decimal_places=2, default=0)
 
@@ -117,7 +131,7 @@ class ReturnSerializer(serializers.Serializer):
 
 class QuotationLineInputSerializer(serializers.Serializer):
     product = serializers.UUIDField()
-    qty = serializers.DecimalField(max_digits=14, decimal_places=3, default=1)
+    qty = serializers.IntegerField(min_value=1, default=1)
     unit_price = serializers.DecimalField(max_digits=14, decimal_places=3)
     tax_rate = serializers.DecimalField(max_digits=5, decimal_places=2, default=0)
 
@@ -131,7 +145,7 @@ class QuotationCreateSerializer(serializers.Serializer):
 
 class ReservationCreateSerializer(serializers.Serializer):
     product = serializers.UUIDField()
-    qty = serializers.DecimalField(max_digits=14, decimal_places=3, default=1)
+    qty = serializers.IntegerField(min_value=1, default=1)
     customer = serializers.CharField(required=False, allow_blank=True, default="")
     terminal = serializers.CharField(required=False, default="C1")
     expires_at = serializers.DateTimeField(required=False, allow_null=True)
@@ -139,7 +153,7 @@ class ReservationCreateSerializer(serializers.Serializer):
 
 class StockTakeLineSerializer(serializers.Serializer):
     product = serializers.UUIDField()
-    counted_qty = serializers.DecimalField(max_digits=14, decimal_places=3)
+    counted_qty = serializers.IntegerField(min_value=0)
 
 
 class StockTakeSerializer(serializers.Serializer):

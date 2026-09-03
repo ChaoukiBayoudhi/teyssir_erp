@@ -83,13 +83,15 @@ SHARED SYNC KEY = 8fK3d9...aZ2
 ^ Use this SAME key on the hub and on every till.
 ```
 ✏️ **Notez cette clé** — chaque caisse en aura besoin. Créez ensuite le **compte administrateur**
-(gérant) quand c'est demandé.
+(gérant) quand c'est demandé (sauté si un admin existe déjà).
 
-Démarrez le serveur :
-```bash
-bash deploy/macos/start-teyssir.sh
-```
-Laissez cette fenêtre **ouverte**, puis ouvrez **<http://localhost:8000>** dans le navigateur.
+Le backend est enregistré comme **LaunchAgent** `com.teyssir.backend` (démarrage à la connexion,
+sans Terminal). Un raccourci **Teyssir ERP.app** est posé sur le Bureau.
+
+Double-cliquez **Teyssir ERP** sur le Bureau → Safari/Chrome ouvre **<http://localhost:8000>**.
+Contrôle : **<http://localhost:8000/health/>** doit répondre `ok`.
+
+> Sans interface graphique pour le service : `bash deploy/macos/start-teyssir.sh` (fenêtre à laisser ouverte).
 
 ---
 
@@ -103,12 +105,11 @@ bash deploy/macos/install.sh --role till --terminal C1 \
 - **`--terminal`** : `C1`, `C2`, `C3` — **unique** par caisse.
 - **`--hub-url`** : adresse du Hub (nom `teyssir-hub.local` ou IP, ex. `http://192.168.1.10:8000`).
 - **`--sync-key`** : **exactement** la clé du Hub (étape 4).
+- **`--printer tcp:IP:9100`** (optionnel) : imprimante ticket sur le LAN de **cette** caisse — voir §7.
+- **`--discover-printer`** (optionnel) : scan du /24 sur le port 9100.
 
-Créez un compte caissier, puis :
-```bash
-bash deploy/macos/start-teyssir.sh
-```
-Ouvrez **<http://localhost:8000>** sur la caisse.
+Créez un compte caissier (sauté si un admin existe déjà). Le raccourci **Teyssir ERP** et le
+LaunchAgent sont créés automatiquement. Double-cliquez l'icône Bureau pour ouvrir la caisse.
 
 ---
 
@@ -128,29 +129,80 @@ Options** → autorisez les connexions entrantes pour `python`/Teyssir.
 
 ---
 
-## 7. Démarrage automatique + synchronisation
+## 7. Imprimante ticket thermique (réseau local du magasin)
 
-Pour lancer Teyssir à l'ouverture de session et synchroniser régulièrement :
+L'imprimante ESC/POS se configure avec **`TEYSSIR_PRINTER=tcp:IP:9100`**.
+L'IP est celle du **réseau du magasin** (différente du Mac développeur). Après un
+changement de réseau, mettez à jour la cible.
+
+**À l'installation :**
 ```bash
-# sur le Hub :
-bash deploy/macos/register-autostart.sh hub
-# sur chaque caisse (sync toutes les 300 s) :
-bash deploy/macos/register-autostart.sh till 300
+bash deploy/macos/install.sh --role till --terminal C1 \
+  --hub-url http://teyssir-hub.local:8000 --sync-key <clé> \
+  --printer tcp:192.168.1.100:9100
 ```
-Cela crée des **LaunchAgents** (`com.teyssir.server`, `com.teyssir.sync`). Vérifier :
-`launchctl list | grep teyssir`. Pour tout retirer : `bash deploy/macos/register-autostart.sh --remove`.
+Ou découverte du /24 (port 9100) — soft-fail vers `dummy` :
+```bash
+bash deploy/macos/install.sh --role till --terminal C1 \
+  --hub-url http://teyssir-hub.local:8000 --sync-key <clé> --discover-printer
+bash deploy/macos/discover-printer.sh
+```
+
+**Après coup :** éditez `.env` (`TEYSSIR_PRINTER=tcp:NOUVELLE-IP:9100`), puis
+ré-enregistrez le LaunchAgent (il lit `.env` et injecte `TEYSSIR_PRINTER` dans le plist) :
+```bash
+bash deploy/macos/Install-BackendService.sh
+# ou : bash deploy/macos/Install-BackendService.sh --printer tcp:NOUVELLE-IP:9100
+```
+
+**Vérifier :** Menu → **Diagnostics** (cible + test TCP). Exemples : `192.168.1.100` (placeholder).
 
 ---
 
-## 8. Utilisation quotidienne
+## 8. Auto-start & Desktop Shortcut (Mac)
 
-1. Allumez le **Hub** d'abord, puis les caisses (Teyssir démarre seul si l'auto-start est activé).
-2. Ouvrez **<http://localhost:8000>**, connectez-vous.
-3. Dans Chrome : **⋮ ▸ Installer Teyssir** pour un lancement plein écran (icône dans le Dock).
+Après `install.sh` :
+
+* Le backend tourne comme **LaunchAgent** `com.teyssir.backend` (équivalent du service Windows) :
+  * démarre à **l'ouverture de session** (sans fenêtre Terminal) ;
+  * **KeepAlive** — redémarre s'il quitte ;
+  * journaux dans `logs/teyssir-backend-stdout.log` et `logs/teyssir-backend-stderr.log`.
+* Un app **« Teyssir ERP.app »** sur le Bureau (et `~/Applications`) ouvre le navigateur par défaut
+  sur `http://localhost:8000` dès que `/health/` répond. Icône : `assets/branding/teyssir.icns`.
+
+Vérifier :
+```bash
+launchctl list | grep teyssir
+curl -sf http://127.0.0.1:8000/health/
+```
+
+Repli manuel (si le LaunchAgent n'a pas pu s'installer) :
+```bash
+bash deploy/macos/start-teyssir.sh
+```
+Ne lancez **pas** le script Terminal en même temps que le LaunchAgent — le port **8000** ne peut
+servir qu'une fois.
+
+Options : `--skip-service`, `--skip-shortcut`.
+
+Désinstaller agent + raccourcis (sans supprimer les données) :
+```bash
+bash deploy/macos/uninstall.sh
+```
+
+Sur les caisses, `com.teyssir.sync` synchronise avec le Hub toutes les 5 min.
 
 ---
 
-## 9. Sauvegardes
+## 9. Utilisation quotidienne
+
+1. Allumez le **Hub** d'abord, puis les caisses (le LaunchAgent démarre tout seul à la connexion).
+2. Double-cliquez **Teyssir ERP** sur le Bureau.
+3. Connectez-vous. Dans Chrome : **⋮ ▸ Installer Teyssir** pour une PWA plein écran dans le Dock.
+
+---
+
+## 10. Sauvegardes
 
 Les données sont des fichiers dans le dossier du projet : `teyssir_hub.sqlite3` (Hub),
 `teyssir_C1.sqlite3`… (caisses) et le dossier `media/` (images des livres).
@@ -159,16 +211,26 @@ Time Machine. Le Hub contient déjà la consolidation de toutes les caisses.
 
 ---
 
-## 10. Options (facultatif)
+## 11. Options (facultatif)
 
 <details>
 <summary><b>Lecture des livres par photo (OCR) — gratuit</b></summary>
 
-- **Tesseract** (rapide, hors-ligne) : `brew install tesseract tesseract-lang`, puis dans `.env` :
-  `TEYSSIR_OCR_PROVIDER=tesseract`.
-- **Vision-LLM** (extraction structurée multilingue, hors-ligne) : `brew install ollama`,
-  `ollama pull qwen2.5vl:3b`, puis `.env` : `TEYSSIR_OCR_PROVIDER=vision` et
-  `TEYSSIR_SCAN_EXECUTOR=thread`.
+- **Tesseract** (rapide, hors-ligne) : `install.sh` tente `brew install tesseract tesseract-lang`
+  et écrit `TEYSSIR_TESSERACT_CMD` (ex. `/opt/homebrew/bin/tesseract`) dans `.env` + LaunchAgent.
+  Sinon : `brew install tesseract tesseract-lang`, puis `.env` :
+  `TEYSSIR_OCR_PROVIDER=tesseract` et `TEYSSIR_TESSERACT_CMD=/opt/homebrew/bin/tesseract`.
+- **Vision-LLM** (extraction structurée multilingue, hors-ligne) : `install.sh` tente
+  `brew install ollama` puis **`ollama pull qwen2.5vl:3b`** (Phase 15.7, CPU-friendly).
+  Opt-out : `--skip-vision`. Laissez `TEYSSIR_OCR_PROVIDER=tesseract` — Vision est un
+  fallback (couvertures arabes / OCR faible / webcam type XTRIKE / sans ISBN).
+  `TEYSSIR_VISION_MODEL` est écrit dans `.env`. Pour Vision en primaire :
+  `TEYSSIR_OCR_PROVIDER=vision` + `TEYSSIR_SCAN_EXECUTOR=thread`. Cold start CPU possible
+  (dizaines de secondes). Voir `docs/LOCAL-AI.md` (Phase 15.4 dual-image).
+- Si OCR est vide sous LaunchAgent : vérifiez `PATH` Homebrew dans le plist et
+  `TEYSSIR_TESSERACT_CMD` ; Menu → **Diagnostics** ;   `curl -s http://127.0.0.1:8000/health/ | jq .tesseract`.
+  Vérifiez que `langs` contient **ara** et **fra** (sinon `brew install tesseract-lang`).
+  Les couvertures arabes sans `ara` produisent du Latin absurde (`wis! Boot ay`) et `languages=en`.
 </details>
 
 <details>
@@ -181,7 +243,7 @@ Time Machine. Le Hub contient déjà la consolidation de toutes les caisses.
 
 ---
 
-## 11. Dépannage
+## 12. Dépannage
 
 | Problème | Solution |
 |----------|----------|
@@ -190,8 +252,21 @@ Time Machine. Le Hub contient déjà la consolidation de toutes les caisses.
 | La caisse n'atteint pas le Hub | Testez `http://teyssir-hub.local:8000/health/` ; vérifiez IP/nom, pare-feu, et que le Hub tourne. |
 | « Bad Request (400) » | Ajoutez le nom/IP du Mac dans `TEYSSIR_ALLOWED_HOSTS` du `.env`, relancez. |
 | `frontend/dist` manquant | `cd frontend && npm ci && npm run build` (ou `brew install node`). |
-| Port 8000 occupé | Démarrez avec `TEYSSIR_PORT=8080 bash deploy/macos/start-teyssir.sh`. |
+| Port 8000 occupé | Arrêtez l'autre instance : `bash deploy/macos/Install-BackendService.sh --remove` ou fermez le Terminal `start-teyssir.sh`. Ou : `TEYSSIR_PORT=8080`. |
+| LaunchAgent ne répond pas | `tail -50 logs/teyssir-backend-stderr.log` puis `bash deploy/macos/Install-BackendService.sh`. |
+| OCR vide (LaunchAgent) | `TEYSSIR_TESSERACT_CMD` manquant ou PATH sans Homebrew — réinstallez le service ; Menu → Diagnostics. |
+| OCR arabe = Latin / `en` | Pack `ara` manquant : `brew install tesseract-lang`, vérifiez `/health/` → `tesseract.langs`, relancez le LaunchAgent. |
 | Clé de sync incorrecte | Le Hub et la caisse doivent avoir **exactement** la même `TEYSSIR_SYNC_KEY`. |
+
+---
+
+## 13. Désinstaller
+
+```bash
+bash deploy/macos/uninstall.sh
+```
+Cela retire le LaunchAgent et les raccourcis Bureau / Applications. **Sauvegardez d'abord**
+`teyssir_hub.sqlite3` (ou `pg_dump`) et `media/`, puis supprimez le dossier du projet si besoin.
 
 ---
 

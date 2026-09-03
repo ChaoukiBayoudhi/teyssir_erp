@@ -5,11 +5,21 @@
 #     bash deploy/macos/install.sh --role hub
 #     bash deploy/macos/install.sh --role till --terminal C1 \
 #          --hub-url http://teyssir-hub.local:8000 --sync-key <hub-key>
+#     bash deploy/macos/install.sh --role till --printer tcp:192.168.1.100:9100 ...
+#     bash deploy/macos/install.sh --role till --discover-printer ...
+#     bash deploy/macos/install.sh --role hub --skip-vision   # omit qwen2.5vl pull
+#
+#  Safe to re-run. Registers LaunchAgent com.teyssir.backend + Desktop app.
+#  Phase 15.7: auto-pulls vision model for bookscan when Ollama is available.
 # ============================================================
 set -euo pipefail
 
 ROLE="till"; TERMINAL="C1"; STORE=""; HUB_URL="http://teyssir-hub.local:8000"
-SYNC_KEY=""; SKIP_BUILD=0
+SYNC_KEY=""; SKIP_BUILD=0; SKIP_SERVICE=0; SKIP_SHORTCUT=0; SKIP_ADMIN=0
+ADMIN_USER=""; ADMIN_PASSWORD=""
+PRINTER=""; DISCOVER_PRINTER=0
+SKIP_VISION=0
+VISION_MODEL="${TEYSSIR_VISION_MODEL:-qwen2.5vl:3b}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --role) ROLE="$2"; shift 2;;
@@ -17,16 +27,36 @@ while [ $# -gt 0 ]; do
     --store) STORE="$2"; shift 2;;
     --hub-url) HUB_URL="$2"; shift 2;;
     --sync-key) SYNC_KEY="$2"; shift 2;;
+    --printer) PRINTER="$2"; shift 2;;
+    --discover-printer) DISCOVER_PRINTER=1; shift;;
     --skip-build) SKIP_BUILD=1; shift;;
+    --skip-service) SKIP_SERVICE=1; shift;;
+    --skip-shortcut) SKIP_SHORTCUT=1; shift;;
+    --skip-admin) SKIP_ADMIN=1; shift;;
+    --admin-user) ADMIN_USER="$2"; shift 2;;
+    --admin-password) ADMIN_PASSWORD="$2"; shift 2;;
+    --skip-vision) SKIP_VISION=1; shift;;
+    --vision-model) VISION_MODEL="$2"; shift 2;;
     *) echo "Unknown option: $1"; exit 1;;
   esac
 done
 
 cd "$(cd "$(dirname "$0")/../.." && pwd)"
+ROOT="$(pwd)"
 echo "==== Teyssir installer (role: $ROLE) ===="
-echo "Project: $(pwd)"
+echo "Project: $ROOT"
 
 rand_key() { LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c "$1"; }
+
+set_env_value() {
+  # set_env_value KEY VALUE — upsert into .env (no BOM concerns on macOS)
+  local key="$1" value="$2"
+  if [ -f .env ] && grep -q "^${key}=" .env 2>/dev/null; then
+    sed -i '' "s|^${key}=.*|${key}=${value}|" .env
+  else
+    echo "${key}=${value}" >> .env
+  fi
+}
 
 # 1) Python 3.12+ -----------------------------------------------------------
 PY="$(command -v python3 || true)"
@@ -35,8 +65,8 @@ if [ -z "$PY" ]; then
   echo "(Homebrew: https://brew.sh  — on M1 it lives in /opt/homebrew)"
   exit 1
 fi
-if ! "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3,12) else 1)'; then
-  echo "Python 3.12+ required (found $($PY --version)). Try:  brew install python@3.12"
+if ! "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)'; then
+  echo "Python 3.11+ required (found $($PY --version)). Try:  brew install python@3.12"
   exit 1
 fi
 echo "Python: $($PY --version)"
@@ -46,6 +76,114 @@ echo "Python: $($PY --version)"
 echo "Installing Python dependencies ..."
 .venv/bin/python -m pip install --upgrade pip >/dev/null
 .venv/bin/pip install -r requirements.txt
+
+# 2b) Tesseract OCR (optional — never abort) --------------------------------
+TESS_CMD=""
+for cand in /opt/homebrew/bin/tesseract /usr/local/bin/tesseract; do
+  if [ -x "$cand" ]; then TESS_CMD="$cand"; break; fi
+done
+if [ -z "$TESS_CMD" ] && command -v brew >/dev/null 2>&1; then
+  echo "Installing Tesseract (brew) ..."
+  brew install tesseract tesseract-lang >/dev/null 2>&1 || echo "WARNING: brew tesseract skipped — OCR may need manual install."
+  for cand in /opt/homebrew/bin/tesseract /usr/local/bin/tesseract; do
+    if [ -x "$cand" ]; then TESS_CMD="$cand"; break; fi
+  done
+fi
+if [ -n "$TESS_CMD" ]; then
+  echo "Tesseract: $TESS_CMD"
+  # Ensure ara+fra packs (brew tesseract alone often ships eng only)
+  MISSING_LANGS=""
+  for need in ara fra eng; do
+    if ! "$TESS_CMD" --list-langs 2>/dev/null | grep -qx "$need"; then
+      MISSING_LANGS="$MISSING_LANGS $need"
+    fi
+  done
+  if [ -n "$MISSING_LANGS" ]; then
+    echo "WARNING: Tesseract missing langs:$MISSING_LANGS"
+    if command -v brew >/dev/null 2>&1; then
+      echo "Installing tesseract-lang (ara/fra/…) via Homebrew ..."
+      brew install tesseract-lang >/dev/null 2>&1 || true
+    fi
+    STILL=""
+    for need in ara fra; do
+      if ! "$TESS_CMD" --list-langs 2>/dev/null | grep -qx "$need"; then
+        STILL="$STILL $need"
+      fi
+    done
+    if [ -n "$STILL" ]; then
+      echo "WARNING: Still missing:$STILL — Arabic covers will OCR as Latin garbage."
+      echo "  Fix: brew install tesseract-lang   OR download ara.traineddata into tessdata/"
+    else
+      echo "Tesseract langs OK (ara+fra+eng)."
+    fi
+  else
+    echo "Tesseract langs OK (ara+fra+eng)."
+  fi
+else
+  echo "WARNING: Tesseract not found — book OCR will fall back to manual/vision."
+fi
+
+# 2b2) Ollama + vision model for bookscan (Phase 15.7 — auto-pull, never abort)
+ensure_ollama_vision() {
+  local ollama_bin=""
+  if command -v ollama >/dev/null 2>&1; then
+    ollama_bin="$(command -v ollama)"
+  elif [ -x "/Applications/Ollama.app/Contents/Resources/ollama" ]; then
+    ollama_bin="/Applications/Ollama.app/Contents/Resources/ollama"
+  fi
+
+  if [ -z "$ollama_bin" ] && command -v brew >/dev/null 2>&1; then
+    echo "Installing Ollama (Homebrew, optional — bookscan Vision) ..."
+    brew install ollama >/dev/null 2>&1 || true
+    if command -v ollama >/dev/null 2>&1; then
+      ollama_bin="$(command -v ollama)"
+    fi
+  fi
+
+  if [ -z "$ollama_bin" ]; then
+    echo "Optional: brew install ollama && ollama pull ${VISION_MODEL} for Vision book analysis."
+    echo "  Docs: docs/LOCAL-AI.md — keep TEYSSIR_OCR_PROVIDER=tesseract for day-to-day."
+    return 0
+  fi
+
+  echo "Ollama: $ollama_bin"
+  # Best-effort start (app or serve); ignore failures — pull may still work if already up.
+  if ! curl -sf --max-time 2 "http://127.0.0.1:11434/api/tags" >/dev/null 2>&1; then
+    if [ -d "/Applications/Ollama.app" ]; then
+      open -a Ollama >/dev/null 2>&1 || true
+    else
+      ("$ollama_bin" serve >/dev/null 2>&1 &) || true
+    fi
+    for _i in 1 2 3 4 5 6 7 8 9 10; do
+      curl -sf --max-time 2 "http://127.0.0.1:11434/api/tags" >/dev/null 2>&1 && break
+      sleep 1
+    done
+  fi
+
+  echo "Pulling vision model ${VISION_MODEL} for bookscan (offline, ~2 GB) ..."
+  if "$ollama_bin" pull "$VISION_MODEL"; then
+    echo "Vision model ${VISION_MODEL} ready."
+  else
+    echo "WARNING: ollama pull ${VISION_MODEL} failed — bookscan keeps Tesseract only."
+    echo "  Retry: ollama pull ${VISION_MODEL}"
+  fi
+}
+
+if [ "$SKIP_VISION" -eq 1 ]; then
+  echo "Skipping vision model (--skip-vision). Later: ollama pull ${VISION_MODEL}"
+else
+  ensure_ollama_vision || true
+fi
+
+# 2c) zbar (libzbar) for ISBN barcode decode via pyzbar ---------------------
+if command -v brew >/dev/null 2>&1; then
+  if ! brew list zbar >/dev/null 2>&1; then
+    echo "Installing zbar (Homebrew) for ISBN barcode decode ..."
+    brew install zbar >/dev/null 2>&1 || echo "WARNING: brew zbar skipped — barcode decode may fail (OCR digit fallback still works)."
+  else
+    echo "zbar: OK"
+  fi
+fi
 
 # 3) Front-end build (only if not already built) ----------------------------
 if [ "$SKIP_BUILD" -eq 0 ] && [ ! -f "frontend/dist/index.html" ]; then
@@ -59,15 +197,27 @@ if [ "$SKIP_BUILD" -eq 0 ] && [ ! -f "frontend/dist/index.html" ]; then
 fi
 
 # 4) .env (created once, with random secrets) -------------------------------
+SYNC_FROM_CLI=0
+[ -n "$SYNC_KEY" ] && SYNC_FROM_CLI=1
 if [ ! -f ".env" ]; then
   SECRET="$(rand_key 50)"
   [ -n "$SYNC_KEY" ] || SYNC_KEY="$(rand_key 40)"
+  if [ "$ROLE" = "till" ] && [ "$SYNC_FROM_CLI" -eq 0 ]; then
+    echo "WARNING: No --sync-key given. A random key was generated — this till cannot sync until TEYSSIR_SYNC_KEY matches the Hub."
+  fi
   PCNAME="$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
+  VISION_FALLBACK_VAL="true"
+  [ "$SKIP_VISION" -eq 1 ] && VISION_FALLBACK_VAL="false"
   if [ "$ROLE" = "hub" ]; then
     cat > .env <<EOF
 TEYSSIR_ROLE=hub
 TEYSSIR_STORE_CODE=$STORE
 TEYSSIR_DB=sqlite
+TEYSSIR_SCAN_EXECUTOR=thread
+TEYSSIR_OCR_PROVIDER=tesseract
+TEYSSIR_TESSERACT_CMD=${TESS_CMD:-/opt/homebrew/bin/tesseract}
+TEYSSIR_VISION_MODEL=$VISION_MODEL
+TEYSSIR_OCR_VISION_FALLBACK=$VISION_FALLBACK_VAL
 TEYSSIR_SYNC_KEY=$SYNC_KEY
 DEBUG=0
 SECRET_KEY=$SECRET
@@ -81,6 +231,12 @@ TEYSSIR_TERMINAL=$TERMINAL
 TEYSSIR_STORE_CODE=$STORE
 TEYSSIR_HUB_URL=$HUB_URL
 TEYSSIR_SYNC_KEY=$SYNC_KEY
+TEYSSIR_DB=sqlite
+TEYSSIR_SCAN_EXECUTOR=thread
+TEYSSIR_OCR_PROVIDER=tesseract
+TEYSSIR_TESSERACT_CMD=${TESS_CMD:-/opt/homebrew/bin/tesseract}
+TEYSSIR_VISION_MODEL=$VISION_MODEL
+TEYSSIR_OCR_VISION_FALLBACK=$VISION_FALLBACK_VAL
 DEBUG=0
 SECRET_KEY=$SECRET
 TEYSSIR_ALLOWED_HOSTS=localhost,127.0.0.1
@@ -92,20 +248,138 @@ EOF
   echo "  ^ Use this SAME key on the hub and on every till."
   echo ""
 else
-  echo ".env already exists — left unchanged."
+  echo ".env already exists — secrets left unchanged."
+  if [ -n "$TESS_CMD" ]; then
+    if grep -q '^TEYSSIR_TESSERACT_CMD=' .env 2>/dev/null; then
+      sed -i '' "s|^TEYSSIR_TESSERACT_CMD=.*|TEYSSIR_TESSERACT_CMD=$TESS_CMD|" .env
+    else
+      echo "TEYSSIR_TESSERACT_CMD=$TESS_CMD" >> .env
+    fi
+  fi
+  if [ "$ROLE" = "till" ]; then
+    # Allow re-run to fix terminal / hub / sync key without wiping SECRET_KEY
+    if [ -n "$TERMINAL" ]; then
+      if grep -q '^TEYSSIR_TERMINAL=' .env; then
+        sed -i '' "s|^TEYSSIR_TERMINAL=.*|TEYSSIR_TERMINAL=$TERMINAL|" .env
+      else
+        echo "TEYSSIR_TERMINAL=$TERMINAL" >> .env
+      fi
+    fi
+    if [ -n "$HUB_URL" ]; then
+      if grep -q '^TEYSSIR_HUB_URL=' .env; then
+        sed -i '' "s|^TEYSSIR_HUB_URL=.*|TEYSSIR_HUB_URL=$HUB_URL|" .env
+      else
+        echo "TEYSSIR_HUB_URL=$HUB_URL" >> .env
+      fi
+    fi
+    if [ "$SYNC_FROM_CLI" -eq 1 ]; then
+      if grep -q '^TEYSSIR_SYNC_KEY=' .env; then
+        sed -i '' "s|^TEYSSIR_SYNC_KEY=.*|TEYSSIR_SYNC_KEY=$SYNC_KEY|" .env
+      else
+        echo "TEYSSIR_SYNC_KEY=$SYNC_KEY" >> .env
+      fi
+    fi
+  fi
+fi
+
+# Persist Vision model for gated bookscan fallback (re-run safe).
+set_env_value TEYSSIR_VISION_MODEL "$VISION_MODEL"
+if [ "$SKIP_VISION" -eq 0 ]; then
+  set_env_value TEYSSIR_OCR_VISION_FALLBACK "true"
+fi
+
+# 4b) Receipt printer (client LAN — never assume a fixed shop IP) ------------
+if [ "$DISCOVER_PRINTER" -eq 1 ] && [ -z "$PRINTER" ]; then
+  echo "Scanning local /24 for ESC/POS on TCP 9100 ..."
+  disc_py=".venv/bin/python"
+  [ -x "$disc_py" ] || disc_py="python3"
+  PRINTER="$("$disc_py" deploy/discover_printer.py 2>/dev/null | tail -1 | tr -d '\r' || true)"
+  [ -n "$PRINTER" ] || PRINTER="dummy"
+  if [ "$PRINTER" = "dummy" ]; then
+    echo "WARNING: no printer found — TEYSSIR_PRINTER=dummy (set --printer tcp:IP:9100 later)."
+  else
+    echo "Discovered printer: $PRINTER"
+  fi
+fi
+if [ -n "$PRINTER" ]; then
+  set_env_value TEYSSIR_PRINTER "$PRINTER"
+  echo "TEYSSIR_PRINTER=$PRINTER written to .env"
+elif [ -f .env ] && grep -q '^TEYSSIR_PRINTER=' .env 2>/dev/null; then
+  PRINTER="$(grep -E '^TEYSSIR_PRINTER=' .env | head -1 | cut -d= -f2- | tr -d '\r')"
+  echo "Using existing TEYSSIR_PRINTER=$PRINTER from .env"
+else
+  # First install without a flag: leave unset so the service defaults to dummy
+  echo "Receipt printer: not set (dummy until you pass --printer tcp:IP:9100 or --discover-printer)."
 fi
 
 # 5) database + static ------------------------------------------------------
 echo "Setting up the database ..."
 .venv/bin/python manage.py migrate --noinput
+.venv/bin/python manage.py seed_rbac
+.venv/bin/python manage.py seed_fiscal
 .venv/bin/python manage.py collectstatic --noinput >/dev/null
 
-# 6) first administrator ----------------------------------------------------
-echo ""
-echo "Create the first administrator account (owner):"
-.venv/bin/python manage.py createsuperuser
+# 6) first administrator (idempotent) ---------------------------------------
+HAS_ADMIN="$(.venv/bin/python - <<'PY'
+import os, django
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "teyssir.settings")
+django.setup()
+from django.contrib.auth import get_user_model
+print("1" if get_user_model().objects.filter(is_superuser=True).exists() else "0")
+PY
+)"
+if [ "$SKIP_ADMIN" -eq 1 ]; then
+  echo "Skipping administrator creation (--skip-admin)."
+elif [ "$HAS_ADMIN" = "1" ]; then
+  echo "An administrator already exists — skipping createsuperuser (re-run safe)."
+elif [ -n "$ADMIN_USER" ] && [ -n "$ADMIN_PASSWORD" ]; then
+  echo "Creating administrator '$ADMIN_USER' (non-interactive) ..."
+  DJANGO_SUPERUSER_PASSWORD="$ADMIN_PASSWORD" \
+    .venv/bin/python manage.py createsuperuser --noinput --username "$ADMIN_USER" --email "owner@localhost" \
+    || echo "WARNING: createsuperuser failed — run: .venv/bin/python manage.py createsuperuser"
+else
+  echo ""
+  echo "Create the first administrator account (owner):"
+  echo "  Tip: --admin-user / --admin-password to skip the prompt."
+  .venv/bin/python manage.py createsuperuser
+fi
+
+# 7) LaunchAgent backend ----------------------------------------------------
+if [ "$SKIP_SERVICE" -eq 0 ]; then
+  echo "Registering LaunchAgent com.teyssir.backend ..."
+  # Install-BackendService reads TEYSSIR_PRINTER from .env (or --printer if passed).
+  if [ "$ROLE" = "till" ]; then
+    bash deploy/macos/register-autostart.sh till 300 || echo "WARNING: LaunchAgent / sync schedule skipped."
+  else
+    if [ -n "$PRINTER" ]; then
+      bash deploy/macos/Install-BackendService.sh --printer "$PRINTER" || echo "WARNING: LaunchAgent skipped."
+    else
+      bash deploy/macos/Install-BackendService.sh || echo "WARNING: LaunchAgent skipped."
+    fi
+  fi
+else
+  echo "Skipping LaunchAgent (--skip-service)."
+fi
+
+# 8) Desktop app shortcut ---------------------------------------------------
+if [ "$SKIP_SHORTCUT" -eq 0 ]; then
+  echo "Creating Desktop app « Teyssir ERP » ..."
+  bash deploy/macos/Install-DesktopApp.sh || echo "WARNING: Desktop app skipped."
+else
+  echo "Skipping desktop shortcut (--skip-shortcut)."
+fi
 
 echo ""
 echo "==== Installation complete ===="
-echo "Start Teyssir with:  bash deploy/macos/start-teyssir.sh"
-echo "Then open:           http://localhost:8000"
+if [ "$SKIP_SERVICE" -eq 0 ]; then
+  echo "Backend:     LaunchAgent com.teyssir.backend (starts at login, KeepAlive, no Terminal)"
+  echo "Open Teyssir: double-click « Teyssir ERP » on the Desktop"
+else
+  echo "Start with:  bash deploy/macos/start-teyssir.sh"
+  echo "Then open:   http://localhost:8000"
+fi
+echo "Health:      http://localhost:8000/health/"
+if [ -n "${PRINTER:-}" ]; then
+  echo "Printer:     TEYSSIR_PRINTER=$PRINTER  (Menu → Diagnostics to verify reachability)"
+fi
+echo "Uninstall:   bash deploy/macos/uninstall.sh"

@@ -17,7 +17,7 @@ class QuotationTests(TestCase):
     def setUp(self):
         FiscalStampConfig.objects.create(doc_type="FACTURE", amount=Decimal("1.000"))
         self.product = Product.objects.create(
-            sku="PEN", name_fr="Stylo", sale_price=Decimal("0.850"), qty_on_hand=Decimal("100.000"),
+            sku="PEN", name_fr="Stylo", sale_price=Decimal("0.850"), qty_on_hand=100,
         )
 
     def test_create_quote_then_convert(self):
@@ -27,15 +27,16 @@ class QuotationTests(TestCase):
                     "unit_price": "0.850", "tax_rate": "7.00"}],
         )
         self.assertEqual(q.subtotal, Decimal("2.550"))
-        self.assertEqual(q.total, Decimal("2.729"))            # ex-timbre (2.550 + 0.179)
+        self.assertEqual(q.total, Decimal("2.550"))            # shop: no TVA on quotes
+        self.assertEqual(q.tax_total, Decimal("0.000"))
         self.product.refresh_from_db()
-        self.assertEqual(self.product.qty_on_hand, Decimal("100.000"))  # quote moves no stock
+        self.assertEqual(self.product.qty_on_hand, 100)  # quote moves no stock
 
         invoice = convert_quotation(q, payment_method="CASH")
         q.refresh_from_db()
         self.product.refresh_from_db()
         self.assertEqual(q.status, Quotation.CONVERTED)
-        self.assertEqual(self.product.qty_on_hand, Decimal("97.000"))   # now sold
+        self.assertEqual(self.product.qty_on_hand, 97)   # now sold
         self.assertTrue(invoice.fiscal_number.startswith("C1-"))
 
         with self.assertRaises(ValueError):                    # cannot convert twice
@@ -53,7 +54,7 @@ class QuotationSyncTests(TestCase):
     def setUp(self):
         FiscalStampConfig.objects.create(doc_type="FACTURE", amount=Decimal("1.000"))
         self.product = Product.objects.create(
-            sku="PEN", name_fr="Stylo", sale_price=Decimal("0.850"), qty_on_hand=Decimal("100.000"),
+            sku="PEN", name_fr="Stylo", sale_price=Decimal("0.850"), qty_on_hand=100,
         )
 
     def test_quotation_enqueued_and_round_trips_to_hub(self):

@@ -87,18 +87,61 @@ def post_sale_to_gl(sale):
                         lines=lines, ref_type="SALE", ref_id=sale.id)
 
 
+def post_return_to_gl(ret):
+    """Reverse a credit note (AVOIR): Dr Sales/TVA/Timbre ; Cr tender ;
+    plus Dr Inventory / Cr COGS for restored stock. Spec §15."""
+    from teyssir.inventory.models import StockMovement
+
+    lines = []
+    if ret.subtotal:
+        lines.append(("700", ret.subtotal, 0))          # reverse revenue
+    if ret.tax_total:
+        lines.append(("4367", ret.tax_total, 0))         # reverse TVA collectée
+    if ret.timbre_amount_snapshot:
+        lines.append(("4471", ret.timbre_amount_snapshot, 0))
+    tender = PAYMENT_ACCOUNT.get(ret.refund_method, "531")
+    if ret.total:
+        lines.append((tender, 0, ret.total))            # Cr cash/bank/AR (money out)
+
+    cogs = Decimal("0.000")
+    for mv in StockMovement.objects.filter(reason="RETURN", ref_id=str(ret.id)):
+        cogs += mv.qty * mv.unit_cost
+    cogs = to_money(cogs)
+    if cogs:
+        lines.append(("370", cogs, 0))                   # Dr Inventory (stock back)
+        lines.append(("607", 0, cogs))                   # Cr COGS
+
+    return post_journal(date=ret.created_at.date(), memo=f"Avoir {ret.number or ret.id}",
+                        lines=lines, ref_type="RETURN", ref_id=ret.id)
+
+
+def post_returns_to_gl():
+    """Hub batch: post every return not yet in the GL (idempotent)."""
+    from teyssir.sales.models import Return
+
+    return _post_batch("RETURN", Return.objects.all(), post_return_to_gl)
+
+
 def post_sales_to_gl():
-    """Hub batch: post every finalized sale not yet in the GL (idempotent)."""
+    """Hub batch: post every finalized sale not yet in the GL (idempotent).
+
+    Sales without a matching tender (Σ payments == total) are skipped — posting them
+    would raise UnbalancedJournal; they surface as exceptions for the accountant to fix.
+    """
     from teyssir.sales.models import Sale
 
     posted = 0
     already = set(
         JournalEntry.objects.filter(ref_type="SALE").values_list("ref_id", flat=True)
     )
-    for sale in Sale.objects.filter(status=Sale.FINALIZED):
-        if str(sale.id) not in already:
-            post_sale_to_gl(sale)
-            posted += 1
+    for sale in Sale.objects.filter(status=Sale.FINALIZED).prefetch_related("payments"):
+        if str(sale.id) in already:
+            continue
+        tender = sum((p.amount for p in sale.payments.all()), Decimal("0.000"))
+        if to_money(tender) != to_money(sale.total):
+            continue  # incomplete tender — do not poison the GL
+        post_sale_to_gl(sale)
+        posted += 1
     return posted
 
 
@@ -148,12 +191,13 @@ def _post_batch(ref_type, queryset, poster):
 
 
 def post_all_to_gl():
-    """Hub batch: post sales, goods receipts, purchase-invoice VAT and on-account payments."""
+    """Hub batch: post sales, returns, goods receipts, purchase-invoice VAT and payments."""
     from teyssir.customers.models import AccountEntry
     from teyssir.purchasing.models import GoodsReceipt, PurchaseInvoice
 
     return {
         "sales": post_sales_to_gl(),
+        "returns": post_returns_to_gl(),
         "receipts": _post_batch("RECEIPT", GoodsReceipt.objects.all(), post_goods_receipt_to_gl),
         "purchase_invoices": _post_batch(
             "PURCHASE_INVOICE", PurchaseInvoice.objects.all(), post_purchase_invoice_to_gl),

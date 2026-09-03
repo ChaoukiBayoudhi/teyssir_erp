@@ -12,7 +12,7 @@ export function clearToken() {
   localStorage.removeItem("teyssir_token");
 }
 
-async function request(path, { method = "GET", body, auth = true } = {}) {
+async function request(path, { method = "GET", body, auth = true, signal } = {}) {
   const headers = { "Content-Type": "application/json" };
   if (auth && getToken()) headers["Authorization"] = `Token ${getToken()}`;
   let res;
@@ -21,18 +21,56 @@ async function request(path, { method = "GET", body, auth = true } = {}) {
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
+      signal,
     });
-  } catch {
+  } catch (e) {
+    if (e?.name === "AbortError") throw e;
     // fetch only throws on a network-level failure (node unreachable) — treat as offline
     const err = new Error("offline");
     err.offline = true;
     throw err;
   }
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`${res.status}: ${detail}`);
+    // Prefer JSON detail/message — never dump Django HTML debug pages into the UI.
+    const raw = await res.text();
+    let message = `${res.status}`;
+    const trimmed = (raw || "").trim();
+    if (trimmed) {
+      if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        try {
+          const body = JSON.parse(trimmed);
+          const d = body?.detail ?? body?.message ?? body?.error;
+          if (typeof d === "string" && d.trim()) message = d.trim();
+          else if (Array.isArray(d) && d.length) message = d.map(String).join(" ");
+          else if (d && typeof d === "object") {
+            // DRF field errors: { field: ["msg"] }
+            message = Object.entries(d)
+              .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(" ") : v}`)
+              .join("; ") || message;
+          } else if (typeof body === "string") message = body;
+        } catch { /* keep status */ }
+      } else if (!/^<!DOCTYPE|^<html/i.test(trimmed)) {
+        message = trimmed.slice(0, 400);
+      } else {
+        message = res.status === 409
+          ? "Conflit — cet enregistrement existe déjà."
+          : res.status >= 500
+            ? "Erreur serveur — réessayez ou vérifiez les logs."
+            : `Erreur ${res.status}`;
+      }
+    }
+    const err = new Error(message);
+    err.status = res.status;
+    throw err;
   }
   return res.status === 204 ? null : res.json();
+}
+
+/** Normalize list endpoints that may return a bare array or {results:[…]}. */
+export function asProductList(data) {
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.results)) return data.results;
+  return [];
 }
 
 export async function login(username, password) {
@@ -45,11 +83,13 @@ export async function login(username, password) {
   return data;
 }
 
-export const searchProducts = (q) =>
-  request(`/catalog/products/?search=${encodeURIComponent(q)}`);
+export const searchProducts = (q, { signal } = {}) =>
+  request(`/catalog/products/?search=${encodeURIComponent(q)}`, { signal })
+    .then(asProductList);
 
-export const lookupBarcode = (code) =>
-  request(`/catalog/products/?barcode=${encodeURIComponent(code)}`);
+export const lookupBarcode = (code, { signal } = {}) =>
+  request(`/catalog/products/?barcode=${encodeURIComponent(code)}`, { signal })
+    .then(asProductList);
 
 // Catalogue browser: paginated multi-criteria search + filters + sort.
 export const catalogSearch = (params) => {
@@ -57,6 +97,10 @@ export const catalogSearch = (params) => {
   return request(`/catalog/search?${new URLSearchParams(clean).toString()}`);
 };
 export const productDetail = (id) => request(`/catalog/products/${id}/detail`);
+export const updateProduct = (id, payload) =>
+  request(`/catalog/products/${id}/detail`, { method: "PATCH", body: payload });
+export const deleteProduct = (id) =>
+  request(`/catalog/products/${id}/detail`, { method: "DELETE" });
 export const listCategories = () => request("/catalog/categories");
 export const listTaxRates = () => request("/catalog/tax-rates/");
 // Register any article (book or supply) from its scanned barcode.
@@ -65,16 +109,46 @@ export const barcodeLookup = (code) =>
 export const createProduct = (payload) =>
   request("/catalog/register", { method: "POST", body: payload });
 
-// PDF -> Word (.docx). Multipart up, binary blob down.
-export async function convertPdf(file) {
+// PDF -> Word (.docx). Tiny PDFs return the blob immediately (200); larger jobs return
+// 202 {job_id} and must be polled, then downloaded (non-blocking Windows Hub path).
+export async function convertPdf(file, { mode = "auto", forceAsync = false } = {}) {
   const fd = new FormData();
   fd.append("file", file);
+  fd.append("mode", mode);
+  if (forceAsync) fd.append("async", "1");
   const headers = {};
   if (getToken()) headers["Authorization"] = `Token ${getToken()}`;
   const res = await fetch(`${BASE}/tools/pdf-to-docx`, { method: "POST", headers, body: fd });
   if (!res.ok) {
     let detail = `${res.status}`;
-    try { detail = (await res.json()).detail || detail; } catch { /* non-JSON error body */ }
+    try { detail = (await res.json()).detail || detail; } catch { /* non-JSON */ }
+    throw new Error(detail);
+  }
+  if (res.status === 202) {
+    const meta = await res.json();
+    const job = await pollConvertJob(meta.job_id);
+    if (job.status === "failed") throw new Error(job.error || "conversion failed");
+    return downloadConvertJob(job.job_id);
+  }
+  return res.blob();
+}
+
+export async function pollConvertJob(jobId, { interval = 800, tries = 300 } = {}) {
+  for (let i = 0; i < tries; i++) {
+    const job = await request(`/tools/pdf-to-docx/${jobId}`);
+    if (job.status !== "pending" && job.status !== "running") return job;
+    await new Promise((r) => setTimeout(r, interval));
+  }
+  throw new Error("conversion timed out");
+}
+
+export async function downloadConvertJob(jobId) {
+  const headers = {};
+  if (getToken()) headers["Authorization"] = `Token ${getToken()}`;
+  const res = await fetch(`${BASE}/tools/pdf-to-docx/${jobId}/download`, { headers });
+  if (!res.ok) {
+    let detail = `${res.status}`;
+    try { detail = (await res.json()).detail || detail; } catch { /* non-JSON */ }
     throw new Error(detail);
   }
   return res.blob();
@@ -88,8 +162,13 @@ export const createQuotation = (payload) =>
 export const convertQuotation = (id, payment_method) =>
   request(`/quotations/${id}/convert`, { method: "POST", body: { payment_method } });
 
-export const salesReport = (from, to) =>
-  request(`/reports/sales?from=${from}&to=${to}`);
+export const salesReport = (from, to, filters = {}) => {
+  const q = new URLSearchParams({ from, to });
+  Object.entries(filters).forEach(([k, v]) => {
+    if (v != null && String(v).trim() !== "") q.set(k, v);
+  });
+  return request(`/reports/sales?${q}`);
+};
 export const trialBalance = () => request("/reports/trial-balance");
 export const financials = () => request("/reports/financials");
 export const vatDeclaration = (from, to) => request(`/reports/vat?from=${from}&to=${to}`);
@@ -118,7 +197,7 @@ export const createPurchaseInvoice = (payload) =>
   request("/purchasing/invoices", { method: "POST", body: payload });
 
 // Book scan = multipart (images + optional ISBN). Browser sets the multipart boundary.
-export async function scanBook(files, isbn) {
+export async function scanBook(files, isbn, { signal } = {}) {
   const fd = new FormData();
   files.forEach((f) => fd.append("images", f));
   if (isbn) fd.append("isbn", isbn);
@@ -126,8 +205,9 @@ export async function scanBook(files, isbn) {
   if (getToken()) headers["Authorization"] = `Token ${getToken()}`;
   let res;
   try {
-    res = await fetch(`${BASE}/catalog/books/scan`, { method: "POST", headers, body: fd });
-  } catch {
+    res = await fetch(`${BASE}/catalog/books/scan`, { method: "POST", headers, body: fd, signal });
+  } catch (e) {
+    if (e?.name === "AbortError") throw e;
     const err = new Error("offline");
     err.offline = true;
     throw err;
@@ -137,16 +217,62 @@ export async function scanBook(files, isbn) {
 }
 
 // Poll a scan job until it leaves the "pending" state (async OCR backend). Returns the final job.
-export async function pollScanJob(jobId, { interval = 2000, tries = 120 } = {}) {
+export async function pollScanJob(jobId, { interval = 2000, tries = 120, onProgress, signal } = {}) {
   for (let i = 0; i < tries; i++) {
-    const job = await request(`/catalog/books/scan/${jobId}`);
+    if (signal?.aborted) {
+      const err = new Error("Aborted");
+      err.name = "AbortError";
+      throw err;
+    }
+    const job = await request(`/catalog/books/scan/${jobId}`, { signal });
+    if (onProgress) onProgress(job);
+    if (job.status === "failed" || job.status === "cancelled") {
+      throw new Error(job.error || "OCR failed");
+    }
     if (job.status !== "pending") return job;
-    await new Promise((r) => setTimeout(r, interval));
+    await new Promise((r, reject) => {
+      const t = setTimeout(r, interval);
+      if (!signal) return;
+      const onAbort = () => {
+        clearTimeout(t);
+        const err = new Error("Aborted");
+        err.name = "AbortError";
+        reject(err);
+      };
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
   }
   throw new Error("scan timed out");
 }
 
+/** Best-effort cancel of an in-flight ScanJob (page leave / refresh). */
+export async function cancelScanJob(jobId, { signal } = {}) {
+  if (!jobId) return null;
+  try {
+    return await request(`/catalog/books/scan/${jobId}`, { method: "DELETE", signal });
+  } catch (e) {
+    if (e?.name === "AbortError") throw e;
+    return null;
+  }
+}
+
 export const createBook = (data) => request("/catalog/books", { method: "POST", body: data });
+
+export const fetchMe = () => request("/me");
+export const fetchDiagnostics = () => request("/diagnostics");
+
+/** Re-print last sale ticket without creating a new sale (server marks DUPLICATA). */
+export async function reprintReceipt(saleId) {
+  const headers = {};
+  if (getToken()) headers.Authorization = `Token ${getToken()}`;
+  const res = await fetch(`${BASE}/pos/sales/${saleId}/receipt?print=1&format=json`, { headers });
+  if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+  return res.json();
+}
 
 export const listCustomers = () => request("/customers/");
 export const createCustomer = (body) =>

@@ -73,10 +73,12 @@ numbering `C1-YYYYMM-XXXX`** (proceeding; hub pre-allocated blocks held as DGI f
 
 5. **Money: TND, stored scale 3 (millimes), displayed 2 decimals. CONFIRMED.** A 0.850 DT pen needs
    the millime, so we **store** `Decimal(14,3)` (lossless) and **display/round** to 2 decimals in
-   UI/receipts, `ROUND_HALF_UP`, never `float`. Invoices carry `matricule fiscal`, TVA (**7%** on
+   UI/receipts, `ROUND_HALF_UP`, never `float`. Invoices can carry `matricule fiscal`, TVA (**7%** on
    books/manuals/newspapers/fournitures scolaires, 13%, 19%, 0%/exonéré), and a **configurable
    `fiscal_stamp_fee`** (admin-editable, default **1.000 DT**, override per invoice type), whose
    resolved value is **snapshotted onto each invoice** as `timbre_amount_snapshot` (immutability).
+   **Shop default (2026 tip):** `APPLY_VAT_AND_TIMBRE` / `TEYSSIR_APPLY_VAT_AND_TIMBRE=0` — Caisse
+   UI and totals omit TVA/timbre (prices after remises only); set `=1` to restore the fiscal path.
    Document numbers use a **per-terminal + per-month atomic series** (e.g. `C1-202606-0001`).
 
 7. **One hub PC is MANDATORY — "Teyssir Hub" (PC-1). CONFIRMED.** It is simultaneously the
@@ -540,9 +542,11 @@ erDiagram
 
 ```
 teyssir/
-├─ core/            settings, money type, i18n, audit, base service layer
+├─ core/            settings, money type, i18n, audit, base service layer,
+│                   **ConvertJob** (async PDF→Word; local-only, mirrors ScanJob)
 ├─ accounts/        users, roles, permissions, auth, sessions, 2FA(owner/admin)
-├─ catalog/         products, categories, units, barcodes, images, price lists, tax rates
+├─ catalog/         products, categories, units, barcodes, images, price lists, tax rates,
+│                   **ScanJob** (async book OCR)
 ├─ inventory/       stock ledger, valuation, reorder rules, stock-take, adjustments, transfers
 ├─ purchasing/      suppliers, purchase orders, goods receipts, purchase invoices
 ├─ sales/ (POS)     cart, sale, payment, discount/promo, return/exchange, quotation, reservation
@@ -557,9 +561,24 @@ teyssir/
 ├─ admin_settings/  store identity (matricule fiscal), tax rates, **fiscal_stamp_fee** (default
 │                   1.000 DT, per-doc-type override), terminals/series, devices, backups config
 └─ api/             DRF routers, versioned /api/v1, OpenAPI schema
+                    (incl. `/tools/pdf-to-docx` job + download)
 ```
 Each app exposes a **service layer** (`services.py`) — views call services, services own
 transactions. This keeps modules decoupled and makes a future microservice extraction mechanical.
+
+### Async local jobs (ScanJob & ConvertJob)
+
+Both are **node-local** (never synced). The HTTP contract is identical in spirit:
+
+| Concern | Book OCR | PDF→Word |
+|---------|----------|----------|
+| Model | `catalog.ScanJob` | `core.ConvertJob` |
+| Executor env | `TEYSSIR_SCAN_EXECUTOR` | `TEYSSIR_CONVERT_EXECUTOR` |
+| Backends | `inline` \| `thread` | `inline` \| `thread` (Windows default `thread`) |
+| Enqueue | `enqueue_scan` | `enqueue_convert` |
+| Client | poll until DONE | poll until DONE → FileResponse download |
+
+See [PDF-CONVERSION.md](PDF-CONVERSION.md) and [BOOK-OCR-ARCHITECTURE.md](BOOK-OCR-ARCHITECTURE.md).
 
 ---
 

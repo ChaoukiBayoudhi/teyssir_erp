@@ -204,13 +204,39 @@ def collect_master_changes(since=None):
 @transaction.atomic
 def apply_master_changes(records_json, config=None):
     """Apply a master-data replica update on a till (hub-authoritative, last-write-wins).
-    Records are upserted by UUID; the config snapshot is upserted by natural key (§4.4)."""
+
+    Records are upserted by UUID; the config snapshot is upserted by natural key (§4.4).
+
+    **Stock safety:** ``Product.qty_on_hand`` and ``cost_avg`` are *local folds* over the
+    movement ledger on each till — never hub-authoritative. We snapshot them before the
+    upsert and restore afterwards so a master pull cannot clobber the till's stock cache.
+    Brand-new products from the hub start at qty_on_hand=0 (movements sync separately).
+    """
     from teyssir.billing.models import FiscalStampConfig
+    from teyssir.catalog.models import Product
+
+    local_stock = {
+        str(p.id): (p.qty_on_hand, p.cost_avg)
+        for p in Product.objects.all().only("id", "qty_on_hand", "cost_avg")
+    }
 
     count = 0
     for dobj in load(records_json):
         dobj.save()
         count += 1
+
+    # Restore transactional caches that the hub Product snapshot must not overwrite.
+    for p in Product.objects.all().only("id", "qty_on_hand", "cost_avg"):
+        pid = str(p.id)
+        if pid in local_stock:
+            qty, cost = local_stock[pid]
+            if p.qty_on_hand != qty or p.cost_avg != cost:
+                Product.objects.filter(pk=p.pk).update(qty_on_hand=qty, cost_avg=cost)
+        else:
+            # New product from hub — stock arrives via synced movements, not master data.
+            if p.qty_on_hand:
+                Product.objects.filter(pk=p.pk).update(qty_on_hand=0)
+
     if config:
         for c in config.get("fiscal_stamps", []):
             FiscalStampConfig.objects.update_or_create(

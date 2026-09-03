@@ -22,7 +22,7 @@ class SalesReportTests(TestCase):
         self.product = Product.objects.create(
             sku="PEN", name_fr="Stylo Bic", tax_rate=tva7, sale_price=Decimal("0.850"),
         )
-        receive_goods(product_id=self.product.id, qty=Decimal("100"), unit_cost=Decimal("0.400"))
+        receive_goods(product_id=self.product.id, qty=100, unit_cost=Decimal("0.400"))
         for q in ("3", "2"):
             sale = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
             SaleLine.objects.create(sale=sale, product=self.product, qty=Decimal(q),
@@ -36,7 +36,7 @@ class SalesReportTests(TestCase):
         self.assertEqual(rep["revenue_ex_tax"], "4.250")    # 2.550 + 1.700
         self.assertEqual(rep["cogs"], "2.000")              # (3+2) * 0.400
         self.assertEqual(rep["gross_profit"], "2.250")      # 4.250 - 2.000
-        self.assertEqual(rep["best_sellers"][0]["qty"], "5.000")
+        self.assertEqual(rep["best_sellers"][0]["qty"], "5")
         self.assertEqual(rep["payment_mix"][0]["method"], "CASH")
 
     def test_endpoint_requires_report_permission(self):
@@ -52,7 +52,33 @@ class SalesReportTests(TestCase):
         c.force_authenticate(boss)
         r = c.get(f"/api/v1/reports/sales?from={self.today}&to={self.today}")
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()["gross_profit"], "2.250")
+        body = r.json()
+        self.assertEqual(body["gross_profit"], "2.250")
+        self.assertIn("series", body)
+        self.assertEqual(len(body["series"]), 1)
+        self.assertEqual(body["series"][0]["sales_count"], 2)
+        self.assertIn("category_mix", body)
+        self.assertIn("filter_options", body)
+
+    def test_payment_and_product_type_filters(self):
+        book = Product.objects.create(
+            sku="BK1", name_fr="Cahier", tax_rate=self.product.tax_rate,
+            sale_price=Decimal("5.000"), product_type=Product.BOOK, is_book=True,
+        )
+        receive_goods(product_id=book.id, qty=10, unit_cost=Decimal("2.000"))
+        sale = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
+        SaleLine.objects.create(sale=sale, product=book, qty=Decimal("1"),
+                                unit_price=Decimal("5.000"), tax_rate=Decimal("7.00"))
+        finalize_sale(sale, payment_method="CARD")
+
+        cash_only = sales_report(self.today, self.today, payment_method="CASH")
+        self.assertEqual(cash_only["sales_count"], 2)
+        self.assertEqual(cash_only["payment_mix"][0]["method"], "CASH")
+
+        books = sales_report(self.today, self.today, product_type="book")
+        self.assertEqual(books["sales_count"], 1)
+        self.assertEqual(books["best_sellers"][0]["sku"], "BK1")
+        self.assertTrue(any(c["product_type"] == "book" for c in books["category_mix"]))
 
 
 class ConsolidatedReportTests(TestCase):
@@ -63,7 +89,7 @@ class ConsolidatedReportTests(TestCase):
         tva7 = TaxRate.objects.create(name="TVA 7%", rate_percent=Decimal("7.00"))
         self.product = Product.objects.create(
             sku="PEN", name_fr="Stylo", tax_rate=tva7, sale_price=Decimal("0.850"))
-        receive_goods(product_id=self.product.id, qty=Decimal("100"), unit_cost=Decimal("0.400"))
+        receive_goods(product_id=self.product.id, qty=100, unit_cost=Decimal("0.400"))
         self.today = datetime.date.today()
 
     def _sale(self, qty):

@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from teyssir.billing.models import FiscalStampConfig
 from teyssir.catalog.models import Product, TaxRate
@@ -12,6 +12,7 @@ from teyssir.sales.models import Sale, SaleLine
 from teyssir.sales.services import finalize_sale
 
 
+@override_settings(APPLY_VAT_AND_TIMBRE=True)
 class ReceiptTests(TestCase):
     def setUp(self):
         FiscalStampConfig.objects.create(doc_type="FACTURE", amount=Decimal("1.000"))
@@ -19,9 +20,9 @@ class ReceiptTests(TestCase):
         self.product = Product.objects.create(
             sku="PEN", name_fr="Stylo Bic", tax_rate=tva7, sale_price=Decimal("0.850"),
         )
-        apply_movement(product_id=self.product.id, qty=Decimal("100"), reason=StockMovement.RECEIPT)
+        apply_movement(product_id=self.product.id, qty=100, reason=StockMovement.RECEIPT)
         sale = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
-        SaleLine.objects.create(sale=sale, product=self.product, qty=Decimal("3"),
+        SaleLine.objects.create(sale=sale, product=self.product, qty=3,
                                 unit_price=Decimal("0.850"), tax_rate=Decimal("7.00"))
         self.invoice = finalize_sale(sale, payment_method="CASH")
         self.sale = sale
@@ -43,3 +44,60 @@ class ReceiptTests(TestCase):
         data = render_sale_receipt(self.sale)
         self.assertEqual(send(data, target="dummy"), len(data))
         self.assertEqual(last_dummy_output(), data)
+
+    def test_receipt_tva_matches_booked_tax_at_19_percent(self):
+        """Regression: raw (base*rate/100) without HALF_UP printed 0.48 instead of 0.49."""
+        tva19 = TaxRate.objects.create(name="TVA 19%", rate_percent=Decimal("19.00"))
+        prod = Product.objects.create(
+            sku="USB", name_fr="Clé USB", tax_rate=tva19, sale_price=Decimal("0.850"),
+        )
+        apply_movement(product_id=prod.id, qty=10, reason=StockMovement.RECEIPT)
+        sale = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
+        SaleLine.objects.create(sale=sale, product=prod, qty=3,
+                                unit_price=Decimal("0.850"), tax_rate=Decimal("19.00"))
+        finalize_sale(sale, payment_method="CASH")
+        sale.refresh_from_db()
+        self.assertEqual(sale.tax_total, Decimal("0.485"))
+        txt = render_text(sale)
+        self.assertIn("0.49 DT", txt)   # display HALF_UP of 0.485
+        # Sum of printed TVA lines must equal booked tax_total at storage scale
+        from teyssir.printing.receipt import _receipt_model
+        m = _receipt_model(sale)
+        printed_tax = sum((t for _, (_b, t) in m["by_rate"]), Decimal("0"))
+        self.assertEqual(printed_tax, sale.tax_total)
+
+    def test_duplicate_receipt_marks_duplicata_without_kick(self):
+        data = render_sale_receipt(self.sale, duplicate=True, kick=False)
+        self.assertIn(b"DUPLICATA", data)
+        self.assertNotIn(b"\x1bp", data)  # no drawer kick on reprint
+        txt = render_text(self.sale, duplicate=True)
+        self.assertIn("DUPLICATA", txt)
+
+
+class ShopReceiptNoVatTimbreTests(TestCase):
+    """Default shop: receipt must not print TVA / Timbre fiscal lines."""
+
+    def setUp(self):
+        FiscalStampConfig.objects.create(doc_type="FACTURE", amount=Decimal("1.000"))
+        tva7 = TaxRate.objects.create(name="TVA 7%", rate_percent=Decimal("7.00"))
+        self.product = Product.objects.create(
+            sku="PEN", name_fr="Stylo Bic", tax_rate=tva7, sale_price=Decimal("0.850"),
+        )
+        apply_movement(product_id=self.product.id, qty=100, reason=StockMovement.RECEIPT)
+        sale = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
+        SaleLine.objects.create(sale=sale, product=self.product, qty=3,
+                                unit_price=Decimal("0.850"), tax_rate=Decimal("7.00"))
+        self.invoice = finalize_sale(sale, payment_method="CASH")
+        self.sale = sale
+
+    def test_text_receipt_omits_tva_and_timbre(self):
+        txt = render_text(self.sale)
+        self.assertIn("Teyssir Library", txt)
+        self.assertIn(self.invoice.fiscal_number, txt)
+        self.assertIn("Stylo Bic", txt)
+        self.assertIn("2.55 DT", txt)  # HT-only total
+        self.assertNotIn("TVA", txt)
+        self.assertNotIn("Timbre fiscal", txt)
+        self.assertNotIn("TOTAL TTC", txt)
+        self.assertIn("TOTAL", txt)
+        self.assertIn("CASH", txt)
