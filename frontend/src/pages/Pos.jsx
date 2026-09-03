@@ -10,14 +10,14 @@ import { enqueue, flush, pending } from "../offlineQueue";
 import CameraScanner from "../components/CameraScanner.jsx";
 import LangToggle from "../LangToggle.jsx";
 
-const TIMBRE = 0; // shop: timbre ignored in totals (server APPLY_VAT_AND_TIMBRE=0)
 // Millime-exact helpers mirroring backend money.py (1 DT = 1000 millimes).
 const toMillimes = (x) => Math.round(Number(x) * 1000);
 const fromMillimes = (m) => m / 1000;
 const r3 = (x) => fromMillimes(toMillimes(x));
 const fmt = (x) => Number(x).toFixed(2); // 2-dp display (server stores 3-dp)
-/** Shop pricing: do not add TVA or timbre into the payable total. */
+/** Shop pricing: payable = prices after remises only (no TVA / timbre in UI or total). */
 const APPLY_VAT_AND_TIMBRE = false;
+const TIMBRE = 1; // only used if APPLY_VAT_AND_TIMBRE is re-enabled
 
 /** Digits-heavy or alphanumeric refs (PEN-001, 1001, EAN) — not free-text names. */
 const looksLikeCode = (q) => {
@@ -184,7 +184,7 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
     }
   };
 
-  // Preview mirrors backend: line discount → header discount; TVA/timbre ignored in shop totals.
+  // Preview mirrors backend: line discount → header discount; no TVA/timbre when shop flag is off.
   const totals = useMemo(() => {
     let grossM = 0;
     const lineBases = []; // millimes after line discount
@@ -222,6 +222,7 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
       discount: r3(discount),
       tax: r3(tax),
       timbre,
+      showTax: APPLY_VAT_AND_TIMBRE,
       total: r3(subtotal + tax + timbre),
       lineDiscounts: lineBases.map((lb) => fromMillimes(lb.lineDisc)),
     };
@@ -355,7 +356,7 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
                   <ListItemButton key={p.id} onClick={() => addToCart(p)}>
                     <ListItemText
                       primary={p.name_fr}
-                      secondary={`${p.reference || p.sku} · ${fmt(Number(p.sale_price))} DT · TVA ${p.tax_rate_percent}%`}
+                      secondary={`${p.reference || p.sku} · ${fmt(Number(p.sale_price))} DT`}
                     />
                   </ListItemButton>
                 ))}
@@ -372,7 +373,7 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
                   <Box sx={{ flexGrow: 1 }}>
                     <Typography>{l.product.name_fr}</Typography>
                     <Typography variant="caption" color="text.secondary">
-                      {fmt(Number(l.product.sale_price))} DT · TVA {l.product.tax_rate_percent || 0}%
+                      {fmt(Number(l.product.sale_price))} DT
                     </Typography>
                   </Box>
                   <TextField
@@ -397,8 +398,12 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
                 sx={{ mb: 1, width: "100%" }} inputProps={{ min: 0, max: 100 }}
               />
               <Row label={t("subtotal")} value={fmt(totals.subtotal)} />
-              <Row label={t("tva")} value={fmt(totals.tax)} />
-              <Row label={t("timbre")} value={fmt(totals.timbre)} />
+              {totals.showTax && (
+                <>
+                  <Row label={t("tva")} value={fmt(totals.tax)} />
+                  <Row label={t("timbre")} value={fmt(totals.timbre)} />
+                </>
+              )}
               <Row label={t("total")} value={`${fmt(totals.total)} DT`} bold />
 
               <Stack direction="row" spacing={1} sx={{ mt: 2 }} flexWrap="wrap" useFlexGap>

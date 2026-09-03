@@ -43,8 +43,8 @@ export default function Quotation({ onBack, onLogout }) {
       const base = r3(l.qty * Number(l.product.sale_price));
       sub = r3(sub + base);
     }
-    // Shop: ignore TVA in quotation preview (matches APPLY_VAT_AND_TIMBRE=0).
-    return { sub, tax: 0, total: sub };
+    // Shop: quotations are HT-only (no TVA line in UI).
+    return { sub, total: sub };
   }, [cart]);
 
   const saveQuote = async () => {
@@ -113,7 +113,6 @@ export default function Quotation({ onBack, onLogout }) {
               ))}
               <Divider sx={{ my: 2 }} />
               <Stack direction="row" justifyContent="space-between"><span>{t("subtotal")}</span><span>{fmt(totals.sub)}</span></Stack>
-              <Stack direction="row" justifyContent="space-between"><span>{t("tva")}</span><span>{fmt(totals.tax)}</span></Stack>
               <Stack direction="row" justifyContent="space-between" sx={{ fontWeight: 700 }}>
                 <span>{t("total")}</span><span>{fmt(totals.total)} DT</span>
               </Stack>

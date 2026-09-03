@@ -207,7 +207,7 @@ export default function Catalog({ onBack, onLogout, onNewProduct, onEditProduct 
                   {detail.brand && <Info label={t("brand")} value={detail.brand} />}
                   {detail.color && <Info label={t("color")} value={detail.color} />}
                   <Info label={t("category")} value={detail.category} />
-                  <Info label={t("price")} value={`${detail.sale_price} · TVA ${detail.tax_rate_percent}%`} />
+                  <Info label={t("price")} value={`${detail.sale_price} DT`} />
                   <Info label={t("stock")} value={`${fmtQty(detail.qty_on_hand)} (${t("lowStock")} ≤ ${fmtQty(detail.reorder_point)})`} />
                   {detail.barcodes?.length > 0 && (
                     <Info label={t("barcodes")} value={detail.barcodes.map((b) => b.value).join(", ")} />

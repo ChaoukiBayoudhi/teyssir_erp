@@ -4,7 +4,7 @@ import {
   MenuItem, Select, InputLabel, FormControl, Grid, CircularProgress, Chip,
 } from "@mui/material";
 import { useTranslation } from "react-i18next";
-import { productDetail, updateProduct, listCategories, listTaxRates } from "../api";
+import { productDetail, updateProduct, listCategories } from "../api";
 import LangToggle from "../LangToggle.jsx";
 import { fmtQty } from "../format.js";
 
@@ -15,7 +15,6 @@ export default function ProductEdit({ productId, onBack, onLogout, onSaved }) {
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const [cats, setCats] = useState([]);
-  const [taxes, setTaxes] = useState([]);
   const [meta, setMeta] = useState({ is_book: false, product_type: "furniture" });
   const [form, setForm] = useState({
     name_fr: "", name_ar: "", category: "", tax_rate: "", sale_price: "",
@@ -27,12 +26,11 @@ export default function ProductEdit({ productId, onBack, onLogout, onSaved }) {
     (async () => {
       setLoading(true); setError("");
       try {
-        const [detail, categories, rates] = await Promise.all([
-          productDetail(productId), listCategories(), listTaxRates(),
+        const [detail, categories] = await Promise.all([
+          productDetail(productId), listCategories(),
         ]);
         if (cancelled) return;
         setCats(categories);
-        setTaxes(rates);
         setMeta({
           is_book: Boolean(detail.is_book),
           product_type: detail.product_type || (detail.is_book ? "book" : "furniture"),
@@ -140,21 +138,12 @@ export default function ProductEdit({ productId, onBack, onLogout, onSaved }) {
               <TextField label={t("nameArLabel")} value={form.name_ar} onChange={(e) => set("name_ar", e.target.value)}
                          fullWidth inputProps={{ dir: "rtl" }} />
               <Grid container spacing={2}>
-                <Grid item xs={6}>
+                <Grid item xs={12}>
                   <FormControl fullWidth size="small">
                     <InputLabel>{t("category")}</InputLabel>
                     <Select label={t("category")} value={form.category} onChange={(e) => set("category", e.target.value)}>
                       <MenuItem value="">—</MenuItem>
                       {cats.map((c) => <MenuItem key={c.id} value={c.id}>{c.name}</MenuItem>)}
-                    </Select>
-                  </FormControl>
-                </Grid>
-                <Grid item xs={6}>
-                  <FormControl fullWidth size="small">
-                    <InputLabel>{t("taxRate")}</InputLabel>
-                    <Select label={t("taxRate")} value={form.tax_rate} onChange={(e) => set("tax_rate", e.target.value)}>
-                      <MenuItem value="">—</MenuItem>
-                      {taxes.map((x) => <MenuItem key={x.id} value={x.id}>{x.name}</MenuItem>)}
                     </Select>
                   </FormControl>
                 </Grid>

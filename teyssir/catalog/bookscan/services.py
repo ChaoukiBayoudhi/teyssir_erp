@@ -914,9 +914,10 @@ def _should_try_vision(draft, provider) -> bool:
 
 def _default_book_tax_rate_id():
     from teyssir.catalog.models import TaxRate
-    tva7 = TaxRate.objects.filter(rate_percent=7).order_by("name").first()
-    if tva7:
-        return tva7.id
+    # Shop no longer applies TVA; prefer exempt 0% when seeded.
+    zero = TaxRate.objects.filter(rate_percent=0).order_by("name").first()
+    if zero:
+        return zero.id
     default = TaxRate.objects.filter(is_default=True).first()
     return default.id if default else None
 

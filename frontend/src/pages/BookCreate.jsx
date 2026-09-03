@@ -392,8 +392,9 @@ export default function BookCreate({ onBack, onLogout }) {
     listTaxRates().then((r) => {
       if (!aliveRef.current) return;
       setTaxes(r);
-      const tva7 = r.find((x) => Number(x.rate_percent) === 7);
-      const d = tva7 || r.find((x) => x.is_default);
+      // Silent default: prefer exempt 0% (TVA field is hidden from create form).
+      const zero = r.find((x) => Number(x.rate_percent) === 0);
+      const d = zero || r.find((x) => x.is_default) || r[0];
       if (d) setForm((f) => ({ ...f, tax_rate: f.tax_rate || d.id }));
     }).catch(() => {});
 
@@ -724,7 +725,8 @@ export default function BookCreate({ onBack, onLogout }) {
       setInfo(note);
 
       const livre = cats.find((c) => /livre|book|كتاب|manuel/i.test(c.name_fr || ""));
-      const tva7 = taxes.find((x) => Number(x.rate_percent) === 7);
+      const zeroTax = taxes.find((x) => Number(x.rate_percent) === 0);
+      const defaultTax = zeroTax || taxes.find((x) => x.is_default) || taxes[0];
       // Do not present garbage OCR as a confident title — even for school CNP.
       // Backend may repair to Mathématiques; keep only usable / repaired titles.
       const titleLooksRepaired = /Mathématiques|Mathematiques|Histoire|Technologie|التاريخ|Sciences|Physique|Français/i
@@ -773,7 +775,7 @@ export default function BookCreate({ onBack, onLogout }) {
         description: safeDesc,
         sale_price: garbageLatin && !d.raw?.price_detected && !isSchoolEdition ? "" : (d.price || ""),
         category: prev.category || livre?.id || "",
-        tax_rate: prev.tax_rate || tva7?.id || "",
+        tax_rate: prev.tax_rate || defaultTax?.id || "",
       }));
     } catch (err) {
       if (err?.name === "AbortError" || String(err?.message || err) === "cancelled") {
@@ -1075,17 +1077,6 @@ export default function BookCreate({ onBack, onLogout }) {
                             onChange={(e) => set("category", e.target.value)}>
                       <MenuItem value="">{t("none")}</MenuItem>
                       {cats.map((c) => <MenuItem key={c.id} value={c.id}>{c.name_fr}</MenuItem>)}
-                    </Select>
-                  </FormControl>
-                </Grid>
-                <Grid item xs={12} sm={6}>
-                  <FormControl fullWidth size="small">
-                    <InputLabel>{t("taxRate")}</InputLabel>
-                    <Select label={t("taxRate")} value={form.tax_rate}
-                            onChange={(e) => set("tax_rate", e.target.value)}>
-                      {taxes.map((x) => (
-                        <MenuItem key={x.id} value={x.id}>{x.name} ({x.rate_percent}%)</MenuItem>
-                      ))}
                     </Select>
                   </FormControl>
                 </Grid>

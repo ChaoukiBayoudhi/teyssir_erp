@@ -23,7 +23,7 @@ def _receipt_model(sale, store_name="Teyssir Library"):
     """Build the receipt view-model. TVA uses ``line_tax`` (millime HALF_UP) so printed
     breakdown matches booked ``sale.tax_total`` — never a raw float multiply.
 
-    When ``APPLY_VAT_AND_TIMBRE`` is false, printed TVA/timbre are 0 (match booked totals).
+    When ``APPLY_VAT_AND_TIMBRE`` is false, TVA/timbre lines are omitted from the print.
     """
     apply_vat = bool(getattr(settings, "APPLY_VAT_AND_TIMBRE", False))
     invoice = getattr(sale, "invoice", None)
@@ -41,6 +41,7 @@ def _receipt_model(sale, store_name="Teyssir Library"):
         "matricule_fiscal": getattr(settings, "STORE_MATRICULE_FISCAL", ""),
         "number": invoice.fiscal_number if invoice else "",
         "terminal": sale.terminal,
+        "apply_vat": apply_vat,
         "lines": [
             (line.product.name_fr, line.qty, line.unit_price, line.discount, line.line_total)
             for line in lines
@@ -80,10 +81,13 @@ def render_sale_receipt(sale, store_name="Teyssir Library", *, duplicate=False, 
         p.row(left, f"{display(total)} DT")
     p.rule()
     p.row("Sous-total HT", f"{display(m['subtotal'])} DT")
-    for rate, (base, tax) in m["by_rate"]:
-        p.row(f"TVA {_rate(rate)}% (base {display(base)})", f"{display(tax)} DT")
-    p.row("Timbre fiscal", f"{display(m['timbre'])} DT")
-    p.bold(True).size(1, 2).row("TOTAL TTC", f"{display(m['total'])} DT").size(1, 1).bold(False)
+    if m["apply_vat"]:
+        for rate, (base, tax) in m["by_rate"]:
+            p.row(f"TVA {_rate(rate)}% (base {display(base)})", f"{display(tax)} DT")
+        p.row("Timbre fiscal", f"{display(m['timbre'])} DT")
+        p.bold(True).size(1, 2).row("TOTAL TTC", f"{display(m['total'])} DT").size(1, 1).bold(False)
+    else:
+        p.bold(True).size(1, 2).row("TOTAL", f"{display(m['total'])} DT").size(1, 1).bold(False)
     for method, amount in m["payments"]:
         p.row(method, f"{display(amount)} DT")
     p.feed().align("center").line("Merci de votre visite").feed(3).cut()
@@ -114,10 +118,13 @@ def render_text(sale, store_name="Teyssir Library", width=42, *, duplicate=False
         out.append(row(left, f"{display(total)} DT"))
     out.append("-" * width)
     out.append(row("Sous-total HT", f"{display(m['subtotal'])} DT"))
-    for rate, (base, tax) in m["by_rate"]:
-        out.append(row(f"TVA {_rate(rate)}%", f"{display(tax)} DT"))
-    out.append(row("Timbre fiscal", f"{display(m['timbre'])} DT"))
-    out.append(row("TOTAL TTC", f"{display(m['total'])} DT"))
+    if m["apply_vat"]:
+        for rate, (base, tax) in m["by_rate"]:
+            out.append(row(f"TVA {_rate(rate)}%", f"{display(tax)} DT"))
+        out.append(row("Timbre fiscal", f"{display(m['timbre'])} DT"))
+        out.append(row("TOTAL TTC", f"{display(m['total'])} DT"))
+    else:
+        out.append(row("TOTAL", f"{display(m['total'])} DT"))
     for method, amount in m["payments"]:
         out.append(row(method, f"{display(amount)} DT"))
     out += ["", "Merci de votre visite".center(width)]

@@ -23,7 +23,6 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
   const [productType, setProductType] = useState("furniture"); // furniture | book
   const [form, setForm] = useState(EMPTY);
   const [cats, setCats] = useState([]);
-  const [taxes, setTaxes] = useState([]);
   const [camera, setCamera] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
@@ -36,8 +35,9 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
   useEffect(() => {
     listCategories().then(setCats).catch(() => {});
     listTaxRates().then((r) => {
-      setTaxes(r);
-      const d = r.find((x) => x.is_default);
+      // Silent default: prefer exempt 0%, else is_default (TVA field is hidden).
+      const zero = r.find((x) => Number(x.rate_percent) === 0);
+      const d = zero || r.find((x) => x.is_default) || r[0];
       if (d) setForm((f) => ({ ...f, tax_rate: d.id }));
     }).catch(() => {});
     barcodeRef.current?.focus();
@@ -230,20 +230,12 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
               <TextField label={t("nameArLabel")} value={form.name_ar} onChange={(e) => set("name_ar", e.target.value)} fullWidth
                          inputProps={{ dir: "rtl" }} />
               <Grid container spacing={2}>
-                <Grid item xs={6}>
+                <Grid item xs={12}>
                   <FormControl fullWidth size="small">
                     <InputLabel>{t("category")}</InputLabel>
                     <Select label={t("category")} value={form.category} onChange={(e) => set("category", e.target.value)}>
                       <MenuItem value="">—</MenuItem>
                       {cats.map((c) => <MenuItem key={c.id} value={c.id}>{c.name}</MenuItem>)}
-                    </Select>
-                  </FormControl>
-                </Grid>
-                <Grid item xs={6}>
-                  <FormControl fullWidth size="small">
-                    <InputLabel>{t("taxRate")}</InputLabel>
-                    <Select label={t("taxRate")} value={form.tax_rate} onChange={(e) => set("tax_rate", e.target.value)}>
-                      {taxes.map((x) => <MenuItem key={x.id} value={x.id}>{x.name}</MenuItem>)}
                     </Select>
                   </FormControl>
                 </Grid>

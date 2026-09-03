@@ -72,3 +72,32 @@ class ReceiptTests(TestCase):
         self.assertNotIn(b"\x1bp", data)  # no drawer kick on reprint
         txt = render_text(self.sale, duplicate=True)
         self.assertIn("DUPLICATA", txt)
+
+
+class ShopReceiptNoVatTimbreTests(TestCase):
+    """Default shop: receipt must not print TVA / Timbre fiscal lines."""
+
+    def setUp(self):
+        FiscalStampConfig.objects.create(doc_type="FACTURE", amount=Decimal("1.000"))
+        tva7 = TaxRate.objects.create(name="TVA 7%", rate_percent=Decimal("7.00"))
+        self.product = Product.objects.create(
+            sku="PEN", name_fr="Stylo Bic", tax_rate=tva7, sale_price=Decimal("0.850"),
+        )
+        apply_movement(product_id=self.product.id, qty=100, reason=StockMovement.RECEIPT)
+        sale = Sale.objects.create(terminal="C1", status=Sale.DRAFT)
+        SaleLine.objects.create(sale=sale, product=self.product, qty=3,
+                                unit_price=Decimal("0.850"), tax_rate=Decimal("7.00"))
+        self.invoice = finalize_sale(sale, payment_method="CASH")
+        self.sale = sale
+
+    def test_text_receipt_omits_tva_and_timbre(self):
+        txt = render_text(self.sale)
+        self.assertIn("Teyssir Library", txt)
+        self.assertIn(self.invoice.fiscal_number, txt)
+        self.assertIn("Stylo Bic", txt)
+        self.assertIn("2.55 DT", txt)  # HT-only total
+        self.assertNotIn("TVA", txt)
+        self.assertNotIn("Timbre fiscal", txt)
+        self.assertNotIn("TOTAL TTC", txt)
+        self.assertIn("TOTAL", txt)
+        self.assertIn("CASH", txt)
