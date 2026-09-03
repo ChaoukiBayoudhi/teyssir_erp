@@ -27,13 +27,17 @@ const STILL_BUDGET_MS = 7000;
 const STILL_MAX_EDGE = 1280;
 const MAX_CAPTURES = 4;
 
-/** Guide overlay fractions (must match the green strip UI). */
-const GUIDE = { left: 0.08, right: 0.92, top: 0.42, height: 0.16 };
+/** Guide overlay fractions (must match the green strip UI). Taller than a razor strip so ISBN / CNP fit. */
+const GUIDE = { left: 0.04, right: 0.96, top: 0.32, height: 0.30 };
 
-/** ISBN-13 check digit (978/979). Prefer valid ISBN when several codes are in frame (book mode). */
-function isbn13CheckOk(raw) {
-  const s = String(raw || "").replace(/[-\s]/g, "");
-  if (!/^97[89]\d{10}$/.test(s)) return false;
+function digitRun(raw) {
+  return String(raw || "").replace(/\D/g, "");
+}
+
+/** GTIN-13 / EAN-13 check digit (any prefix, including Tunisian 619). */
+export function ean13CheckOk(raw) {
+  const s = digitRun(raw);
+  if (s.length !== 13) return false;
   let total = 0;
   for (let i = 0; i < 12; i++) {
     total += (i % 2 === 0 ? 1 : 3) * parseInt(s[i], 10);
@@ -42,26 +46,56 @@ function isbn13CheckOk(raw) {
   return check === parseInt(s[12], 10);
 }
 
+/** ISBN-13 check digit (978/979). Prefer valid ISBN when several codes are in frame (book mode). */
+function isbn13CheckOk(raw) {
+  const s = digitRun(raw);
+  if (!/^97[89]\d{10}$/.test(s)) return false;
+  return ean13CheckOk(s);
+}
+
+/**
+ * Normalize camera / HID payloads: ISBN+addon (18 digits), UPC-A, hyphenated ISBN.
+ * Returns a code suitable for catalog fields, or "" if empty.
+ */
+export function normalizeProductBarcode(raw) {
+  const s = String(raw || "").replace(/[-\s]/g, "").trim();
+  if (!s) return "";
+  const digits = digitRun(s);
+
+  if (digits.length >= 18 && isbn13CheckOk(digits.slice(0, 13))) {
+    return digits.slice(0, 13);
+  }
+  if (digits.length >= 13 && ean13CheckOk(digits.slice(0, 13))) {
+    return digits.slice(0, 13);
+  }
+  if (digits.length === 12 && ean13CheckOk(`0${digits}`)) {
+    return digits;
+  }
+  if (digits.length === 8) return digits;
+  if (digits.length >= 8 && digits.length <= 14 && /^\d+$/.test(s)) return digits || s;
+  return s;
+}
+
 /**
  * Reject partial / noisy camera decodes (e.g. 5-digit "71899").
- * Typed POS search can still use short refs; camera needs a fuller code.
- * Accepts: EAN-8+, UPC, EAN-13/ISBN, CNP 619…, Code128 alphanumeric ≥4 with a digit.
+ * Typed POS search can still use short refs; camera / douchette need a fuller code.
+ * Accepts: EAN-8+, UPC, EAN-13/ISBN, CNP 619…, ISBN+addon, Code128 alphanumeric ≥4 with a digit.
  */
 export function isPlausibleProductBarcode(raw) {
-  const s = String(raw || "").replace(/[-\s]/g, "").trim();
+  const normalized = normalizeProductBarcode(raw);
+  const s = String(normalized || "").replace(/[-\s]/g, "").trim();
   if (!s || s.length > 48) return false;
   if (/^\d+$/.test(s)) {
-    // Partial EAN/ISBN fragments are typically 4–7 digits; EAN-8 is the shortest retail bar.
     if (s.length < 8) return false;
     if (s.length > 14) return false;
     return true;
   }
-  // Code128 / local refs (e.g. PEN-001) — need a digit and reasonable length.
   if (/^[A-Za-z0-9][A-Za-z0-9._/-]{2,47}$/.test(s) && /\d/.test(s)) return true;
   return false;
 }
 
 let zxingReaderPromise = null;
+let nativeDetectorPromise = null;
 
 function getZxingReader() {
   if (!zxingReaderPromise) {
@@ -71,6 +105,7 @@ function getZxingReader() {
     ]).then(([{ BrowserMultiFormatReader, BarcodeFormat }, { DecodeHintType }]) => {
       const hints = new Map();
       hints.set(DecodeHintType.TRY_HARDER, true);
+      try { hints.set(DecodeHintType.ALSO_INVERTED, true); } catch { /* older zxing */ }
       hints.set(DecodeHintType.POSSIBLE_FORMATS, [
         BarcodeFormat.EAN_13,
         BarcodeFormat.EAN_8,
@@ -85,6 +120,34 @@ function getZxingReader() {
     });
   }
   return zxingReaderPromise;
+}
+
+function getNativeDetector() {
+  if (!("BarcodeDetector" in window)) return Promise.resolve(null);
+  if (!nativeDetectorPromise) {
+    nativeDetectorPromise = (async () => {
+      let formats = BARCODE_FORMATS;
+      try {
+        if (typeof window.BarcodeDetector.getSupportedFormats === "function") {
+          const supported = await window.BarcodeDetector.getSupportedFormats();
+          const filtered = BARCODE_FORMATS.filter((f) => supported.includes(f));
+          if (filtered.length) formats = filtered;
+        }
+      } catch { /* use defaults */ }
+      try {
+        return new window.BarcodeDetector({ formats });
+      } catch {
+        try {
+          return new window.BarcodeDetector({
+            formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128"],
+          });
+        } catch {
+          return null;
+        }
+      }
+    })();
+  }
+  return nativeDetectorPromise;
 }
 
 function sourceToCanvas(source) {
@@ -279,30 +342,35 @@ async function detectWithZxing(source) {
   }
 }
 
-/** Pick best raw value from native detector results (prefer longer plausible / ISBN in book mode). */
+/** Pick best raw value from native detector results (prefer checksum EAN / ISBN). */
 function pickBestCode(rawValues, { preferIsbn = false } = {}) {
-  const cleaned = rawValues.map((v) => String(v || "").trim()).filter(Boolean);
+  const cleaned = rawValues.map((v) => normalizeProductBarcode(v) || String(v || "").trim()).filter(Boolean);
   if (!cleaned.length) return "";
   if (preferIsbn) {
     const isbn = cleaned.find((c) => isbn13CheckOk(c));
     if (isbn) return isbn;
   }
+  const ean = cleaned.find((c) => ean13CheckOk(c) || isbn13CheckOk(c));
+  if (ean) return ean;
   const plausible = cleaned.filter(isPlausibleProductBarcode);
   const pool = plausible.length ? plausible : cleaned;
   return pool.reduce((a, b) => (b.length > a.length ? b : a), pool[0]);
 }
 
 async function detectCodeFromSource(source, { preferIsbn = false } = {}) {
-  if ("BarcodeDetector" in window) {
+  const detector = await getNativeDetector();
+  if (detector) {
     try {
-      const detector = new window.BarcodeDetector({ formats: BARCODE_FORMATS });
       const codes = await detector.detect(source);
       if (codes.length) {
-        return pickBestCode(codes.map((c) => c.rawValue), { preferIsbn });
+        const picked = pickBestCode(codes.map((c) => c.rawValue), { preferIsbn });
+        if (picked && isPlausibleProductBarcode(picked)) return picked;
       }
     } catch { /* fall through to ZXing */ }
   }
-  return detectWithZxing(source);
+  const zx = await detectWithZxing(source);
+  const norm = normalizeProductBarcode(zx);
+  return (norm && isPlausibleProductBarcode(norm)) ? norm : (zx || "");
 }
 
 /**
@@ -356,7 +424,8 @@ async function detectCodeFromStill(canvas, {
     if (Date.now() > deadline) return "deadline";
     const code = await detectCodeFromSource(v, { preferIsbn });
     if (!code) return "";
-    if (isPlausibleProductBarcode(code)) return { hit: code };
+    const hit = normalizeProductBarcode(code) || code;
+    if (isPlausibleProductBarcode(hit)) return { hit };
     if (!incomplete || code.length > incomplete.length) incomplete = code;
     return "";
   };
@@ -414,7 +483,15 @@ function lowerBandCanvas(video) {
   if (!video?.videoWidth || !video?.videoHeight) return null;
   const full = sourceToCanvas(video);
   if (!full) return null;
-  return cropFrac(full, 0.04, 0.52, 0.96, 0.98);
+  return cropFrac(full, 0.02, 0.48, 0.98, 0.98);
+}
+
+/** Mid-frame band (book verso barcode often sits between guide and bottom). */
+function midBandCanvas(video) {
+  if (!video?.videoWidth || !video?.videoHeight) return null;
+  const full = sourceToCanvas(video);
+  if (!full) return null;
+  return cropFrac(full, 0.02, 0.22, 0.98, 0.72);
 }
 
 function frameToBlob(video) {
@@ -456,11 +533,19 @@ async function bumpTrackResolution(stream) {
     const caps = track.getCapabilities();
     const wMax = caps.width?.max;
     const hMax = caps.height?.max;
-    if (!wMax && !hMax) return;
-    const width = wMax ? { ideal: Math.min(wMax, 1920), max: Math.min(wMax, 3840) } : POS_VIDEO_CONSTRAINTS.width;
-    const height = hMax ? { ideal: Math.min(hMax, 1080), max: Math.min(hMax, 2160) } : POS_VIDEO_CONSTRAINTS.height;
-    await track.applyConstraints({ width, height });
+    if (wMax || hMax) {
+      const width = wMax ? { ideal: Math.min(wMax, 1920), max: Math.min(wMax, 3840) } : POS_VIDEO_CONSTRAINTS.width;
+      const height = hMax ? { ideal: Math.min(hMax, 1080), max: Math.min(hMax, 2160) } : POS_VIDEO_CONSTRAINTS.height;
+      await track.applyConstraints({ width, height });
+    }
   } catch { /* device may reject */ }
+  try {
+    const caps2 = track.getCapabilities?.() || {};
+    const modes = caps2.focusMode;
+    if (Array.isArray(modes) && modes.includes("continuous")) {
+      await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] });
+    }
+  } catch { /* optional AF */ }
 }
 
 /**
@@ -491,6 +576,12 @@ export default function CameraScanner({
   const [busy, setBusy] = useState(false);
   const [liveOk, setLiveOk] = useState(false);
   const [stream, setStream] = useState(null);
+  const onDetectRef = useRef(onDetect);
+  const onCloseRef = useRef(onClose);
+  const stopOnDetectRef = useRef(stopOnDetect);
+  onDetectRef.current = onDetect;
+  onCloseRef.current = onClose;
+  stopOnDetectRef.current = stopOnDetect;
   const [captures, setCaptures] = useState([]); // { file, url }
 
   const aimHint = () => (isPos ? t("scannerAimStrip") : t("scannerAimBarcode"));
@@ -520,16 +611,17 @@ export default function CameraScanner({
     stopTracks();
     revokeAllCaptures(capturesRef.current);
     setCaptures([]);
-    onClose?.();
+    onCloseRef.current?.();
   };
 
   const emitDetect = (value) => {
-    onDetect?.(value);
-    if (stopOnDetect) {
+    const code = normalizeProductBarcode(value) || value;
+    onDetectRef.current?.(code);
+    if (stopOnDetectRef.current) {
       stopTracks();
       revokeAllCaptures(capturesRef.current);
       setCaptures([]);
-      onClose?.();
+      onCloseRef.current?.();
     }
   };
 
@@ -562,7 +654,11 @@ export default function CameraScanner({
       const throttleMs = hasNative ? LIVE_THROTTLE_NATIVE_MS : LIVE_THROTTLE_ZXING_MS;
 
       const tick = async () => {
-        if (stopped || !videoRef.current) return;
+        if (stopped) return;
+        if (!videoRef.current) {
+          raf = requestAnimationFrame(tick);
+          return;
+        }
         const now = Date.now();
         if (now - lastTickAt < throttleMs || decodingRef.current) {
           raf = requestAnimationFrame(tick);
@@ -571,18 +667,44 @@ export default function CameraScanner({
         lastTickAt = now;
         decodingRef.current = true;
         try {
-          // Live: guide strip first; POS also tries lower band (sticker below strip).
-          const strip = guideStripCanvas(videoRef.current);
-          let value = strip
-            ? await detectCodeFromSource(strip, { preferIsbn })
-            : "";
+          const video = videoRef.current;
+          let value = "";
+          // Full-frame native detect keeps EAN quiet zones (cropped canvas often misses books).
+          const detector = await getNativeDetector();
+          if (detector && video.videoWidth) {
+            try {
+              const codes = await detector.detect(video);
+              if (codes.length) {
+                value = pickBestCode(codes.map((c) => c.rawValue), { preferIsbn });
+              }
+            } catch { /* canvas / ZXing fallback */ }
+          }
+          if (!value || !isPlausibleProductBarcode(value)) {
+            const strip = guideStripCanvas(video);
+            value = strip ? await detectCodeFromSource(strip, { preferIsbn }) : "";
+          }
           if ((!value || !isPlausibleProductBarcode(value)) && isPos) {
-            const lower = lowerBandCanvas(videoRef.current);
+            const lower = lowerBandCanvas(video);
             if (lower) {
               const alt = await detectCodeFromSource(lower, { preferIsbn });
               if (alt && isPlausibleProductBarcode(alt)) value = alt;
             }
           }
+          if (!value || !isPlausibleProductBarcode(value)) {
+            const mid = midBandCanvas(video);
+            if (mid) {
+              const alt = await detectCodeFromSource(mid, { preferIsbn });
+              if (alt && isPlausibleProductBarcode(alt)) value = alt;
+            }
+          }
+          if (!value || !isPlausibleProductBarcode(value)) {
+            const strip = guideStripCanvas(video);
+            if (strip) {
+              const alt = await detectCodeFromSource(invertCanvas(strip), { preferIsbn });
+              if (alt && isPlausibleProductBarcode(alt)) value = alt;
+            }
+          }
+          value = normalizeProductBarcode(value) || value;
           if (value && isPlausibleProductBarcode(value)) {
             missTicks = 0;
             const same = value === lastRef.current.value;
@@ -791,7 +913,7 @@ export default function CameraScanner({
             autoPlay
             playsInline
             muted
-            style={{ width: "100%", display: "block", maxHeight: 280, objectFit: "cover" }}
+            style={{ width: "100%", display: "block", maxHeight: 360, objectFit: "contain" }}
           />
           {/* Guide: horizontal barcode strip (not ISBN-specific). */}
           <Box
@@ -799,10 +921,10 @@ export default function CameraScanner({
             sx={{
               pointerEvents: "none",
               position: "absolute",
-              left: "8%",
-              right: "8%",
-              top: "42%",
-              height: "16%",
+              left: "4%",
+              right: "4%",
+              top: "32%",
+              height: "30%",
               border: "2px solid",
               borderColor: "success.light",
               borderRadius: 1,

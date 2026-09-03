@@ -6,7 +6,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { scanBook, pollScanJob, cancelScanJob, createBook, listCategories, listTaxRates } from "../api";
 import LangToggle from "../LangToggle.jsx";
-import CameraScanner from "../components/CameraScanner.jsx";
+import CameraScanner, { isPlausibleProductBarcode, normalizeProductBarcode } from "../components/CameraScanner.jsx";
 import { preferExemptTaxRate } from "../tax.js";
 
 /** ISBN-13 check digit (bookland 978/979 only). Reject OCR digit soup before hinting. */
@@ -314,6 +314,7 @@ export default function BookCreate({ onBack, onLogout }) {
   const { t } = useTranslation();
   const videoRef = useRef(null);
   const fileRef = useRef(null);
+  const barcodeRef = useRef(null);
   const streamRef = useRef(null);
   const aliveRef = useRef(true);
   const abortRef = useRef(null);
@@ -419,7 +420,7 @@ export default function BookCreate({ onBack, onLogout }) {
   }, []);
 
   const onBarcodeScan = (code) => {
-    const raw = String(code || "").replace(/[-\s]/g, "").trim();
+    const raw = normalizeProductBarcode(code) || String(code || "").replace(/[-\s]/g, "").trim();
     if (!raw) return;
     setBarcodeCamera(false);
     setError("");
@@ -435,6 +436,13 @@ export default function BookCreate({ onBack, onLogout }) {
       }
       return next;
     });
+  };
+
+  const onBarcodeFieldKeyDown = (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const raw = normalizeProductBarcode(e.target.value) || String(e.target.value || "").replace(/[-\s]/g, "").trim();
+    if (raw && isPlausibleProductBarcode(raw)) onBarcodeScan(raw);
   };
 
   const addCapture = (file, slot) => {
@@ -838,8 +846,6 @@ export default function BookCreate({ onBack, onLogout }) {
   const readyFiles = images.filter(Boolean).length;
   const schoolMode = looksLikeSchoolDraft(draft) || form.edition_kind === "school_cnp"
     || (form.barcode_raw || "").startsWith("619") || form.barcode_kind === "local_product";
-  const isbnMode = !schoolMode && (!!form.isbn13 || form.edition_kind === "isbn_edition"
-    || (draft && draft.edition_kind === "isbn_edition"));
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "#f5f5f5" }}>
@@ -1022,14 +1028,30 @@ export default function BookCreate({ onBack, onLogout }) {
               </Stack>
               <Grid container spacing={1.5}>
                 <Grid item xs={12}>
-                  <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ mb: 0.5 }}>
-                    <Typography color="text.secondary" sx={{ flexGrow: 1, pt: 0.5 }}>
-                      {t("scanBookBarcodeHint")}
-                    </Typography>
+                  <Stack direction="row" spacing={1} alignItems="flex-start">
+                    <TextField
+                      inputRef={barcodeRef}
+                      size="small"
+                      fullWidth
+                      autoFocus
+                      label={t("barcodeFieldLabel")}
+                      value={form.barcode_raw}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        set("barcode_raw", v);
+                      }}
+                      onKeyDown={onBarcodeFieldKeyDown}
+                      onBlur={() => {
+                        const raw = normalizeProductBarcode(form.barcode_raw);
+                        if (raw && isPlausibleProductBarcode(raw)) onBarcodeScan(raw);
+                      }}
+                      helperText={t("scannerOrWedgeHint")}
+                      FormHelperTextProps={{ sx: { mx: 0 } }}
+                      inputProps={{ dir: "auto", autoComplete: "off" }}
+                    />
                     <Button
                       variant={barcodeCamera ? "contained" : "outlined"}
-                      size="small"
-                      sx={{ minWidth: 52 }}
+                      sx={{ minWidth: 52, height: 40 }}
                       disabled={busy}
                       onClick={() => {
                         if (!barcodeCamera) stopCamera();
@@ -1041,32 +1063,23 @@ export default function BookCreate({ onBack, onLogout }) {
                     </Button>
                   </Stack>
                   {barcodeCamera && (
-                    <CameraScanner
-                      mode="pos"
-                      stopOnDetect
-                      onDetect={onBarcodeScan}
-                      onClose={() => setBarcodeCamera(false)}
-                    />
+                    <Box sx={{ mt: 1 }}>
+                      <CameraScanner
+                        mode="pos"
+                        stopOnDetect
+                        onDetect={onBarcodeScan}
+                        onClose={() => setBarcodeCamera(false)}
+                      />
+                    </Box>
                   )}
                 </Grid>
-                {schoolMode ? (
-                  <>
-                    <Grid item xs={12} sm={6}>
-                      {F(t("barcodeFieldLabel"), "barcode_raw")}
-                    </Grid>
-                    <Grid item xs={12} sm={6}>
-                      {F(t("isbnFieldLabel"), "isbn13", {
-                        helperText: t("isbnOptionalHint"),
-                        FormHelperTextProps: { sx: { mx: 0 } },
-                      })}
-                    </Grid>
-                  </>
-                ) : (
-                  <>
-                    <Grid item xs={12} sm={6}>{F(t("isbnFieldLabel"), "isbn13")}</Grid>
-                    <Grid item xs={12} sm={6}>{F(isbnMode ? "Code-barres" : t("barcodeFieldLabel"), "barcode_raw")}</Grid>
-                  </>
-                )}
+                <Grid item xs={12} sm={6}>
+                  {F(t("isbnFieldLabel"), "isbn13", {
+                    helperText: schoolMode ? t("isbnOptionalHint") : undefined,
+                    FormHelperTextProps: { sx: { mx: 0 } },
+                    onKeyDown: onBarcodeFieldKeyDown,
+                  })}
+                </Grid>
                 <Grid item xs={12} sm={6}>{F(t("priceF") + " (DT)", "sale_price", {
                   type: "number", inputProps: { min: 0, step: "0.001" },
                 })}</Grid>

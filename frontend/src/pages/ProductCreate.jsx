@@ -6,7 +6,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { barcodeLookup, createProduct, listCategories, listTaxRates } from "../api";
 import LangToggle from "../LangToggle.jsx";
-import CameraScanner from "../components/CameraScanner.jsx";
+import CameraScanner, { normalizeProductBarcode } from "../components/CameraScanner.jsx";
 import { fmtQty } from "../format.js";
 import { preferExemptTaxRate } from "../tax.js";
 
@@ -54,6 +54,26 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
     }
   };
 
+  const applyBarcode = (code) => {
+    const raw = normalizeProductBarcode(code) || String(code || "").replace(/[-\s]/g, "").trim();
+    if (!raw) return;
+    onBarcodeChange(raw);
+    lookup(raw);
+  };
+
+  const onCameraCode = (code) => {
+    applyBarcode(code);
+    setCamera(false);
+  };
+
+  const onBarcodeKey = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const raw = normalizeProductBarcode(barcode) || barcode.trim();
+      if (raw) applyBarcode(raw);
+    }
+  };
+
   const onReferenceChange = (value) => {
     set("reference", value);
     // XOR: reference filled → clear barcode.
@@ -64,12 +84,6 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
     }
   };
 
-  const onCameraCode = (code) => {
-    onBarcodeChange(code);
-    lookup(code);
-    setCamera(false);
-  };
-
   const lookup = async (code) => {
     setError(""); setExisting(null);
     if (!code) return;
@@ -77,10 +91,6 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
       const r = await barcodeLookup(code);
       if (r.found) setExisting(r.product);
     } catch (e) { setError(String(e.message || e)); }
-  };
-
-  const onBarcodeKey = (e) => {
-    if (e.key === "Enter") { e.preventDefault(); lookup(barcode.trim()); }
   };
 
   const save = async () => {
@@ -167,12 +177,12 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
               inputProps={!isBook ? { required: !hasReference } : undefined}
               onChange={(e) => onBarcodeChange(e.target.value)}
               onKeyDown={onBarcodeKey}
-              onBlur={() => barcode && lookup(barcode.trim())}
-              autoFocus
+              onBlur={() => barcode && applyBarcode(barcode)}
+              autoFocus={!(!isBook && hasReference)}
               helperText={
-                isBook
-                  ? undefined
-                  : (hasReference ? t("barcodeDisabledWhenReference") : t("barcodeOrReferenceHint"))
+                !isBook && hasReference
+                  ? t("barcodeDisabledWhenReference")
+                  : t("scannerOrWedgeHint")
               }
             />
             <Button
