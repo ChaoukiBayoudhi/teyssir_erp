@@ -112,10 +112,10 @@ Vous devez y voir `manage.py`, `deploy\windows\install_all.ps1` et
 branche / le mauvais ZIP.
 
 > **`frontend\dist` n'est pas versionné dans Git.**  
-> Le dépôt ne contient pas le build React (PWA). Au premier install, le script tente
-> `npm ci && npm run build` si Node est présent ; sinon préparez `frontend\dist` une fois
-> (§2) et copiez-le sur les autres PC. Sans `frontend\dist\index.html`, l'API démarre mais
-> l'interface web est absente.
+> Le dépôt ne contient pas le build React (PWA). `install.ps1` / `setup_app.ps1`
+> **reconstruisent toujours** `frontend\dist` (`npm ci && npm run build`) si Node est
+> présent, sauf `-SkipBuild`. Sans Node et sans `frontend\dist\index.html`, l'API
+> démarre mais l'interface web est absente (copiez un dist depuis un PC avec Node, §2).
 
 ---
 
@@ -135,26 +135,38 @@ Deux chemins — choisissez selon l'objectif :
 
 ### A — Mise à jour sur place (données conservées)
 
-1. Arrêtez le service : `nssm stop TeyssirBackend` (ou `Stop-Service TeyssirBackend`).
-2. Dans le dossier projet (Admin PowerShell) :
-   ```powershell
-   git fetch --tags origin
-   git checkout feature/pdf-conversion-async-optimization
-   # éviter rc2 seul si vous voulez les correctifs install post-freeze
-   Set-ExecutionPolicy -Scope Process Bypass -Force
-   .\deploy\windows\setup_app.ps1 -Role hub
-   # Caisse : .\deploy\windows\setup_caisse_C1.ps1 -HubUrl … -SyncKey …
-   ```
-3. **Rebuild UI** si l'écran semble ancien :
-   ```powershell
-   cd frontend ; npm ci ; npm run build ; cd ..
-   .\deploy\windows\Install-WindowsService.ps1
-   ```
-4. **PWA / cache navigateur :** Chrome/Edge → `Ctrl+Shift+R` sur `http://localhost:8000`, ou
-   Paramètres du site → effacer les données ; désinstallez l'icône PWA si nécessaire (§14).
+PowerShell **Administrateur**, dans le dossier du projet Hub (là où se trouve `manage.py`).
+`Ctrl+Shift+R` ne suffit **pas** toujours : la PWA peut garder l'ancienne Caisse (TVA / timbre).
 
-`setup_app.ps1` réutilise `.venv`, `.env` et la base existante ; `migrate` applique les
-schémas sans effacer les ventes.
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass -Force
+
+# 1) Stop service
+nssm stop TeyssirBackend
+
+# 2) Tip feature (not master / not GitHub ZIP)
+git fetch --tags origin
+git checkout feature/pdf-conversion-async-optimization
+git pull --ff-only origin feature/pdf-conversion-async-optimization
+
+# 3) Confirm TVA-off is in history (0edb85e or later). Tip was abaa35f before this upgrade commit.
+git log -1 --oneline
+git merge-base --is-ancestor 0edb85e HEAD
+if ($LASTEXITCODE -eq 0) { Write-Host "OK: 0edb85e (TVA-off UI) is an ancestor of HEAD" } else { Write-Host "FAIL: pull did not include 0edb85e -- wrong branch or remote" }
+
+# 4) Pull + migrate + ALWAYS rebuild frontend\dist + reinstall service
+.\deploy\windows\setup_app.ps1 -Role hub
+
+# 5) Restart waitress so WhiteNoise serves the new dist
+nssm restart TeyssirBackend
+```
+
+6. **Vider les données du site** (obligatoire si l'UI reste ancienne)  
+   Chrome/Edge sur `http://localhost:8000` : icône cadenas / paramètres du site → **Effacer les données**.  
+   Si l'app est installée en PWA : désinstallez-la, puis rouvrez `http://localhost:8000` (§14).  
+   Un simple `Ctrl+Shift+R` peut laisser le service worker.
+
+`setup_app.ps1` réutilise `.venv`, `.env` et la base ; `migrate` applique les schémas sans effacer les ventes. `install.ps1` **rebuild** `frontend\dist` à chaque passage (sauf `-SkipBuild`).
 
 ### B — Installation propre (efface DB + `.env` + service)
 
@@ -639,7 +651,7 @@ Donnez à chaque magasin un `TEYSSIR_STORE_CODE` (S1, S2…). Sur chaque Hub :
 | **Tesseract : langues manquantes** (arabe / français) | Réinstallez UB Mannheim en cochant **ara**, **fra**, **eng**. Contrôle : `/health/` → `tesseract.langs`. |
 | **OCR vide** sous le service Windows | PATH minimal NSSM : vérifiez `TEYSSIR_TESSERACT_CMD` dans `.env`, puis `nssm restart TeyssirBackend`. Menu → **Diagnostics**. |
 | **Imprimante / Discover** | Relancez `.\deploy\windows\Discover-Printer.ps1` ; l'imprimante doit être sur le **même LAN**, port **9100**. Si rien → `dummy` (normal). Pas d'IP inventée. |
-| **PWA / écran « ancien » après maj** | Rebuild `frontend\dist` (§3bis A) puis **hard-refresh** : Chrome/Edge → `Ctrl+Shift+R`. Ou Paramètres site → Effacer les données ; ou désinstaller la PWA puis rouvrir `http://localhost:8000`. |
+| **PWA / écran « ancien » après maj** | `setup_app.ps1` rebuild `frontend\dist` (§3bis A), `nssm restart TeyssirBackend`, puis **effacer les données du site** (pas seulement Ctrl+Shift+R). Désinstaller la PWA si besoin, rouvrir `http://localhost:8000`. |
 | **« Impossible de trouver un paramètre … FreshInstall »** | Mauvais script **ou** checkout trop vieux (`master` / ZIP pre-rc2). Sur **rc2** : utilisez `install_all.ps1 -FreshInstall` (pas `setup_app` / `setup_caisse*` seuls). Sur tip feature (post-fix) : tous les entrypoints l'acceptent. Vérif : `Select-String FreshInstall deploy\windows\*.ps1`. |
 | **Ancienne DB / UI après checkout du nouveau kit** | Scripts idempotents **conservent** `.env` et la base. Mise à jour sur place : §3bis **A**. Repartir de zéro : §3bis **B** (`-FreshInstall` / `Clean-PreviousInstall.ps1`). |
 | `python` introuvable | Réinstallez Python 3.12 avec **« Add to PATH »**, fermez PowerShell, relancez. Désactivez l'alias Microsoft Store. |

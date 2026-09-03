@@ -215,3 +215,5 @@ class HealthLlmTests(TestCase):
         self.assertIn("langs", body["tesseract"])
         self.assertIn("printer", body)
         self.assertIn("target", body["printer"])
+        self.assertIn("apply_vat_and_timbre", body)
+        self.assertIsInstance(body["apply_vat_and_timbre"], bool)

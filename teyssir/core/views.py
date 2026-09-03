@@ -24,6 +24,7 @@ def health(request):
             "terminal": settings.TERMINAL if settings.ROLE == "till" else None,
             "db": connection.vendor,
             "currency": settings.CURRENCY,
+            "apply_vat_and_timbre": bool(getattr(settings, "APPLY_VAT_AND_TIMBRE", False)),
             "printer": {"target": printer_target},
             "llm": llm_status(ping=False),
             "tesseract": {

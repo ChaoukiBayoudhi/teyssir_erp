@@ -64,7 +64,7 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 - **Discover-Printer** kept — never hardcodes a shop ticket-printer IP (no fake Aclas IP).
 - **Unregister autostart:** `Unregister-ScheduledTask -TaskName "Teyssir Sync","Teyssir Server" -Confirm:$false` or full reverse via `uninstall.ps1`.
 - **Upgrade from old install:** idempotent re-run keeps DB/`.env` — see [`docs/INSTALL-WINDOWS.md` §3bis](../../docs/INSTALL-WINDOWS.md#3bis-mise-à-jour-depuis-une-ancienne-installation-hub-déjà-en-place). For a **clean wipe**: `-FreshInstall` on `install_all` / `setup_app` / `install` / `setup_caisse*` (or `Clean-PreviousInstall.ps1 -FreshInstall`). Verify: `Select-String FreshInstall deploy\windows\*.ps1`.
-- **`frontend\dist` is not in Git** — build once (`npm ci && npm run build` in `frontend\`) or copy from a PC that built it.
+- **`frontend\dist` is not in Git** — `install.ps1` / `setup_app.ps1` **always** run `npm ci && npm run build` when Node is present (unless `-SkipBuild`), so an upgrade after `git pull` does not keep a stale PWA.
 - **No Redis** in this kit.
 
 Everything here uses only free/open-source tools (Python, waitress, WhiteNoise, NSSM).

@@ -31,6 +31,8 @@ param(
     [string]$Printer = "",
     [switch]$DiscoverPrinter,
     [switch]$SkipBuild,
+    # Forwarded to install.ps1. Rebuild is the default; this flag still wins over -SkipBuild.
+    [switch]$ForceFrontendBuild,
     [switch]$SkipLlm,
     [string]$LlmModel = "mistral",
     [switch]$SkipVision,
@@ -376,7 +378,7 @@ else {
 $forward = @{}
 foreach ($key in @(
         "Role", "Terminal", "StoreCode", "HubUrl", "SyncKey", "Printer",
-        "DiscoverPrinter", "SkipBuild", "SkipLlm", "LlmModel", "SkipVision",
+        "DiscoverPrinter", "SkipBuild", "ForceFrontendBuild", "SkipLlm", "LlmModel", "SkipVision",
         "VisionModel", "SkipPostgres", "PostgresSuperPassword", "AdminUser",
         "AdminPassword", "SkipAdmin", "RegisterAutostart", "SkipAutostart",
         "SkipFirewall", "SkipService", "SkipShortcut", "FreshInstall", "KeepVenv"

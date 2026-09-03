@@ -15,9 +15,8 @@ const toMillimes = (x) => Math.round(Number(x) * 1000);
 const fromMillimes = (m) => m / 1000;
 const r3 = (x) => fromMillimes(toMillimes(x));
 const fmt = (x) => Number(x).toFixed(2); // 2-dp display (server stores 3-dp)
-/** Shop pricing: payable = prices after remises only (no TVA / timbre in UI or total). */
-const APPLY_VAT_AND_TIMBRE = false;
-const TIMBRE = 1; // only used if APPLY_VAT_AND_TIMBRE is re-enabled
+/** Fallback until /health/ loads; backend APPLY_VAT_AND_TIMBRE is source of truth. */
+const TIMBRE = 1; // only used if applyVat is true
 
 /** Digits-heavy or alphanumeric refs (PEN-001, 1001, EAN) — not free-text names. */
 const looksLikeCode = (q) => {
@@ -50,6 +49,19 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
   const [queued, setQueued] = useState(false);
   const [pendingCount, setPendingCount] = useState(pending().length);
   const [camera, setCamera] = useState(false);
+  // Default off so a stale compile-time true cannot flash TVA; /health/ may turn it on.
+  const [applyVat, setApplyVat] = useState(false);
+
+  useEffect(() => {
+    fetch("/health/")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        if (body && typeof body.apply_vat_and_timbre === "boolean") {
+          setApplyVat(body.apply_vat_and_timbre);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Replay any queued sales on mount and whenever connectivity returns (spec §4.3).
   useEffect(() => {
@@ -211,9 +223,9 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
       }
       const adj = lb.base - share;
       subtotalM += adj;
-      if (APPLY_VAT_AND_TIMBRE) taxM += Math.round(adj * lb.rate / 100);
+      if (applyVat) taxM += Math.round(adj * lb.rate / 100);
     });
-    const timbre = APPLY_VAT_AND_TIMBRE && cart.length ? TIMBRE : 0;
+    const timbre = applyVat && cart.length ? TIMBRE : 0;
     const subtotal = fromMillimes(subtotalM);
     const tax = fromMillimes(taxM);
     const discount = fromMillimes(headerDiscM);
@@ -222,11 +234,11 @@ export default function Pos({ onLogout, onDashboard, onStockTake, onCash, onRece
       discount: r3(discount),
       tax: r3(tax),
       timbre,
-      showTax: APPLY_VAT_AND_TIMBRE,
+      showTax: applyVat,
       total: r3(subtotal + tax + timbre),
       lineDiscounts: lineBases.map((lb) => fromMillimes(lb.lineDisc)),
     };
-  }, [cart, globalDiscountPct]);
+  }, [cart, globalDiscountPct, applyVat]);
 
   const pay = async () => {
     setError("");

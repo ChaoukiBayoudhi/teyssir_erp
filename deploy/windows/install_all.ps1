@@ -25,6 +25,7 @@ param(
     [string]$Printer = "",
     [switch]$DiscoverPrinter,
     [switch]$SkipBuild,
+    [switch]$ForceFrontendBuild,
     [switch]$SkipLlm,
     [string]$LlmModel = "mistral",
     [switch]$SkipVision,
@@ -260,7 +261,7 @@ $installScript = Join-Path $PSScriptRoot "install.ps1"
 $forward = @{}
 foreach ($key in @(
         "Role", "Terminal", "StoreCode", "HubUrl", "SyncKey", "Printer",
-        "DiscoverPrinter", "SkipBuild", "SkipLlm", "LlmModel", "SkipVision",
+        "DiscoverPrinter", "SkipBuild", "ForceFrontendBuild", "SkipLlm", "LlmModel", "SkipVision",
         "VisionModel", "SkipPostgres", "PostgresSuperPassword", "AdminUser",
         "AdminPassword", "SkipAdmin", "RegisterAutostart", "SkipAutostart",
         "SkipFirewall", "SkipService", "SkipShortcut", "FreshInstall", "KeepVenv"

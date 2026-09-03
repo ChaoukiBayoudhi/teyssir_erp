@@ -128,7 +128,7 @@ Tick each box on Hub and at least one till (`C1`).
 
 **Upgrade from existing install (Win11 required)**
 
-- [ ] In-place: `git checkout` RC/feature → `setup_app.ps1 -Role hub` → rebuild `frontend\dist` if UI stale → PWA hard-refresh
+- [ ] In-place: `git checkout` feature tip → `git pull` → `setup_app.ps1 -Role hub` (always rebuilds `frontend\dist`) → `nssm restart TeyssirBackend` → **clear site data** (Ctrl+Shift+R is not enough if the PWA SW is sticky)
 - [ ] Clean wipe: backup §12 → `install_all.ps1 -Role hub -FreshInstall` (Hub Postgres: `POSTGRES_ADMIN_PASSWORD`) → note **new** SYNC KEY → each till `-FreshInstall` with new key
 - [ ] Verify old `.env.bak.*` exists after wipe; `media\` still present unless manually deleted
 

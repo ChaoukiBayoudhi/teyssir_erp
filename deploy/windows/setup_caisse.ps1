@@ -27,6 +27,7 @@ param(
 
     # Forwarded to setup_app / install
     [switch]$SkipBuild,
+    [switch]$ForceFrontendBuild,
     [switch]$SkipLlm,
     [string]$LlmModel = "mistral",
     [switch]$SkipVision,
@@ -231,7 +232,7 @@ if ($Printer) { $forward["Printer"] = $Printer }
 if ($DiscoverPrinter) { $forward["DiscoverPrinter"] = $true }
 
 foreach ($key in @(
-        "SkipBuild", "SkipLlm", "LlmModel", "SkipVision", "VisionModel",
+        "SkipBuild", "ForceFrontendBuild", "SkipLlm", "LlmModel", "SkipVision", "VisionModel",
         "SkipAdmin", "AdminUser", "AdminPassword", "RegisterAutostart",
         "SkipAutostart", "SkipFirewall", "SkipService", "SkipShortcut", "SkipPull",
         "RepoUrl", "CloneTarget", "FreshInstall", "KeepVenv"

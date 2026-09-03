@@ -28,6 +28,8 @@ param(
     [string]$Printer = "",
     [switch]$DiscoverPrinter,
     [switch]$SkipBuild,
+    # Accepted by wrappers; rebuild is already the default unless -SkipBuild.
+    [switch]$ForceFrontendBuild,
     [switch]$SkipLlm,
     [string]$LlmModel = "mistral",
     # Phase 15.7: vision model (qwen2.5vl:3b) is pulled by default with Ollama.
@@ -213,10 +215,9 @@ function Install-PythonIfMissing {
 }
 
 function Install-NodeIfNeeded {
-    if ($SkipBuild) { return }
-    if (Test-Path "frontend\dist\index.html") { return }
+    if ($SkipBuild -and -not $ForceFrontendBuild) { return }
     if (Get-Command npm -ErrorAction SilentlyContinue) { return }
-    Write-Warning "Node.js/npm not found and frontend\dist is missing -- attempting winget OpenJS.NodeJS.LTS."
+    Write-Warning "Node.js/npm not found -- attempting winget OpenJS.NodeJS.LTS (needed to rebuild frontend\dist after git pull)."
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { return }
     try {
         winget install --id OpenJS.NodeJS.LTS -e --accept-package-agreements --accept-source-agreements --disable-interactivity --silent | Out-Host
@@ -233,15 +234,31 @@ function Invoke-Py([string[]]$PyArgs) {
     # output stream. Otherwise `$code = Invoke-Py ...` becomes an Object[] of log lines
     # plus the exit int, and `if ($code -ne 0)` is truthy even when Python exited 0
     # (classic PS false failure when logging goes to stderr / migrate writes stdout).
+    # Always run from $Root with PYTHONPATH so django.setup() can import teyssir
+    # (a script under %TEMP% would otherwise put Temp on sys.path[0]).
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     $output = $null
+    $code = 1
+    $pushed = $false
+    $prevPythonPath = $env:PYTHONPATH
+    $prevDjangoSettings = $env:DJANGO_SETTINGS_MODULE
+    $prevTeyssirRoot = $env:TEYSSIR_ROOT
     try {
         Write-Host ("  > python " + ($PyArgs -join " ")) -ForegroundColor DarkGray
+        $env:PYTHONPATH = $Root
+        $env:DJANGO_SETTINGS_MODULE = "teyssir.settings"
+        $env:TEYSSIR_ROOT = $Root
+        Push-Location -LiteralPath $Root
+        $pushed = $true
         $output = & $script:VenvPython @PyArgs 2>&1
         $code = $LASTEXITCODE
     }
     finally {
+        if ($pushed) { Pop-Location }
+        if ($null -eq $prevPythonPath) { Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue } else { $env:PYTHONPATH = $prevPythonPath }
+        if ($null -eq $prevDjangoSettings) { Remove-Item Env:DJANGO_SETTINGS_MODULE -ErrorAction SilentlyContinue } else { $env:DJANGO_SETTINGS_MODULE = $prevDjangoSettings }
+        if ($null -eq $prevTeyssirRoot) { Remove-Item Env:TEYSSIR_ROOT -ErrorAction SilentlyContinue } else { $env:TEYSSIR_ROOT = $prevTeyssirRoot }
         $ErrorActionPreference = $prevEap
     }
     if ($null -eq $code) { $code = 1 }
@@ -369,17 +386,21 @@ if ($pipReq -ne 0) {
     throw ("pip install -r requirements.txt failed. Check the messages above (network / Microsoft C++ Build Tools)." + $hint)
 }
 
-# 3) Front-end build (only if not already built) ----------------------------
+# 3) Front-end build -- always rebuild unless -SkipBuild so git pull cannot serve a stale PWA
+$shouldBuild = $ForceFrontendBuild -or (-not $SkipBuild)
 Install-NodeIfNeeded
-if (-not $SkipBuild -and -not (Test-Path "frontend\dist\index.html")) {
+if ($shouldBuild) {
     if (Get-Command npm -ErrorAction SilentlyContinue) {
-        Write-Host "Building the web app (npm) ..."
+        Write-Host "Building the web app (npm) -- always rebuild so the Hub UI matches git ..."
         Push-Location frontend
         npm ci
         if ($LASTEXITCODE -ne 0) { Pop-Location; throw "npm ci failed." }
         npm run build
         if ($LASTEXITCODE -ne 0) { Pop-Location; throw "npm run build failed." }
         Pop-Location
+    }
+    elseif (Test-Path "frontend\dist\index.html") {
+        Write-Warning "npm not found; keeping existing frontend\dist (may be stale after git pull). Install Node LTS and re-run without -SkipBuild."
     }
     else {
         Write-Warning "Node.js/npm not found and frontend\dist is missing. Build once on a PC with Node (npm ci; npm run build) and copy the frontend\dist folder here. The API will still start; the UI will be missing."
@@ -727,26 +748,40 @@ if (Test-Path $envPath) {
 
 # 7) First administrator (idempotent) ---------------------------------------
 $hasAdmin = $false
-$probe = @'
-import os, django
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "teyssir.settings")
-django.setup()
-from django.contrib.auth import get_user_model
-print("1" if get_user_model().objects.filter(is_superuser=True).exists() else "0")
-'@
-$probeFile = Join-Path $env:TEMP "teyssir_admin_probe.py"
-# UTF-8 no BOM -- avoids Python syntax issues on some Windows code pages.
+# Write under the repo (gitignored). A file in %TEMP% puts Temp on sys.path[0]
+# and django.setup() then fails with ModuleNotFoundError: teyssir.
+$probeFile = Join-Path $Root ".teyssir_admin_probe.py"
+$probeLines = @(
+    "import sys, os",
+    ("ROOT = os.environ.get(""TEYSSIR_ROOT"") or r""{0}""" -f $Root),
+    "sys.path.insert(0, ROOT)",
+    "os.chdir(ROOT)",
+    "os.environ.setdefault(""DJANGO_SETTINGS_MODULE"", ""teyssir.settings"")",
+    "import django",
+    "django.setup()",
+    "from django.contrib.auth import get_user_model",
+    "print(""1"" if get_user_model().objects.filter(is_superuser=True).exists() else ""0"")"
+)
+$probe = $probeLines -join "`n"
+# UTF-8 no BOM -- probe is ASCII; Python 3 reads it as UTF-8.
 [System.IO.File]::WriteAllText($probeFile, $probe, (New-Object System.Text.UTF8Encoding($false)))
-$probeCode = Invoke-Py -PyArgs @($probeFile)
-$probeOut = ""
-if ($script:LastPyFull) {
-    $probeOut = ($script:LastPyFull -split "`r?`n" | Where-Object { $_ -match '^[01]$' } | Select-Object -Last 1)
+try {
+    $probeCode = Invoke-Py -PyArgs @($probeFile)
+    $probeOut = ""
+    if ($script:LastPyFull) {
+        $probeOut = ($script:LastPyFull -split "`r?`n" | Where-Object { $_ -match '^[01]$' } | Select-Object -Last 1)
+    }
+    if ($probeCode -ne 0) {
+        Write-Warning ("Admin probe failed (exit {0}) -- will try createsuperuser. Output: {1}" -f $probeCode, (($script:LastPyTail | Select-Object -Last 5) -join " | "))
+    }
+    elseif ($probeOut -match "1") {
+        $hasAdmin = $true
+    }
 }
-if ($probeCode -ne 0) {
-    Write-Warning ("Admin probe failed (exit {0}) -- will try createsuperuser. Output: {1}" -f $probeCode, (($script:LastPyTail | Select-Object -Last 5) -join " | "))
-}
-elseif ($probeOut -match "1") {
-    $hasAdmin = $true
+finally {
+    if (Test-Path -LiteralPath $probeFile) {
+        Remove-Item -LiteralPath $probeFile -Force -ErrorAction SilentlyContinue
+    }
 }
 
 if ($SkipAdmin) {
@@ -779,7 +814,16 @@ else {
         # Interactive: do not redirect streams (prompts need a real console).
         $prevEap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
+        $prevPythonPath = $env:PYTHONPATH
+        $prevDjangoSettings = $env:DJANGO_SETTINGS_MODULE
+        $prevTeyssirRoot = $env:TEYSSIR_ROOT
+        $pushed = $false
         try {
+            $env:PYTHONPATH = $Root
+            $env:DJANGO_SETTINGS_MODULE = "teyssir.settings"
+            $env:TEYSSIR_ROOT = $Root
+            Push-Location -LiteralPath $Root
+            $pushed = $true
             & $script:VenvPython manage.py createsuperuser
             if ($LASTEXITCODE -ne 0) {
                 Write-Warning "Interactive createsuperuser did not complete. You can run: .\.venv\Scripts\python.exe manage.py createsuperuser"
@@ -789,6 +833,10 @@ else {
             Write-Warning ("createsuperuser skipped: " + $_.Exception.Message)
         }
         finally {
+            if ($pushed) { Pop-Location }
+            if ($null -eq $prevPythonPath) { Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue } else { $env:PYTHONPATH = $prevPythonPath }
+            if ($null -eq $prevDjangoSettings) { Remove-Item Env:DJANGO_SETTINGS_MODULE -ErrorAction SilentlyContinue } else { $env:DJANGO_SETTINGS_MODULE = $prevDjangoSettings }
+            if ($null -eq $prevTeyssirRoot) { Remove-Item Env:TEYSSIR_ROOT -ErrorAction SilentlyContinue } else { $env:TEYSSIR_ROOT = $prevTeyssirRoot }
             $ErrorActionPreference = $prevEap
         }
     }
