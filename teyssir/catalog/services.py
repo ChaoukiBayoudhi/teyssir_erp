@@ -47,7 +47,7 @@ def create_product(*, name_fr, name_ar="", category_id=None, tax_rate_id=None, s
                    reorder_point="0", isbn="", origin_terminal=""):
     """Create a product and (if given) its barcode + opening stock.
 
-    Furniture requires a unique reference. Duplicate reference or barcode raises ValueError.
+    Furniture requires barcode XOR reference (one identity). Duplicate barcode/reference raises ValueError.
     """
     barcode = (barcode or "").strip()
     isbn = (isbn or "").strip()

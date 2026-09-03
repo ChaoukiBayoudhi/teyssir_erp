@@ -161,12 +161,19 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
               size="small"
               label={isBook ? t("isbnOrBarcode") : t("barcodeOptional")}
               value={barcode}
+              // Furniture XOR: required only when reference is empty (need one identity).
+              required={!isBook && !hasReference}
               disabled={!isBook && hasReference}
+              inputProps={!isBook ? { required: !hasReference } : undefined}
               onChange={(e) => onBarcodeChange(e.target.value)}
               onKeyDown={onBarcodeKey}
               onBlur={() => barcode && lookup(barcode.trim())}
               autoFocus
-              helperText={!isBook ? t("barcodeOrReferenceHint") : undefined}
+              helperText={
+                isBook
+                  ? undefined
+                  : (hasReference ? t("barcodeDisabledWhenReference") : t("barcodeOrReferenceHint"))
+              }
             />
             <Button
               variant={camera ? "contained" : "outlined"}
@@ -210,11 +217,17 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
                   <TextField
                     label={t("reference")}
                     value={form.reference}
+                    // Furniture XOR: required only when barcode is empty (need one identity).
                     required={!hasBarcode}
                     fullWidth
                     disabled={hasBarcode}
+                    inputProps={{ required: !hasBarcode }}
                     onChange={(e) => onReferenceChange(e.target.value)}
-                    helperText={hasBarcode ? t("referenceDisabledWhenBarcode") : t("referenceHint")}
+                    helperText={
+                      hasBarcode
+                        ? t("referenceDisabledWhenBarcode")
+                        : (hasReference ? t("referenceHint") : t("referenceOrBarcodeHint"))
+                    }
                   />
                   <TextField label={t("articleName")} value={form.name_fr} onChange={(e) => set("name_fr", e.target.value)} required fullWidth />
                   <Grid container spacing={2}>
