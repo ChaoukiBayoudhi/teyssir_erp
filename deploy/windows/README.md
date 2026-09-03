@@ -2,8 +2,9 @@
 
 Scripts to install and run Teyssir on the client's Windows PCs (1 Hub + up to 3 tills).
 
-> **Source of truth:** this full kit lives on
-> `feature/pdf-conversion-async-optimization` and tag `v1.0.0-windows-rc2`.  
+> **Source of truth:** full kit on `feature/pdf-conversion-async-optimization`
+> (tip preferred). Tag `v1.0.0-windows-rc2` is a **frozen** snapshot **behind** the tip
+> (missing later FreshInstall / Postgres / encoding / product fixes).  
 > Default GitHub `master` / **Code ▸ Download ZIP** is **incomplete** (no
 > `install_all.ps1` / `setup_caisse_C*.ps1`). See [`docs/INSTALL-WINDOWS.md`](../../docs/INSTALL-WINDOWS.md) §3.
 

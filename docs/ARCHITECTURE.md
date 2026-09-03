@@ -73,10 +73,12 @@ numbering `C1-YYYYMM-XXXX`** (proceeding; hub pre-allocated blocks held as DGI f
 
 5. **Money: TND, stored scale 3 (millimes), displayed 2 decimals. CONFIRMED.** A 0.850 DT pen needs
    the millime, so we **store** `Decimal(14,3)` (lossless) and **display/round** to 2 decimals in
-   UI/receipts, `ROUND_HALF_UP`, never `float`. Invoices carry `matricule fiscal`, TVA (**7%** on
+   UI/receipts, `ROUND_HALF_UP`, never `float`. Invoices can carry `matricule fiscal`, TVA (**7%** on
    books/manuals/newspapers/fournitures scolaires, 13%, 19%, 0%/exonéré), and a **configurable
    `fiscal_stamp_fee`** (admin-editable, default **1.000 DT**, override per invoice type), whose
    resolved value is **snapshotted onto each invoice** as `timbre_amount_snapshot` (immutability).
+   **Shop default (2026 tip):** `APPLY_VAT_AND_TIMBRE` / `TEYSSIR_APPLY_VAT_AND_TIMBRE=0` — Caisse
+   UI and totals omit TVA/timbre (prices after remises only); set `=1` to restore the fiscal path.
    Document numbers use a **per-terminal + per-month atomic series** (e.g. `C1-202606-0001`).
 
 7. **One hub PC is MANDATORY — "Teyssir Hub" (PC-1). CONFIRMED.** It is simultaneously the

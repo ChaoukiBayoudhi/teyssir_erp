@@ -8,12 +8,14 @@ automatically. **If that fails, the hub still installs on SQLite.**
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force
-.\deploy\windows\install.ps1 -Role hub
+.\deploy\windows\install_all.ps1 -Role hub
+# or focused re-run: .\deploy\windows\install.ps1 -Role hub
 ```
 
 What it does:
 
-1. Detects `psql`, or silently installs PostgreSQL 16 (winget).
+1. Detects `psql`, or silently installs PostgreSQL (winget / EDB; script finds **16–18+** under
+   `C:\Program Files\PostgreSQL\<major>\bin`).
 2. Starts the Windows service.
 3. **If** login as `teyssir` already works, skips create (safe re-run).
 4. Otherwise creates role `teyssir` and database `teyssir` (UTF-8).
@@ -30,13 +32,14 @@ Flags:
 
 `Install-Postgres.ps1` uses **`-DatabaseName`** (alias `-Database`) for the app DB name.
 Do **not** pass `-Db` — on Windows PowerShell 5.1 it conflicts with common parameter `-Debug`
-and aborts Postgres setup.
+and aborts Postgres setup. Prefer **`install_all.ps1 -Role hub`** so host deps + migrate
+`LASTEXITCODE` handling from the feature tip are used.
 
 Re-run with the superuser password if PostgreSQL was already installed:
 
 ```powershell
 $env:POSTGRES_ADMIN_PASSWORD = "your-postgres-password"
-.\deploy\windows\install.ps1 -Role hub
+.\deploy\windows\install_all.ps1 -Role hub
 ```
 
 ## Manual setup (any OS)
@@ -101,7 +104,8 @@ App connections use `POSTGRES_USER=teyssir` from `.env`, not the superuser.
 
 ### `psql` not in PATH after install
 
-Typical location: `C:\Program Files\PostgreSQL\16\bin\psql.exe`.  
+Typical location: `C:\Program Files\PostgreSQL\<16|17|18>\bin\psql.exe`
+(installer picks the **highest** installed major).  
 Open a **new** elevated PowerShell, or add that folder to PATH.
 
 ### Django cannot connect

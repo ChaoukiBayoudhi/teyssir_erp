@@ -398,16 +398,17 @@ Non-book items (knapsacks, pencil cases, school supplies) are identified by a **
 | `color`, `brand` | Furniture attributes |
 | `sale_price` | Millimes (3 dp TND) |
 | `qty_on_hand` | Integer pieces |
-| Barcode | Optional on furniture; never runs ISBN OCR |
+| Barcode | XOR with reference on furniture/article create; camera scan fills barcode only (no ISBN) |
 
 Books keep ISBN as the key (`reference` left blank). Existing supplies: `reference` backfilled from `sku`.
 
 ### 16.2 UI adaptation
 
 * **Nouveau article** toggle: Fournitures / Livres.
-* Furniture form: required **référence**, nom, couleur, marque, prix DT, quantité entière; optional barcode camera (scan only — auto-stop, no ISBN).
+* Furniture form: **barcode XOR référence** (exactly one identity), plus nom, couleur, marque,
+  prix DT, quantité entière; camera scan fills barcode only (no ISBN).
 * Book form: ISBN, titre, auteur + link to existing **Caméra OCR**.
-* Duplicate reference → HTTP 409; missing furniture reference → 400.
+* Duplicate barcode or reference → HTTP 409; missing both / both filled → 400.
 
 ### 16.3 POS behavior
 

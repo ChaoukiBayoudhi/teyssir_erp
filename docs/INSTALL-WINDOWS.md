@@ -91,18 +91,20 @@ synchronise avec le **PC Hub** (le serveur central du magasin) dès qu'il est di
 git clone https://github.com/ChaoukiBayoudhi/teyssir_erp.git
 cd teyssir_erp
 git fetch --tags origin
-# Release candidate (kit Windows) — préféré pour installation magasin :
-git checkout v1.0.0-windows-rc2
-# Ou tip le plus récent (corrections post-RC) :
-# git checkout feature/pdf-conversion-async-optimization
+# Tip feature (recommandé) — corrections post-rc2 : FreshInstall sur tous les
+# entrypoints, -DatabaseName (pas -Db), PG18, LASTEXITCODE/migrate, PS1 encoding,
+# TVA/timbre off en Caisse, barcode XOR Nouvel article :
+git checkout feature/pdf-conversion-async-optimization
+# Figé RC uniquement si vous devez reproduire exactement dab47b9 :
+# git checkout v1.0.0-windows-rc2
 ```
 
-**Option B — sans Git (ZIP du bon tag) :**  
-Sur GitHub → page **Releases / Tags** → tag **`v1.0.0-windows-rc2`** →
-**Download ZIP** (ou URL directe) :
+**Option B — sans Git (ZIP) :**  
+Préférez le ZIP de la **branche feature** (Code ▸ Switch branches →
+`feature/pdf-conversion-async-optimization` ▸ Download ZIP), **pas** le ZIP de `master`.  
+Sinon, tag figé **`v1.0.0-windows-rc2`** (11+ commits en retard sur le tip) :
 `https://github.com/ChaoukiBayoudhi/teyssir_erp/archive/refs/tags/v1.0.0-windows-rc2.zip`  
-Décompressez dans `C:\Teyssir` (le dossier s’appellera souvent
-`teyssir_erp-1.0.0-windows-rc2`).
+Décompressez dans `C:\Teyssir`.
 
 Dans la suite, **« le dossier du projet »** désigne ce dossier (ex. `C:\Teyssir\teyssir_erp`).
 Vous devez y voir `manage.py`, `deploy\windows\install_all.ps1` et
@@ -138,7 +140,7 @@ Deux chemins — choisissez selon l'objectif :
    ```powershell
    git fetch --tags origin
    git checkout feature/pdf-conversion-async-optimization
-   # ou : git checkout v1.0.0-windows-rc2   (figé ; le tip feature peut être plus récent)
+   # éviter rc2 seul si vous voulez les correctifs install post-freeze
    Set-ExecutionPolicy -Scope Process Bypass -Force
    .\deploy\windows\setup_app.ps1 -Role hub
    # Caisse : .\deploy\windows\setup_caisse_C1.ps1 -HubUrl … -SyncKey …
@@ -217,10 +219,10 @@ checkout du nouveau kit, voir **§3bis** :
 > Vous n'avez pas le bon script **ou** un checkout trop ancien.  
 > 1) Vérifiez : `Select-String FreshInstall deploy\windows\*.ps1` — doit lister
 > `install_all`, `install`, `setup_app`, `setup_caisse*`, `Clean-PreviousInstall`.  
-> 2) Checkout : `git checkout v1.0.0-windows-rc2` **ou** tip
-> `feature/pdf-conversion-async-optimization` (pas `master` / ZIP pre-rc2).  
+> 2) Checkout : tip `feature/pdf-conversion-async-optimization` (pas `master` /
+> ZIP GitHub par défaut). Tag **rc2** = figé sans les fixes entrypoint.  
 > 3) Sur **rc2** seul `install_all.ps1` + `Clean-PreviousInstall.ps1` acceptaient
-> `-FreshInstall` ; après le fix tip, **tous** les entrypoints ci-dessus l'acceptent.
+> `-FreshInstall` ; sur le tip, **tous** les entrypoints ci-dessus l'acceptent.
 
 ### 4.1 Commande préférée — `install_all.ps1`
 
@@ -632,7 +634,8 @@ Donnez à chaque magasin un `TEYSSIR_STORE_CODE` (S1, S2…). Sur chaque Hub :
 |----------|----------|
 | **Port 8000 déjà utilisé** / page ne charge pas | Un seul processus doit écouter : `nssm stop TeyssirBackend` **ou** fermez `start-teyssir.bat` — **pas les deux**. Vérifiez : `Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue`. Puis `nssm start TeyssirBackend`. |
 | **PostgreSQL → SQLite (soft-fail)** | Message `[PG]` dans la console : le Hub tourne en `teyssir_hub.sqlite3`. Relancez en admin, ou `$env:POSTGRES_ADMIN_PASSWORD="…"` puis `install_all.ps1 -Role hub`. Guide : [POSTGRESQL-SETUP.md](POSTGRESQL-SETUP.md). |
-| **« Db » en conflit avec « Debug »** / Postgres skipped puis migrate échoue | Ancien bug `-Db` vs `-Debug` (Windows PowerShell). **git pull** le tip feature, puis `install_all.ps1 -Role hub -FreshInstall`. `Install-Postgres.ps1` utilise `-DatabaseName` (jamais `-Db`). |
+| **« Db » en conflit avec « Debug »** / Postgres skipped puis migrate échoue | Ancien bug `-Db` vs `-Debug` (Windows PowerShell). **git pull** le tip feature, puis `install_all.ps1 -Role hub -FreshInstall`. `Install-Postgres.ps1` utilise `-DatabaseName` (jamais `-Db`). Migrate success = **numeric `LASTEXITCODE` only** (tip). |
+| **PS1 « format string » / caractères bizarres** | Scripts tip = ASCII-safe pour Windows PowerShell 5.1. Sur ancien checkout : `git pull` tip feature. |
 | **Tesseract : langues manquantes** (arabe / français) | Réinstallez UB Mannheim en cochant **ara**, **fra**, **eng**. Contrôle : `/health/` → `tesseract.langs`. |
 | **OCR vide** sous le service Windows | PATH minimal NSSM : vérifiez `TEYSSIR_TESSERACT_CMD` dans `.env`, puis `nssm restart TeyssirBackend`. Menu → **Diagnostics**. |
 | **Imprimante / Discover** | Relancez `.\deploy\windows\Discover-Printer.ps1` ; l'imprimante doit être sur le **même LAN**, port **9100**. Si rien → `dummy` (normal). Pas d'IP inventée. |
@@ -696,11 +699,12 @@ Rapport QA plus large : [INSTALLATION-QA.md](INSTALLATION-QA.md).
 
 ### Tags (immutable markers)
 
-| Tag | Points to | Meaning |
-|-----|-----------|---------|
+| Tag / tip | Points to | Meaning |
+|-----------|-----------|---------|
 | `v0.9.0-pre-windows-kit` | `master` @ `8c8ce0a` | Last known stable / production-ish baseline **before** Windows kit merge |
-| `v1.0.0-windows-rc1` | earlier feature tip (Phase 8+) | Superseded by **`v1.0.0-windows-rc2`** for frozen installs |
-| `v1.0.0-windows-rc2` | `feature/pdf-conversion-async-optimization` @ `dab47b9` | Current **RC** — FreshInstall wipe, `install_all`, `setup_caisse`; **not** shop-validated |
+| `v1.0.0-windows-rc1` | earlier feature tip (Phase 8+) | Superseded by **rc2** |
+| `v1.0.0-windows-rc2` | feature @ `dab47b9` | Frozen **RC** (FreshInstall on `install_all` only); **not** shop-validated |
+| **Feature tip** (preferred) | `feature/pdf-conversion-async-optimization` @ `c82921c`+ | **11+ commits after rc2** — full entrypoint FreshInstall, PG `-DatabaseName` / PG18, migrate `LASTEXITCODE`, PS1 encoding, shop TVA/timbre off, Nouvel article barcode XOR |
 | `v1.0.0-windows-ready` | *(not created yet)* | Reserved for **after** Win11 dry-run PASS + squash merge |
 
 ### Branch preservation
@@ -727,7 +731,7 @@ git checkout v0.9.0-pre-windows-kit
 ```
 
 To leave an RC/feature install but keep the **new** kit scripts, stay on
-`v1.0.0-windows-rc2` / `feature/pdf-conversion-async-optimization` and fix forward —
+`feature/pdf-conversion-async-optimization` (or re-tag a newer RC) and fix forward —
 do not expect `install_all.ps1` on `v0.9.0-pre-windows-kit`.
 
 If the feature branch was never merged to `master`, production clients on `master`

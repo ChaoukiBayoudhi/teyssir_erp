@@ -40,15 +40,20 @@ One PC Hub + up to 3 tills, each serving the PWA + API on a single port (WhiteNo
 **Works like a desktop app** on Windows: the backend is a boot-time service (`TeyssirBackend`) and a
 **Teyssir ERP** desktop shortcut opens the UI. Full guide: **[docs/INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md)** · kit: [deploy/windows/](deploy/windows/).
 
+> Checkout **`feature/pdf-conversion-async-optimization`** (not default `master` / Code ▸ ZIP —
+> incomplete kit). Tag `v1.0.0-windows-rc2` is frozen and behind the tip.
+
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force
-.\deploy\windows\install.ps1 -Role hub          # note the printed SYNC KEY
-.\deploy\windows\install.ps1 -Role till -Terminal C1 -HubUrl http://teyssir-hub.local:8000 -SyncKey <hub-key>
-# Optional receipt printer on the shop LAN:  -Printer tcp:192.168.1.100:9100  or  -DiscoverPrinter
+.\deploy\windows\install_all.ps1 -Role hub          # note the printed SYNC KEY
+.\deploy\windows\setup_caisse_C1.ps1 -HubUrl http://teyssir-hub.local:8000 -SyncKey <hub-key> -DiscoverPrinter
+# Optional: -Printer tcp:192.168.1.100:9100  or  -FreshInstall for a clean wipe
 # Then double-click  Teyssir ERP  on the Desktop  (http://localhost:8000)
 ```
 
 Hub install (elevated PowerShell recommended) auto-detects/installs **Python 3.12** if missing, creates `.venv`, installs PostgreSQL when possible (SQLite fallback), seeds RBAC/fiscal data, and tries **Ollama**. Tills never install PostgreSQL. The script is **safe to re-run**. Full QA notes: [docs/INSTALLATION-QA.md](docs/INSTALLATION-QA.md).
+
+**Shop POS default:** TVA and timbre fiscal are **off** in Caisse totals/UI (`TEYSSIR_APPLY_VAT_AND_TIMBRE=0`). Set to `1` only if you need the fiscal path again. **Nouvel article:** barcode **XOR** référence (one identity, not both).
 
 ### macOS (MacBook Pro M1)
 

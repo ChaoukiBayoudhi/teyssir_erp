@@ -158,7 +158,8 @@ Phase 8 (docs) polished operator-facing prose in [INSTALL-WINDOWS.md](INSTALL-WI
 | Artifact | Value |
 |----------|--------|
 | Stable tag | `v0.9.0-pre-windows-kit` → `master` @ `8c8ce0a` |
-| RC tag (not ready) | **`v1.0.0-windows-rc2`** → `dab47b9` (FreshInstall kit); rc1 superseded |
+| RC tag (frozen) | **`v1.0.0-windows-rc2`** → `dab47b9` — **behind tip**; install fixes landed after freeze |
+| Feature tip (preferred) | `feature/pdf-conversion-async-optimization` @ `c82921c`+ |
 | Ready tag | `v1.0.0-windows-ready` — **do not create** until Win11 dry-run PASS |
 | Feature branch | Keep `feature/pdf-conversion-async-optimization` (do not delete) |
 | Squash to `master` | **Blocked** until § B checklist is green on a real Win11 host |
@@ -175,12 +176,11 @@ Client revert and policy: [INSTALL-WINDOWS.md §17](INSTALL-WINDOWS.md#17-contro
 ### 0 — Prepare tree
 
 ```powershell
-# Prefer the RC tag or the feature branch (same tip at freeze)
+# Prefer the feature tip (post-rc2 install + product fixes).
 # Do NOT use bare clone of master / GitHub "Code ▸ Download ZIP" (incomplete kit).
 git fetch --tags origin
-git checkout v1.0.0-windows-rc2
-# or: git checkout feature/pdf-conversion-async-optimization
-# ZIP alternative: https://github.com/ChaoukiBayoudhi/teyssir_erp/archive/refs/tags/v1.0.0-windows-rc2.zip
+git checkout feature/pdf-conversion-async-optimization
+# Frozen RC only if you must reproduce dab47b9: git checkout v1.0.0-windows-rc2
 cd <project-root>   # folder that contains manage.py AND deploy\windows\install_all.ps1
 Set-ExecutionPolicy -Scope Process Bypass -Force
 ```
@@ -230,5 +230,6 @@ feature branch, push, re-run from §0 — still **no squash**.
 | — | Desktop shortcut without console; autostart; PATH/permission smoke |
 | — | `uninstall.ps1` keeps data; re-install recovers secrets |
 
-**Status 2026-08-30:** dry-run **BLOCKED** — no native Win11 / Parallels / VMware / SSH
-Windows host on the release engineer Mac. Do not claim PASS; do not squash.
+**Status 2026-09-03:** dry-run still **BLOCKED** — no native Win11 / Parallels / VMware / SSH
+Windows host on the release engineer Mac. Do not claim PASS; do not squash. Client installs
+should use the **feature tip**, not `master` and not frozen rc2 alone.
