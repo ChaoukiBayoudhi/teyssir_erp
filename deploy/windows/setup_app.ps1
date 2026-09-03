@@ -1,4 +1,4 @@
-<#
+﻿<#
     Teyssir -- application-layer bootstrap (Phase 3)
     ------------------------------------------------
     Run after host deps (install_all.ps1 / Install-HostDependencies.ps1), or alone
@@ -62,6 +62,33 @@ $ErrorActionPreference = "Stop"
 
 function Write-Setup([string]$Message, [string]$Color = "Gray") {
     Write-Host $Message -ForegroundColor $Color
+}
+
+function Invoke-SetupPy {
+    # PS 5.1: Python INFO on stderr is NativeCommandError when EAP is Stop.
+    # Success = LASTEXITCODE only (same as install.ps1 Invoke-Py).
+    param(
+        [Parameter(Mandatory = $true)][string]$VenvPy,
+        [Parameter(Mandatory = $true)][string[]]$PyArgs
+    )
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $output = $null
+    $code = 1
+    try {
+        $output = & $VenvPy @PyArgs 2>&1
+        $code = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $prevEap
+    }
+    if ($null -eq $code) { $code = 1 }
+    try { $code = [int]$code } catch { $code = 1 }
+    $lines = @()
+    if ($null -ne $output) {
+        $lines = @($output | ForEach-Object { $_.ToString() })
+    }
+    return @{ Code = $code; Lines = $lines }
 }
 
 # See install_all.ps1 -- NativeCommandError.Message is often only the first stderr line.
@@ -249,14 +276,10 @@ function Invoke-AppValidation {
     }
 
     Write-Setup "django check ..."
-    # Capture output first so log lines do not confuse callers; success = LASTEXITCODE only.
-    $checkOut = & $venvPy manage.py check 2>&1
-    $checkCode = $LASTEXITCODE
-    if ($null -eq $checkCode) { $checkCode = 1 }
-    try { $checkCode = [int]$checkCode } catch { $checkCode = 1 }
-    @($checkOut) | ForEach-Object { Write-Setup ("  {0}" -f $_) }
-    if ($checkCode -ne 0) {
-        Write-Setup ("FAIL: manage.py check (exit {0})" -f $checkCode) "Red"
+    $check = Invoke-SetupPy -VenvPy $venvPy -PyArgs @("manage.py", "check")
+    foreach ($line in $check.Lines) { Write-Setup ("  {0}" -f $line) }
+    if ($check.Code -ne 0) {
+        Write-Setup ("FAIL: manage.py check (exit {0})" -f $check.Code) "Red"
         $ok = $false
     }
     else {
@@ -264,13 +287,10 @@ function Invoke-AppValidation {
     }
 
     Write-Setup "migrate --check ..."
-    $migOut = & $venvPy manage.py migrate --check 2>&1
-    $migCode = $LASTEXITCODE
-    if ($null -eq $migCode) { $migCode = 1 }
-    try { $migCode = [int]$migCode } catch { $migCode = 1 }
-    @($migOut) | ForEach-Object { Write-Setup ("  {0}" -f $_) }
-    if ($migCode -ne 0) {
-        Write-Setup ("WARN: migrate --check exit {0} (pending migrations? re-run setup_app / install.ps1)." -f $migCode) "Yellow"
+    $mig = Invoke-SetupPy -VenvPy $venvPy -PyArgs @("manage.py", "migrate", "--check")
+    foreach ($line in $mig.Lines) { Write-Setup ("  {0}" -f $line) }
+    if ($mig.Code -ne 0) {
+        Write-Setup ("WARN: migrate --check exit {0} (pending migrations? re-run setup_app / install.ps1)." -f $mig.Code) "Yellow"
         $ok = $false
     }
     else {
