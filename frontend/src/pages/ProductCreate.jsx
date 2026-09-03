@@ -8,6 +8,7 @@ import { barcodeLookup, createProduct, listCategories, listTaxRates } from "../a
 import LangToggle from "../LangToggle.jsx";
 import CameraScanner from "../components/CameraScanner.jsx";
 import { fmtQty } from "../format.js";
+import { preferExemptTaxRate } from "../tax.js";
 
 const EMPTY = {
   name_fr: "", name_ar: "", category: "", tax_rate: "", sale_price: "",
@@ -36,8 +37,7 @@ export default function ProductCreate({ onBack, onLogout, onNewBook }) {
     listCategories().then(setCats).catch(() => {});
     listTaxRates().then((r) => {
       // Silent default: prefer exempt 0%, else is_default (TVA field is hidden).
-      const zero = r.find((x) => Number(x.rate_percent) === 0);
-      const d = zero || r.find((x) => x.is_default) || r[0];
+      const d = preferExemptTaxRate(r);
       if (d) setForm((f) => ({ ...f, tax_rate: d.id }));
     }).catch(() => {});
     barcodeRef.current?.focus();

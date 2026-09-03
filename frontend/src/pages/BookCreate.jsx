@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { scanBook, pollScanJob, cancelScanJob, createBook, listCategories, listTaxRates } from "../api";
 import LangToggle from "../LangToggle.jsx";
 import CameraScanner from "../components/CameraScanner.jsx";
+import { preferExemptTaxRate } from "../tax.js";
 
 /** ISBN-13 check digit (bookland 978/979 only). Reject OCR digit soup before hinting. */
 function isbn13CheckOk(raw) {
@@ -333,7 +334,7 @@ export default function BookCreate({ onBack, onLogout }) {
   const [cameras, setCameras] = useState([]);
   const [cameraId, setCameraId] = useState(localStorage.getItem("teyssir_camera") || "");
   const [cats, setCats] = useState([]);
-  const [taxes, setTaxes] = useState([]);
+  const defaultTaxIdRef = useRef("");
   const [barcodeCamera, setBarcodeCamera] = useState(false);
 
   const stopCamera = () => {
@@ -391,11 +392,12 @@ export default function BookCreate({ onBack, onLogout }) {
     listCategories().then(setCats).catch(() => {});
     listTaxRates().then((r) => {
       if (!aliveRef.current) return;
-      setTaxes(r);
       // Silent default: prefer exempt 0% (TVA field is hidden from create form).
-      const zero = r.find((x) => Number(x.rate_percent) === 0);
-      const d = zero || r.find((x) => x.is_default) || r[0];
-      if (d) setForm((f) => ({ ...f, tax_rate: f.tax_rate || d.id }));
+      const d = preferExemptTaxRate(r);
+      if (d) {
+        defaultTaxIdRef.current = d.id;
+        setForm((f) => ({ ...f, tax_rate: f.tax_rate || d.id }));
+      }
     }).catch(() => {});
 
     const onPageHide = () => {
@@ -725,8 +727,6 @@ export default function BookCreate({ onBack, onLogout }) {
       setInfo(note);
 
       const livre = cats.find((c) => /livre|book|كتاب|manuel/i.test(c.name_fr || ""));
-      const zeroTax = taxes.find((x) => Number(x.rate_percent) === 0);
-      const defaultTax = zeroTax || taxes.find((x) => x.is_default) || taxes[0];
       // Do not present garbage OCR as a confident title — even for school CNP.
       // Backend may repair to Mathématiques; keep only usable / repaired titles.
       const titleLooksRepaired = /Mathématiques|Mathematiques|Histoire|Technologie|التاريخ|Sciences|Physique|Français/i
@@ -775,7 +775,7 @@ export default function BookCreate({ onBack, onLogout }) {
         description: safeDesc,
         sale_price: garbageLatin && !d.raw?.price_detected && !isSchoolEdition ? "" : (d.price || ""),
         category: prev.category || livre?.id || "",
-        tax_rate: prev.tax_rate || defaultTax?.id || "",
+        tax_rate: prev.tax_rate || defaultTaxIdRef.current || "",
       }));
     } catch (err) {
       if (err?.name === "AbortError" || String(err?.message || err) === "cancelled") {
